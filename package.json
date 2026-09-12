@@ -8,12 +8,14 @@
     "start": "next start",
     "lint": "eslint",
     "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run lint && npm run db:test",
     "db:test": "bash scripts/db-test.sh",
     "db:test:real": "bash scripts/db-test.sh postgres",
     "db:types": "npx supabase gen types typescript --db-url postgresql://postgres:postgres@localhost:54329/postgres --schema public > src/types/database.ts",
     "db:types:remote": "npx supabase gen types typescript --project-id \"$SUPABASE_PROJECT_ID\" --schema public > src/types/database.ts",
     "e2e": "playwright test",
-    "e2e:ui": "playwright test --ui"
+    "e2e:ui": "playwright test --ui",
+    "db:doc": "bash scripts/db-doc.sh"
   },
   "dependencies": {
     "@hookform/resolvers": "^5.9.1",

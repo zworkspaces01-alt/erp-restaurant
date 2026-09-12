@@ -29,6 +29,7 @@ Constraints:
 
 Triggers:
 - trg_app_settings_updated_at: CREATE TRIGGER trg_app_settings_updated_at BEFORE UPDATE ON public.app_settings FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+- trg_app_settings_validate: CREATE TRIGGER trg_app_settings_validate BEFORE INSERT OR UPDATE ON public.app_settings FOR EACH ROW EXECUTE FUNCTION trg_app_settings_validate()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -67,6 +68,7 @@ Indexes:
 - CREATE UNIQUE INDEX employees_code_key ON public.employees USING btree (code)
 
 Triggers:
+- trg_employees_before_delete: CREATE TRIGGER trg_employees_before_delete BEFORE DELETE ON public.employees FOR EACH ROW EXECUTE FUNCTION trg_employees_before_delete()
 - trg_employees_updated_at: CREATE TRIGGER trg_employees_updated_at BEFORE UPDATE ON public.employees FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 
 RLS enabled: t
@@ -123,6 +125,7 @@ Indexes:
 
 Triggers:
 - trg_expense_records_before: CREATE TRIGGER trg_expense_records_before BEFORE INSERT OR UPDATE ON public.expense_records FOR EACH ROW EXECUTE FUNCTION trg_expense_records_before()
+- trg_expense_records_set_created_by: CREATE TRIGGER trg_expense_records_set_created_by BEFORE INSERT ON public.expense_records FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -189,6 +192,7 @@ Indexes:
 - CREATE INDEX idx_inv_txn_type_created ON public.inventory_transactions USING btree (txn_type, created_at)
 
 Triggers:
+- trg_inventory_transactions_set_created_by: CREATE TRIGGER trg_inventory_transactions_set_created_by BEFORE INSERT ON public.inventory_transactions FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 - trg_inventory_txn_before_insert: CREATE TRIGGER trg_inventory_txn_before_insert BEFORE INSERT ON public.inventory_transactions FOR EACH ROW EXECUTE FUNCTION trg_inventory_txn_before_insert()
 - trg_inventory_txn_immutable: CREATE TRIGGER trg_inventory_txn_immutable BEFORE DELETE OR UPDATE ON public.inventory_transactions FOR EACH ROW EXECUTE FUNCTION trg_ledger_immutable()
 
@@ -285,6 +289,7 @@ Indexes:
 Triggers:
 - trg_orders_after_cancel: CREATE TRIGGER trg_orders_after_cancel AFTER UPDATE OF status ON public.orders FOR EACH ROW EXECUTE FUNCTION trg_orders_after_cancel()
 - trg_orders_before: CREATE TRIGGER trg_orders_before BEFORE INSERT OR UPDATE ON public.orders FOR EACH ROW EXECUTE FUNCTION trg_orders_before()
+- trg_orders_set_created_by: CREATE TRIGGER trg_orders_set_created_by BEFORE INSERT ON public.orders FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -355,6 +360,7 @@ Indexes:
 - CREATE UNIQUE INDEX payroll_periods_period_start_period_end_key ON public.payroll_periods USING btree (period_start, period_end)
 
 Triggers:
+- trg_payroll_periods_before_delete: CREATE TRIGGER trg_payroll_periods_before_delete BEFORE DELETE ON public.payroll_periods FOR EACH ROW EXECUTE FUNCTION trg_payroll_periods_before_delete()
 - trg_payroll_periods_before_update: CREATE TRIGGER trg_payroll_periods_before_update BEFORE UPDATE ON public.payroll_periods FOR EACH ROW EXECUTE FUNCTION trg_payroll_periods_before_update()
 
 RLS enabled: t
@@ -445,7 +451,9 @@ Indexes:
 
 Triggers:
 - trg_purchase_orders_before: CREATE TRIGGER trg_purchase_orders_before BEFORE INSERT OR UPDATE ON public.purchase_orders FOR EACH ROW EXECUTE FUNCTION trg_purchase_orders_before()
+- trg_purchase_orders_before_delete: CREATE TRIGGER trg_purchase_orders_before_delete BEFORE DELETE ON public.purchase_orders FOR EACH ROW EXECUTE FUNCTION trg_purchase_orders_before_delete()
 - trg_purchase_orders_debt: CREATE TRIGGER trg_purchase_orders_debt AFTER INSERT OR DELETE OR UPDATE ON public.purchase_orders FOR EACH ROW EXECUTE FUNCTION trg_purchase_orders_debt()
+- trg_purchase_orders_set_created_by: CREATE TRIGGER trg_purchase_orders_set_created_by BEFORE INSERT ON public.purchase_orders FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -532,7 +540,9 @@ Indexes:
 
 Triggers:
 - trg_supplier_payments_after_insert: CREATE TRIGGER trg_supplier_payments_after_insert AFTER INSERT ON public.supplier_payments FOR EACH ROW EXECUTE FUNCTION trg_supplier_payments_after_insert()
+- trg_supplier_payments_before_delete: CREATE TRIGGER trg_supplier_payments_before_delete BEFORE DELETE ON public.supplier_payments FOR EACH ROW EXECUTE FUNCTION trg_supplier_payments_before_delete()
 - trg_supplier_payments_before_update: CREATE TRIGGER trg_supplier_payments_before_update BEFORE UPDATE ON public.supplier_payments FOR EACH ROW EXECUTE FUNCTION trg_supplier_payments_before_update()
+- trg_supplier_payments_set_created_by: CREATE TRIGGER trg_supplier_payments_set_created_by BEFORE INSERT ON public.supplier_payments FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -597,6 +607,7 @@ Indexes:
 
 Triggers:
 - trg_timekeeping_before: CREATE TRIGGER trg_timekeeping_before BEFORE INSERT OR UPDATE ON public.timekeeping FOR EACH ROW EXECUTE FUNCTION trg_timekeeping_before()
+- trg_timekeeping_set_created_by: CREATE TRIGGER trg_timekeeping_set_created_by BEFORE INSERT ON public.timekeeping FOR EACH ROW EXECUTE FUNCTION trg_set_created_by()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -745,62 +756,74 @@ RLS enabled: t
 
 - `app_setting_bool(p_key text, p_default boolean DEFAULT false)` → `boolean`
 - `app_timezone()` → `text`
-- `cancel_order(p_order_id uuid)` → `void`
-- `create_order(p_items jsonb, p_order_date timestamp with time zone DEFAULT now(), p_table_number text DEFAULT NULL::text, p_discount numeric DEFAULT 0, p_payment_method payment_method DEFAULT 'cash'::payment_method, p_note text DEFAULT NULL::text)` → `uuid`
-- `create_purchase_order(p_supplier_id uuid, p_order_date date, p_due_date date, p_invoice_number text, p_note text, p_items jsonb, p_paid_now numeric DEFAULT 0, p_paid_method payment_method DEFAULT 'cash'::payment_method)` → `uuid`
-- `finalize_payroll(p_period_id uuid)` → `void`
-- `generate_payroll(p_period_id uuid)` → `SETOF payroll_items`
+- `cancel_order(p_order_id uuid)` → `void` SECURITY DEFINER
+- `create_order(p_items jsonb, p_order_date timestamp with time zone DEFAULT now(), p_table_number text DEFAULT NULL::text, p_discount numeric DEFAULT 0, p_payment_method payment_method DEFAULT 'cash'::payment_method, p_note text DEFAULT NULL::text)` → `uuid` SECURITY DEFINER
+- `create_purchase_order(p_supplier_id uuid, p_order_date date, p_due_date date, p_invoice_number text, p_note text, p_items jsonb, p_paid_now numeric DEFAULT 0, p_paid_method payment_method DEFAULT 'cash'::payment_method)` → `uuid` SECURITY DEFINER
+- `current_user_role()` → `user_role` SECURITY DEFINER
+- `finalize_payroll(p_period_id uuid)` → `void` SECURITY DEFINER
+- `generate_payroll(p_period_id uuid)` → `SETOF payroll_items` SECURITY DEFINER
 - `get_dashboard_stats()` → `jsonb`
 - `get_pnl_monthly(p_year integer)` → `TABLE(month integer, month_start date, revenue numeric, cogs_total numeric, gross_profit numeric, labor_cost numeric, opex_total numeric, net_profit numeric)`
 - `get_pnl_report(p_start date, p_end date)` → `TABLE(revenue numeric, cogs_sales numeric, cogs_waste numeric, cogs_total numeric, gross_profit numeric, gross_margin_pct numeric, labor_cost numeric, opex_fixed numeric, opex_variable numeric, opex_total numeric, net_profit numeric, net_margin_pct numeric, order_count integer, avg_order_value numeric)`
 - `handle_new_user()` → `trigger` SECURITY DEFINER
+- `is_manager()` → `boolean` SECURITY DEFINER
 - `local_day_start(p_date date)` → `timestamp with time zone`
-- `next_order_number(p_date date DEFAULT CURRENT_DATE)` → `text`
-- `next_po_number(p_date date DEFAULT CURRENT_DATE)` → `text`
-- `pay_payroll(p_period_id uuid, p_method payment_method DEFAULT 'bank_transfer'::payment_method, p_paid_at timestamp with time zone DEFAULT now())` → `void`
-- `record_stock_adjustment(p_ingredient_id uuid, p_txn_type inventory_txn_type, p_quantity numeric, p_note text DEFAULT NULL::text)` → `uuid`
-- `record_supplier_payment(p_supplier_id uuid, p_amount numeric, p_payment_date date, p_method payment_method, p_purchase_order_id uuid DEFAULT NULL::uuid, p_reference text DEFAULT NULL::text, p_note text DEFAULT NULL::text)` → `uuid`
+- `next_order_number(p_date date DEFAULT CURRENT_DATE)` → `text` SECURITY DEFINER
+- `next_po_number(p_date date DEFAULT CURRENT_DATE)` → `text` SECURITY DEFINER
+- `pay_payroll(p_period_id uuid, p_method payment_method DEFAULT 'bank_transfer'::payment_method, p_paid_at timestamp with time zone DEFAULT now())` → `void` SECURITY DEFINER
+- `record_stock_adjustment(p_ingredient_id uuid, p_txn_type inventory_txn_type, p_quantity numeric, p_note text DEFAULT NULL::text)` → `uuid` SECURITY DEFINER
+- `record_supplier_payment(p_supplier_id uuid, p_amount numeric, p_payment_date date, p_method payment_method, p_purchase_order_id uuid DEFAULT NULL::uuid, p_reference text DEFAULT NULL::text, p_note text DEFAULT NULL::text)` → `uuid` SECURITY DEFINER
+- `reopen_payroll(p_period_id uuid)` → `void` SECURITY DEFINER
 - `set_updated_at()` → `trigger`
 - `to_local_date(p_ts timestamp with time zone)` → `date`
-- `trg_expense_records_before()` → `trigger`
-- `trg_inventory_txn_before_insert()` → `trigger`
-- `trg_ledger_immutable()` → `trigger`
-- `trg_order_items_after_insert()` → `trigger`
-- `trg_order_items_immutable()` → `trigger`
-- `trg_orders_after_cancel()` → `trigger`
-- `trg_orders_before()` → `trigger`
-- `trg_payroll_items_guard()` → `trigger`
-- `trg_payroll_items_sync_total()` → `trigger`
-- `trg_payroll_periods_before_update()` → `trigger`
-- `trg_po_items_after_delete()` → `trigger`
-- `trg_po_items_after_insert()` → `trigger`
-- `trg_po_items_before_insert()` → `trigger`
-- `trg_po_items_no_update()` → `trigger`
-- `trg_purchase_orders_before()` → `trigger`
-- `trg_purchase_orders_debt()` → `trigger`
-- `trg_spa_apply()` → `trigger`
-- `trg_supplier_payments_after_insert()` → `trigger`
-- `trg_supplier_payments_before_update()` → `trigger`
-- `trg_timekeeping_before()` → `trigger`
+- `trg_app_settings_validate()` → `trigger` SECURITY DEFINER
+- `trg_employees_before_delete()` → `trigger` SECURITY DEFINER
+- `trg_expense_records_before()` → `trigger` SECURITY DEFINER
+- `trg_inventory_txn_before_insert()` → `trigger` SECURITY DEFINER
+- `trg_ledger_immutable()` → `trigger` SECURITY DEFINER
+- `trg_order_items_after_insert()` → `trigger` SECURITY DEFINER
+- `trg_order_items_immutable()` → `trigger` SECURITY DEFINER
+- `trg_orders_after_cancel()` → `trigger` SECURITY DEFINER
+- `trg_orders_before()` → `trigger` SECURITY DEFINER
+- `trg_payroll_items_guard()` → `trigger` SECURITY DEFINER
+- `trg_payroll_items_sync_total()` → `trigger` SECURITY DEFINER
+- `trg_payroll_periods_before_delete()` → `trigger` SECURITY DEFINER
+- `trg_payroll_periods_before_update()` → `trigger` SECURITY DEFINER
+- `trg_po_items_after_delete()` → `trigger` SECURITY DEFINER
+- `trg_po_items_after_insert()` → `trigger` SECURITY DEFINER
+- `trg_po_items_before_insert()` → `trigger` SECURITY DEFINER
+- `trg_po_items_no_update()` → `trigger` SECURITY DEFINER
+- `trg_purchase_orders_before()` → `trigger` SECURITY DEFINER
+- `trg_purchase_orders_before_delete()` → `trigger` SECURITY DEFINER
+- `trg_purchase_orders_debt()` → `trigger` SECURITY DEFINER
+- `trg_set_created_by()` → `trigger` SECURITY DEFINER
+- `trg_spa_apply()` → `trigger` SECURITY DEFINER
+- `trg_supplier_payments_after_insert()` → `trigger` SECURITY DEFINER
+- `trg_supplier_payments_before_delete()` → `trigger` SECURITY DEFINER
+- `trg_supplier_payments_before_update()` → `trigger` SECURITY DEFINER
+- `trg_timekeeping_before()` → `trigger` SECURITY DEFINER
 
 ## Grants on functions (anon / authenticated)
 
-- `app_setting_bool`: anon=true, authenticated=true
-- `app_timezone`: anon=true, authenticated=true
-- `cancel_order`: anon=true, authenticated=true
-- `create_order`: anon=true, authenticated=true
-- `create_purchase_order`: anon=true, authenticated=true
-- `finalize_payroll`: anon=true, authenticated=true
-- `generate_payroll`: anon=true, authenticated=true
-- `get_dashboard_stats`: anon=true, authenticated=true
-- `get_pnl_monthly`: anon=true, authenticated=true
-- `get_pnl_report`: anon=true, authenticated=true
-- `handle_new_user`: anon=true, authenticated=true
-- `local_day_start`: anon=true, authenticated=true
-- `next_order_number`: anon=true, authenticated=true
-- `next_po_number`: anon=true, authenticated=true
-- `pay_payroll`: anon=true, authenticated=true
-- `record_stock_adjustment`: anon=true, authenticated=true
-- `record_supplier_payment`: anon=true, authenticated=true
-- `set_updated_at`: anon=true, authenticated=true
-- `to_local_date`: anon=true, authenticated=true
+- `app_setting_bool`: anon=false, authenticated=true
+- `app_timezone`: anon=false, authenticated=true
+- `cancel_order`: anon=false, authenticated=true
+- `create_order`: anon=false, authenticated=true
+- `create_purchase_order`: anon=false, authenticated=true
+- `current_user_role`: anon=false, authenticated=true
+- `finalize_payroll`: anon=false, authenticated=true
+- `generate_payroll`: anon=false, authenticated=true
+- `get_dashboard_stats`: anon=false, authenticated=true
+- `get_pnl_monthly`: anon=false, authenticated=true
+- `get_pnl_report`: anon=false, authenticated=true
+- `handle_new_user`: anon=false, authenticated=true
+- `is_manager`: anon=false, authenticated=true
+- `local_day_start`: anon=false, authenticated=true
+- `next_order_number`: anon=false, authenticated=true
+- `next_po_number`: anon=false, authenticated=true
+- `pay_payroll`: anon=false, authenticated=true
+- `record_stock_adjustment`: anon=false, authenticated=true
+- `record_supplier_payment`: anon=false, authenticated=true
+- `reopen_payroll`: anon=false, authenticated=true
+- `set_updated_at`: anon=false, authenticated=true
+- `to_local_date`: anon=false, authenticated=true

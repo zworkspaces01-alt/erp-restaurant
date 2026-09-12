@@ -1275,6 +1275,10 @@ export type Database = {
         }
         Returns: string
       }
+      current_user_role: {
+        Args: never
+        Returns: Database["public"]["Enums"]["user_role"]
+      }
       finalize_payroll: { Args: { p_period_id: string }; Returns: undefined }
       generate_payroll: {
         Args: { p_period_id: string }
@@ -1338,6 +1342,7 @@ export type Database = {
           revenue: number
         }[]
       }
+      is_manager: { Args: never; Returns: boolean }
       local_day_start: { Args: { p_date: string }; Returns: string }
       next_order_number: { Args: { p_date?: string }; Returns: string }
       next_po_number: { Args: { p_date?: string }; Returns: string }
@@ -1370,6 +1375,7 @@ export type Database = {
         }
         Returns: string
       }
+      reopen_payroll: { Args: { p_period_id: string }; Returns: undefined }
       to_local_date: { Args: { p_ts: string }; Returns: string }
     }
     Enums: {

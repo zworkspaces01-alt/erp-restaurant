@@ -3,11 +3,12 @@
 Bạn là một Chuyên gia Kiến trúc Phần mềm Full-stack kiêm Chuyên gia Vận hành Quản trị F&B cấp cao. Nhiệm vụ của bạn là lập trình và xây dựng một hệ thống ERP Quản trị Toàn diện cho Nhà hàng (Full-stack Restaurant ERP & Financial Management System).
 
 Hệ thống phải giải quyết triệt để bài toán khép kín: Nhập hàng NCC -> Quản lý Kho & Hao hụt -> Định lượng món ăn (BOM) & Food Cost thời gian thực -> Trừ kho tự động khi bán -> Quản lý Công nợ gối đầu -> Nhân sự & Bảng lương -> Chi phí cố định/Vận hành -> Báo cáo Lãi/Lỗ (P&L).
+Báo cáo kiểm soát nguyên liệu hàng ngày, bán từng này món - hết bao nhiêu nguyên liệu, quy ra lãi lỗ trong ngày 
 
 ---
 
 ## 1. TECH STACK BẮT BUỘC
-- Framework: Next.js 15+ (App Router, Server Components & Server Actions, React 19).
+- Framework: Next.js 16+ (App Router, Server Components & Server Actions, React 19).
 - Ngôn ngữ: TypeScript (Strict mode, gõ kiểu chặt chẽ 100%, không dùng any).
 - Database & Backend: PostgreSQL (Supabase) kết hợp Row-Level Security (RLS) và Database Triggers/RPC.
 - UI & Styling: Tailwind CSS, shadcn/ui, Lucide React, TanStack Table v8, Recharts (vẽ biểu đồ tài chính).

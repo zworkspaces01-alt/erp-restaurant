@@ -46,8 +46,9 @@ Recipes/BOM → Orders (bán hàng, trừ kho tự động) → Supplier debt �
 | `timekeeping` | `hours_worked` (derived when null) | BEFORE trigger |
 | `*` | `updated_at` | `set_updated_at` / BEFORE triggers |
 
-Writing to a maintained column is not blocked by the DB, but it silently corrupts the invariants
-(`current_debt == Σ debt_amount`, `current_stock == Σ ledger`). Do not do it; use the RPCs/tables below.
+Since the hardening pass these columns are **revoked from `authenticated` at column level** (§1.5): writing them raises
+`permission denied` instead of silently corrupting the invariants (`current_debt == Σ debt_amount`, `current_stock == Σ ledger`).
+Use the RPCs/tables below. `updated_at`, `hours_worked`, `paid_at` on expenses and the generated columns stay trigger-owned by convention.
 
 ### 1.4 Immutable / append-only data (dữ liệu chỉ ghi thêm)
 - `inventory_transactions`: **no UPDATE/DELETE ever** (`LEDGER_IMMUTABLE`). Reverse with an opposite movement.
@@ -59,10 +60,21 @@ Writing to a maintained column is not blocked by the DB, but it silently corrupt
 - Deleting a PO: only possible when it has **no payments** (FK from allocations/payments) and the stock it added is still available
   (`INSUFFICIENT_STOCK` otherwise). Deleting a supplier/ingredient/menu item/employee with history fails on FK → use `is_active = false`.
 
-### 1.5 Security
+### 1.5 Security (updated 2026-09-12 — hardening pass)
 - Single tenant. RLS is enabled on every table with policy "authenticated full access"; `profiles` is read-all / update-own.
-- All RPCs are `SECURITY INVOKER` (RLS applies inside them) → always call them with an authenticated session (`createClient()` from `@/lib/supabase/server`).
-- `user_role` (`owner/manager/staff`) exists on `profiles` but **no policy uses it yet** — enforce role UX in the app if needed.
+- **`anon` holds no privilege at all** in `public` (tables, sequences, functions revoked, including from `PUBLIC`). RLS is a second barrier, not the only one.
+- `authenticated` has `select, insert, update, delete` but **not** `truncate / trigger / references` (TRUNCATE would bypass the append-only ledger triggers).
+- **Column-level privileges protect every MAINTAINED column of §1.3** (`ingredients.current_stock/avg_cost_price`, `suppliers.current_debt`,
+  `purchase_orders.total_amount/paid_amount/payment_status/po_number`, `orders.subtotal/total_amount/total_cogs/order_number/status`,
+  `order_items.cogs_amount`, `payroll_periods.status/finalized_at/paid_at/total_net_pay/payment_method`, `profiles.role`).
+  Writing them from the app now fails with `permission denied` instead of silently corrupting the invariants.
+- Consequently **the business RPCs and every trigger function are `SECURITY DEFINER set search_path = public`** (owner `postgres`): they are the only
+  sanctioned writers of those columns. RLS does **not** apply inside them; the barriers are EXECUTE (authenticated/service_role only) and `auth.uid()`.
+  → Always call them with an authenticated session (`createClient()` from `@/lib/supabase/server`); a service-role or psql call has no user context.
+- `created_by` is stamped from the JWT by a trigger on `inventory_transactions`, `purchase_orders`, `supplier_payments`, `orders`, `timekeeping`, `expense_records` — a client-supplied value is ignored.
+- `user_role` (`owner/manager/staff`): helpers `current_user_role()` and `is_manager()` exist and gate the **delete guards**
+  (supplier payment, PO with payments, employee with timekeeping, payroll period ≠ draft). No RLS *policy* uses the role yet — enforce the rest in the app UI.
+- `app_settings` values are validated by a trigger (`INVALID_SETTING`): timezone must be a real IANA name, `allow_negative_stock` boolean, `food_cost_target_pct` 0–100.
 - Errors raised by triggers/RPCs use the form `'CODE: detail'` (see §8). Parse: `const code = error.message.split(':')[0]`.
 
 ---
@@ -270,11 +282,16 @@ Returns the period's items (array). Errors: `PAYROLL_PERIOD_NOT_FOUND`, `PAYROLL
 
 ### 5.7 `finalize_payroll(p_period_id uuid) → void`
 `draft → finalized` (stamps `finalized_at`); requires at least one item. Errors: `PAYROLL_PERIOD_NOT_FOUND`, `PAYROLL_PERIOD_LOCKED`, `PAYROLL_NO_ITEMS`.
-To reopen: `update payroll_periods set status = 'draft'` (allowed by the trigger while not paid).
+To reopen: `rpc("reopen_payroll", { p_period_id })` — see §5.8b (a direct `update … set status` is blocked by column privileges).
 
 ### 5.8 `pay_payroll(p_period_id uuid, p_method payment_method = 'bank_transfer', p_paid_at timestamptz = now()) → void`
 `finalized → paid`; marks every item `is_paid = true, paid_at`; stores `payment_method`, `paid_at` on the period. Terminal.
 Errors: `PAYROLL_PERIOD_NOT_FOUND`, `PAYROLL_PERIOD_PAID`, `PAYROLL_NOT_FINALIZED`. Pages: `/payroll/[id]`.
+
+### 5.8b `reopen_payroll(p_period_id uuid) → void`
+`finalized → draft` so the period can be recalculated (`generate_payroll`) or edited again. **owner/manager only**; a `paid` period cannot be
+reopened. Clears `finalized_at`. A `draft` period is a no-op. Errors: `PERMISSION_DENIED`, `PAYROLL_PERIOD_NOT_FOUND`, `PAYROLL_PERIOD_PAID`.
+Pages: `/payroll/[id]`.
 
 ### 5.9 `get_pnl_report(p_start date, p_end date) → table (1 row)`
 Inclusive local-date range. Columns (all `numeric` except `order_count int`):
@@ -437,6 +454,7 @@ From `v_menu_item_costs.food_cost_pct`: `> FOOD_COST_DANGER (35)` red, `≥ FOOD
 | `INVALID_QUANTITY` | quantity null/≤ 0 (PO line, order line), waste ≤ 0, adjustment = 0, stocktake < 0 | Số lượng không hợp lệ. |
 | `INVALID_RANGE` | `get_pnl_report` with `p_end < p_start` | Khoảng thời gian không hợp lệ. |
 | `INVALID_TXN_TYPE` | `record_stock_adjustment` with type other than waste/adjustment/stocktake | Loại giao dịch kho không hợp lệ. |
+| `INVALID_SETTING` | `app_settings` value fails validation (timezone, boolean, 0–100) | Giá trị cấu hình không hợp lệ. |
 | `LEDGER_IMMUTABLE` | UPDATE/DELETE on `inventory_transactions` | Sổ kho không thể sửa hoặc xóa. Hãy tạo giao dịch điều chỉnh. |
 | `MENU_ITEM_INACTIVE` | `create_order` with an inactive item | Món "{detail}" đã ngừng bán. |
 | `MENU_ITEM_NOT_FOUND` | `create_order` unknown `menu_item_id` | Không tìm thấy món ăn. |
@@ -447,10 +465,11 @@ From `v_menu_item_costs.food_cost_pct`: `> FOOD_COST_DANGER (35)` red, `≥ FOOD
 | `ORDER_NOT_FOUND` | `cancel_order` / order line for unknown order | Không tìm thấy đơn hàng. |
 | `PAYMENT_EXCEEDS_DEBT` | FIFO payment > supplier's total outstanding | Số tiền thanh toán vượt quá tổng công nợ của NCC. |
 | `PAYMENT_EXCEEDS_PO_DEBT` | đích danh payment (or `paid_now`) > that PO's debt | Số tiền thanh toán vượt quá công nợ còn lại của phiếu nhập. |
+| `PERMISSION_DENIED` | delete/reopen reserved to owner/manager (payment, PO with payments, employee with timekeeping, `reopen_payroll`) | Bạn không có quyền thực hiện thao tác này (cần Chủ/Quản lý). |
 | `PAYMENT_UPDATE_NOT_ALLOWED` | changing amount/supplier/PO of a payment | Không thể sửa phiếu chi. Hãy xóa và ghi lại. |
 | `PAYROLL_NOT_FINALIZED` | paying a period that is not finalized | Cần chốt bảng lương trước khi chi trả. |
 | `PAYROLL_NO_ITEMS` | finalizing a period without items | Chưa tính lương cho kỳ này. Hãy tính lương trước. |
-| `PAYROLL_PERIOD_LOCKED` | generate/finalize on non-draft; editing items of non-draft | Kỳ lương đã chốt, không thể chỉnh sửa. |
+| `PAYROLL_PERIOD_LOCKED` | generate/finalize on non-draft; editing items of non-draft; **deleting a period that is not draft** | Kỳ lương đã chốt, không thể chỉnh sửa hoặc xóa. |
 | `PAYROLL_PERIOD_NOT_FOUND` | unknown period id | Không tìm thấy kỳ lương. |
 | `PAYROLL_PERIOD_PAID` | any change to a paid period / paying twice | Kỳ lương đã chi trả, không thể thay đổi. |
 | `PO_ITEMS_REQUIRED` | `create_purchase_order` with empty items | Phiếu nhập phải có ít nhất một dòng. |
@@ -462,7 +481,7 @@ From `v_menu_item_costs.food_cost_pct`: `> FOOD_COST_DANGER (35)` red, `≥ FOOD
 
 Native Postgres errors to map too (`error.code`): `23505` unique (mã/số phiếu/kỳ lương trùng → "Dữ liệu đã tồn tại"),
 `23503` FK (xóa bản ghi đang được sử dụng → "Không thể xóa: dữ liệu đang được sử dụng"), `23514` check constraint ("Giá trị không hợp lệ"),
-`42501` / empty result under RLS (chưa đăng nhập).
+`42501` permission denied (ghi vào cột do DB tự quản, hoặc chưa đăng nhập) → "Không thể ghi trực tiếp giá trị này; hãy dùng chức năng nghiệp vụ tương ứng".
 
 ---
 

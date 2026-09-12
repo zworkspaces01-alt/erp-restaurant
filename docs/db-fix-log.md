@@ -13,3 +13,9 @@ Applied in migration sections `17a. SECURITY HARDENING` and `18. GRANTS`:
 - SEC-12 | fixed | created_by stamped from auth.uid() (client value ignored).
 - Tests: supabase/tests/05_rls.sql updated — anon is now denied at the privilege level (no longer "0 rows"), fixture captures the menu item id before switching role, ingredient count assertion made robust.
 - SEC-09, SEC-11, SEC-13, SEC-14, SEC-15, SEC-16 | open | handed to the follow-up run.
+
+2026-09-12 (phiên kế hoạch):
+- Xác nhận đợt hardening ĐÃ hoàn tất trong migration: mục 17a (helper role, guard xóa payroll/payment/PO/employee, validate app_settings, stamp created_by, chuyển trigger+RPC sang SECURITY DEFINER) và mục 18 GRANTS (revoke anon/public, bỏ TRUNCATE/TRIGGER/REFERENCES, column-level privileges cho cột MAINTAINED). Ghi chú "GRANTS chưa áp" ở đầu file này đã lỗi thời.
+- TEST-01 | fixed | `supabase/tests/05_rls.sql` đỏ ở `auth_uid_from_claims` trên `db:test:real`: image supabase/postgres trần ship auth.uid() kiểu cũ chỉ đọc `request.jwt.claim.sub`, còn test set `request.jwt.claims`. Test nay set CẢ HAI dạng claim → `db:test` và `db:test:real` đều xanh.
+- Sinh lại src/types/database.ts và docs/DATABASE.generated.md theo migration hiện tại (thêm reopen_payroll, current_user_role, is_manager).
+- Findings còn lại (T-01 phân bổ thanh toán, BL-04/T-06 kỳ lương chồng ngày, SEC-09/T-10 check tiền lương, BL-01 WAC khi xóa dòng PO, BL-02 nhân viên nghỉ giữa kỳ, T-09/BL-07 múi giờ, DOC-07 hao hụt lùi ngày, SEC-13 index, SEC-15/T-16, SEC-16 seed guard, DOC-04 khấu hao) → xếp vào Phase 2 của docs/PLAN.md.

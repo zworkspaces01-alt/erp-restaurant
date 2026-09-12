@@ -1,6 +1,6 @@
 # Restaurant ERP — Kế hoạch triển khai (Implementation Plan)
 
-Ngày lập: 2026-09-12. Spec gốc: `restaurant_erp_prompt.md` (bản gốc ở root, có thêm yêu cầu *báo cáo kiểm soát nguyên liệu hàng ngày* và Next.js 16+).
+Ngày lập: 2026-09-12 · Cập nhật: 2026-09-12 (sau Phase 0). Spec gốc: `docs/restaurant_erp_prompt.md` (yêu cầu *báo cáo kiểm soát nguyên liệu hàng ngày* và Next.js 16+).
 Hợp đồng kỹ thuật: `docs/ARCHITECTURE.md` · `docs/DATABASE.md` · `docs/DATABASE.generated.md`. Kết quả review DB: `docs/db-review-findings.json`.
 
 Tài liệu này là **lộ trình duy nhất** để đưa dự án từ trạng thái hiện tại (khung đã có, app chưa chạy được) đến bản v1 chạy thật.
@@ -14,14 +14,14 @@ Mỗi phase có deliverable + tiêu chí hoàn thành (DoD). Làm tuần tự; k
 |---|---|---|
 | Stack | ✅ Next 15.5.25 · React 19.1 · TS strict · Tailwind v4 · shadcn (radix-nova) · TanStack Table 8 · Recharts 3 · RHF + Zod 3 · @supabase/ssr | Spec gốc yêu cầu **Next 16+** → xem Phase 1.5 |
 | Migration DB | ✅ `supabase/migrations/20260911000000_init.sql` (2.086 dòng): 19 bảng, 7 view, 11 RPC + helper, ~20 trigger, RLS mọi bảng | Đã áp lên Supabase local (cổng 544xx) kèm seed (47 nguyên liệu, 1.000 đơn, user demo) |
-| SQL tests | ⚠️ `npm run db:test` chạy 5 file, **pass tất cả trừ 1**: `anon_no_execute_on_mutating_rpcs` (anon vẫn có EXECUTE trên RPC ghi) | Fix ở Phase 0 |
-| Review DB | ⚠️ 59 findings: **5 high**, 35 medium, 19 low | Xử lý ở Phase 2 |
+| SQL tests | ✅ `npm run db:test` **và** `npm run db:test:real` xanh 100% (5 file) | Sửa ở Phase 0: test set cả 2 dạng JWT claim |
+| Review DB | ⚠️ 59 findings; **đợt hardening đã áp** (mục 17a + GRANTS của migration) xử lý phần lớn nhóm SEC | Còn lại xử lý ở Phase 2 — xem §2.3 |
 | Typecheck app | ❌ **106 lỗi** `tsc --noEmit` | Toàn bộ là **lệch schema**: app viết theo tên bảng/cột/RPC khác với migration (xem §2) |
 | Lint | ✅ sạch | |
 | Build | ❌ `next build` sẽ fail vì `ignoreBuildErrors: false` | Tự hết khi Phase 1 xong |
 | Pages | ⚠️ 24 trang có; **thiếu 6 trang chi tiết** theo route map + trang báo cáo ngày + settings | Phase 3 |
 | E2E | ⚠️ Playwright smoke 18 route + auth setup đã viết, chưa từng chạy xanh | Phase 5 |
-| Git | ❌ **Chưa `git init`** | Phase 0, việc đầu tiên |
+| Git | ✅ Đã `git init` + commit baseline | Phase 0 xong |
 | Môi trường | ✅ Docker: Supabase local (API 54421, DB 54422, Studio 54423), `erp-pg` 54329 cho db:test | `.env.local` đã trỏ local |
 
 **Kết luận**: tầng DB là phần chắc nhất (có test, có docs, có review). Tầng app được viết song song theo một schema "tưởng tượng" nên không khớp.
@@ -31,11 +31,12 @@ Mỗi phase có deliverable + tiêu chí hoàn thành (DoD). Làm tuần tự; k
 
 ## 1. Nguyên tắc làm việc (áp dụng cho mọi phase)
 
-1. **Không sửa migration đã áp** (`…_init.sql`). Mọi thay đổi DB = file migration mới `supabase/migrations/2026MMDDhhmmss_<ten>.sql`.
-2. Sau mỗi thay đổi DB: `npm run db:test` xanh → `npm run db:types` (sinh `src/types/database.ts`) → `bash scripts/db-doc.sh` → cập nhật `docs/DATABASE.md` phần liên quan.
+1. **Trước go-live**: `…_init.sql` vẫn là file duy nhất được sửa (dự án chưa phát hành; `db:test` dựng lại DB từ đầu mỗi lần, `npx supabase db reset` áp lại local).
+   **Sau go-live (Phase 6)**: đóng băng file init, mọi thay đổi = migration mới `2026MMDDhhmmss_<ten>.sql`.
+2. Sau mỗi thay đổi DB, đủ 4 bước: test trong `supabase/tests/` → `npm run db:test` **và** `npm run db:test:real` xanh → `npm run db:types` + `npm run db:doc` → cập nhật `docs/DATABASE.md`.
 3. Mọi mutation nghiệp vụ nhiều bước đi qua **RPC** (không tự cộng kho/công nợ ở app). CRUD master data đi qua `.from()`.
 4. Server Action: validate zod → gọi Supabase → map lỗi `CODE: detail` sang tiếng Việt (§8 DATABASE.md) → `revalidatePath` → `ok()/fail()`.
-5. Không `any`, không `@ts-ignore`. Cổng chất lượng trước khi coi một việc là xong: `npm run check` (typecheck + lint + db:test) — thêm ở Phase 0.
+5. Không `any`, không `@ts-ignore`. Cổng chất lượng trước khi coi một việc là xong: `npm run check` (typecheck + lint + db:test).
 6. Không đổi version thư viện ngoài Phase 1.5.
 7. Text UI tiếng Việt có dấu; tiền `formatVND`; ngày `formatDate`.
 
@@ -79,20 +80,39 @@ Cột bên trái là tên **app đang dùng sai**, bên phải là tên **thật
 - Mọi zod schema dùng đúng tên cột DB. Thêm: `DashboardStats`, `PnlReport`, `PnlMonthlyRow`, `MenuClass` types; `ERROR_MESSAGES` map theo §8 DATABASE.md.
 - Helper thuần (test được bằng unit test): `recipeLineCost(qty, wastePct, avgCost)`, `poLineTotal`, `poDebt(total, paidNow)`, `dueDate(orderDate, termsDays)`, `foodCostTone(pct)`, `payrollPreview(...)`.
 
+### 2.3 Findings DB **đã xử lý** trong đợt hardening (mục 17a + 18 GRANTS của migration)
+Kiểm chứng bằng `npm run db:test:real` xanh + đọc lại migration. Không làm lại ở Phase 2.
+
+| Finding | Cách xử lý đã áp |
+|---|---|
+| SEC-04, DOC-09 | `revoke all on all functions … from anon, public` + default privileges; chỉ `authenticated`/`service_role` có EXECUTE; trigger function và `handle_new_user` không cấp cho ai |
+| SEC-05 | `revoke all on all tables/sequences … from anon, public` — anon không còn quyền nào, RLS không phải lớp chắn duy nhất |
+| SEC-03 | `revoke truncate, trigger, references … from anon, authenticated` — không TRUNCATE được để lách trigger append-only |
+| SEC-01, T-03, SEC-06 | **Column-level privileges**: `authenticated` mất UPDATE/INSERT trên cột MAINTAINED (`current_stock`, `avg_cost_price`, `current_debt`, PO `total/paid/payment_status/po_number`, orders `subtotal/total_amount/total_cogs/order_number/status`, `order_items.cogs_amount`, payroll `status/finalized_at/paid_at/total_net_pay/payment_method`, `profiles.role`). Mọi trigger function + RPC ghi các cột này chuyển sang `security definer set search_path = public` |
+| T-07 | Hệ quả của trên: `update payroll_periods set status=…` trực tiếp bị chặn ở tầng quyền → chỉ đổi trạng thái qua RPC |
+| SEC-02, T-05, DOC-08 | `trg_payroll_periods_before_delete`: chỉ kỳ `draft` mới xóa được (`PAYROLL_PERIOD_LOCKED`) |
+| SEC-08 | `trg_supplier_payments_before_delete`: chỉ `owner/manager` xóa được phiếu chi |
+| SEC-07 | `trg_employees_before_delete`: nhân viên đã có chấm công chỉ `owner/manager` xóa được |
+| SEC-10 | `trg_app_settings_validate`: chặn timezone sai, `allow_negative_stock` không phải boolean, `food_cost_target_pct` ngoài 0–100, tên/tiền tệ rỗng |
+| SEC-12 | `trg_set_created_by`: `created_by` luôn lấy từ JWT trên 6 bảng, bỏ qua giá trị client gửi |
+| DOC-10 (một phần) | Helper `current_user_role()` / `is_manager()` đã có và được dùng trong các guard xóa. Policy RLS vẫn là "authenticated full access" — phần policy theo role còn lại ở Phase 2 |
+| Mới | RPC `reopen_payroll(p_period_id)`: mở lại kỳ `finalized → draft` (owner/manager; kỳ `paid` không mở lại được) |
+
+**Hệ quả cần nhớ khi code app**: RPC nghiệp vụ giờ là `SECURITY DEFINER` (không còn invoker) — RLS không áp bên trong, lớp chặn là quyền EXECUTE + `auth.uid()`. App **bắt buộc** gọi RPC bằng session đã đăng nhập. Ghi thẳng vào cột MAINTAINED nay sẽ lỗi `permission denied`, không còn âm thầm hỏng dữ liệu.
+
+Mã lỗi mới cần map tiếng Việt: `PERMISSION_DENIED` → "Bạn không có quyền thực hiện thao tác này (cần Chủ/Quản lý)", `INVALID_SETTING` → "Giá trị cấu hình không hợp lệ".
+
 ---
 
 ## 3. Lộ trình theo phase
 
-### Phase 0 — Nền tảng & cổng chất lượng (≈ 0.5 ngày)
-Mục tiêu: có git, có lệnh kiểm tra một phát, agent nào vào cũng biết luật.
-1. `git init` + commit đầu tiên "chore: baseline" (`.gitignore` đã có; kiểm tra `.env.local` không bị commit).
-2. Thêm scripts vào `package.json`: `"check": "npm run typecheck && npm run lint && npm run db:test"`, `"db:doc": "bash scripts/db-doc.sh"`, `"test": "vitest run"` (cài `vitest` ở Phase 5, để sẵn script).
-3. Sửa fail test RLS: migration `20260912000000_grants_fix.sql`:
-   `revoke execute on all functions in schema public from public, anon;` + `alter default privileges in schema public revoke execute on functions from public;` → chạy `npm run db:test` xanh 100%.
-4. Tạo `CLAUDE.md` ở root (ngắn): trỏ tới ARCHITECTURE.md / DATABASE.md / PLAN.md, các lệnh, quy ước §1, cổng `npm run check`.
-5. Đồng bộ 2 bản spec: `docs/restaurant_erp_prompt.md` phải giống bản root (thêm dòng "báo cáo kiểm soát nguyên liệu hàng ngày"; ghi rõ quyết định Next 16 sau Phase 1.5).
-
-**DoD**: repo git sạch, `npm run db:test` xanh, `CLAUDE.md` có, `npm run check` chạy được (typecheck còn đỏ là chấp nhận ở phase này).
+### Phase 0 — Nền tảng & cổng chất lượng — ✅ **XONG 2026-09-12**
+1. ✅ `git init` + commit baseline (`.env.local` không bị commit, chỉ `.env.example`).
+2. ✅ `package.json`: thêm `check` (typecheck + lint + db:test) và `db:doc`.
+3. ✅ Sửa test RLS đỏ: nguyên nhân **không phải grants** (migration đã revoke đúng) mà do image `supabase/postgres` trần ship `auth.uid()` kiểu cũ chỉ đọc `request.jwt.claim.sub`, trong khi test set `request.jwt.claims`. `supabase/tests/05_rls.sql` giờ set **cả hai dạng claim** → `db:test` và `db:test:real` xanh 100%.
+4. ✅ `CLAUDE.md` ở root: hợp đồng làm việc, lệnh, 10 luật bất di bất dịch.
+5. ✅ Gộp spec về một bản `docs/restaurant_erp_prompt.md` (bỏ bản trùng ở root, README đã trỏ đúng).
+6. ✅ Sinh lại `src/types/database.ts` + `docs/DATABASE.generated.md` theo migration mới nhất (có `reopen_payroll`, `current_user_role`, `is_manager`).
 
 ### Phase 1 — Đồng bộ app với DB: về 0 lỗi typecheck (≈ 1–1.5 ngày)
 Làm theo module, mỗi module một commit, dùng bảng §2 làm checklist. Thứ tự (từ ít phụ thuộc → nhiều):
@@ -118,19 +138,14 @@ Làm **ngay sau** Phase 1 (code còn nhỏ, typecheck đang xanh nên dễ soi l
 
 **DoD**: `npm run check` + `next build` xanh trên Next 16; smoke routes mở được.
 
-### Phase 2 — Migration 0002: gia cố DB + báo cáo ngày (≈ 1.5–2 ngày)
-Hai file migration riêng để dễ review/rollback: `…_hardening.sql` và `…_daily_report.sql`. Mỗi thay đổi có test trong `supabase/tests/06_hardening.sql`, `07_daily_report.sql`.
+### Phase 2 — Gia cố DB phần còn lại + báo cáo ngày (≈ 1.5–2 ngày)
+Sửa tiếp trong `…_init.sql` (xem nguyên tắc §1.1). Mỗi thay đổi có test mới trong `supabase/tests/06_hardening.sql` và `07_daily_report.sql`.
 
-**2A. Bảo mật & toàn vẹn (từ findings high/medium)**
+**2A. Bảo mật & toàn vẹn — phần CÒN LẠI** (những gì đã xong xem §2.3)
 | ID | Việc |
 |---|---|
-| DOC-09 / SEC-04 | (đã làm Phase 0) revoke EXECUTE khỏi `public`/`anon`; giữ `authenticated`, `service_role` |
-| SEC-03 / SEC-05 | `revoke truncate, references, trigger on all tables in schema public from authenticated, anon`; `revoke all on all tables in schema public from anon` (app không có use-case anon; middleware chặn) |
-| SEC-01 / T-03 | Bảo vệ cột MAINTAINED (`ingredients.current_stock/avg_cost_price`, `suppliers.current_debt`, `purchase_orders.total_amount/paid_amount/payment_status`, `orders.subtotal/total_amount/total_cogs`, `payroll_periods.total_net_pay/status`…): **column-level `revoke update (…) from authenticated`** + chuyển các trigger function/RPC ghi cột đó sang `security definer set search_path = public` (owner `postgres`), thêm guard `if auth.uid() is null then raise 'UNAUTHENTICATED'` đầu mỗi RPC. Cập nhật test 05_rls. |
 | T-01 | Trigger trên `supplier_payment_allocations` INSERT: Σ allocation ≤ `payment.amount`, PO cùng supplier, amount ≤ debt còn lại |
-| SEC-02 / T-05 / DOC-08 | `BEFORE DELETE` trên `payroll_periods`: cấm xóa khi status ≠ draft (`PAYROLL_PERIOD_LOCKED`) |
 | BL-04 / T-06 | `create extension btree_gist`; `alter table payroll_periods add constraint no_overlap exclude using gist (daterange(period_start, period_end, '[]') with &&)` → lỗi `PAYROLL_PERIOD_OVERLAP` |
-| T-07 | Trạng thái payroll chỉ đổi qua RPC (định nghĩa bằng definer + revoke update(status)) |
 | SEC-09 / T-10 | Check ≥ 0 cho các cột tiền của `payroll_items`; `net_pay ≥ 0` (raise `PAYROLL_NEGATIVE_NET`) |
 | BL-02 | `generate_payroll`: điều kiện đủ = `start_date <= period_end and coalesce(end_date,'infinity') >= period_start` (không phụ thuộc `is_active`) |
 | DOC-01 / T-15 | Thêm `app_settings.ft_payroll_mode` = `'fixed'` (mặc định: FT nhận đủ lương tháng + phụ cấp) hoặc `'prorate'` (như hiện tại). (Quyết định #2) |
@@ -138,10 +153,8 @@ Hai file migration riêng để dễ review/rollback: `…_hardening.sql` và `�
 | DOC-07 / BL-11 | `record_stock_adjustment` thêm `p_txn_at timestamptz default now()` → ghi `created_at = p_txn_at` (cho phép ghi hao hụt lùi ngày, không quá hôm nay) |
 | BL-01 | `trg_po_items_after_delete`: tính lại WAC ngược khi tồn sau xóa > 0: `(stock*avg − qty*cost)/(stock − qty)`, chặn âm |
 | T-09 / BL-07 | Thay `current_date` bằng `to_local_date(now())` ở default ngày PO/payment/expense và các so sánh quá hạn trong `v_purchase_orders_summary`, `v_supplier_debt_summary`, `get_dashboard_stats` |
-| SEC-06 | Trigger trên `profiles`: chỉ `owner` mới đổi được `role` |
-| SEC-10 | Trigger validate `app_settings`: `timezone` phải hợp lệ (`now() at time zone value`), key boolean phải là boolean |
-| SEC-15 / T-16 | `expense_categories.updated_at` + trigger; expense `paid` bắt buộc `payment_method`; `amount > 0` |
-| DOC-10 | Phân quyền tối thiểu theo `profiles.role`: helper `current_role()`; policy **DELETE** trên `supplier_payments`, `purchase_orders`, `expense_records`, `employees`, `payroll_periods` chỉ cho `owner/manager`. UI ẩn nút với `staff`. |
+| SEC-15 / T-16 | `expense_categories.updated_at` + trigger; expense `paid` bắt buộc `payment_method`; `amount > 0`; PO không có dòng nào thì không tạo được bằng insert trực tiếp |
+| DOC-10 | Nốt phần còn lại: policy **DELETE** theo role trên `expense_records`, `purchase_orders` (hiện mới chặn PO đã có thanh toán); UI ẩn nút xóa với `staff`; đọc role qua `current_user_role()` trong layout |
 | SEC-16 | Seed: abort nếu `current_setting('app.seed_allowed', true) <> 'on'` (db-test.sh và `supabase start` set biến này); không bao giờ chạy seed lên cloud |
 
 Giữ nguyên (ghi rõ vào DATABASE.md là *by design*): DOC-03, DOC-05/BL-06 (labor chỉ tính kỳ đã chốt; dashboard thêm dòng "ước tính lương kỳ nháp"), DOC-12 (P&L tính dồn tích kể cả pending; UI có toggle "chỉ đã thanh toán"), DOC-04 (thêm cờ `expense_categories.is_depreciation` → báo cáo hiện thêm dòng EBITDA = net + khấu hao), T-08/BL-12 (adjustment không vào COGS, báo cáo hiện riêng), BL-13/SEC-11, T-14, SEC-13 (thêm index `text_pattern_ops` cho `order_number`, `po_number`).
@@ -154,7 +167,7 @@ Giữ nguyên (ghi rõ vào DATABASE.md là *by design*): DOC-03, DOC-05/BL-06 (
 - Index hỗ trợ: `inventory_transactions (created_at, ingredient_id)`, `orders (order_date) where status='completed'`.
 - Test `07_daily_report.sql`: tạo 1 đơn 2 món → kiểm tra usage = Σ định lượng × (1+waste), cost = usage × avg_cost, summary.revenue = tổng đơn.
 
-**2C. Sau migration**: `npm run db:test` → `npm run db:types` → `npm run db:doc` → cập nhật DATABASE.md (§4 trigger, §5 RPC thêm 5.13, §6 view, §8 mã lỗi mới: `UNAUTHENTICATED`, `PAYROLL_PERIOD_OVERLAP`, `PAYROLL_NEGATIVE_NET`, `FORBIDDEN_ROLE`) → `npx supabase db reset` local → typecheck app (kỳ vọng vài lỗi do type mới, sửa ngay).
+**2C. Sau migration**: `npm run db:test` + `db:test:real` → `npm run db:types` → `npm run db:doc` → cập nhật DATABASE.md (§4 trigger, §5 RPC thêm `get_daily_control_report`, §6 view, §8 mã lỗi mới: `PAYROLL_PERIOD_OVERLAP`, `PAYROLL_NEGATIVE_NET`) → `npx supabase db reset` local → typecheck app (kỳ vọng vài lỗi do type mới, sửa ngay).
 
 **DoD**: tests 01–07 xanh trên cả `db:test` và `db:test:real`; findings high = 0, medium còn lại đều có dòng "by design" trong DATABASE.md; app typecheck xanh với types mới.
 
@@ -216,7 +229,7 @@ Bổ sung nav (`nav-config.ts`): "Báo cáo" thành nhóm con: P&L, Kiểm soát
 
 | Phase | Nội dung | Ước lượng |
 |---|---|---|
-| 0 | Git, cổng chất lượng, fix RLS test, CLAUDE.md | 0.5 ngày |
+| 0 | Git, cổng chất lượng, fix RLS test, CLAUDE.md | ✅ xong |
 | 1 | Về 0 lỗi typecheck, build xanh | 1–1.5 ngày |
 | 1.5 | Next.js 16 | 0.5 ngày (có điều kiện dừng) |
 | 2 | Migration gia cố + báo cáo ngày + docs | 1.5–2 ngày |
@@ -224,7 +237,7 @@ Bổ sung nav (`nav-config.ts`): "Báo cáo" thành nhóm con: P&L, Kiểm soát
 | 4 | UX theo spec | 1 ngày |
 | 5 | Test SQL/unit/e2e | 1–1.5 ngày |
 | 6 | Deploy, import dữ liệu, bàn giao | 0.5 ngày |
-| **Tổng** | | **≈ 8–11 ngày công** (1 dev + Claude Code) |
+| **Tổng còn lại** | | **≈ 8–10 ngày công** (1 dev + Claude Code) |
 
 Mốc kiểm tra với chủ dự án: sau Phase 1 (app chạy được với seed), sau Phase 3 (đủ màn hình), sau Phase 5 (sẵn sàng deploy).
 
