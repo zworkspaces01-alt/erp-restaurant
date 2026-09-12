@@ -1,0 +1,544 @@
+{
+ "findings": [
+  {
+   "id": "DOC-01",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Payroll FT semantics: spec says full-time = 'lương cứng/tháng + phụ cấp' (fixed monthly), but generate_payroll prorates BOTH base_pay and allowance by count(distinct timekeeping.work_date)/standard_days_per_month, so an FT employee with no timekeeping rows in the period gets base_pay = 0 and allowance = 0.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-02",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Weighted-average cost: spec formula is unconditional; trg_po_items_after_insert replaces avg_cost_price with the import cost whenever old_stock <= 0 (including negative stock when allow_negative_stock is on). Also trg_po_items_after_delete reverses stock but never recomputes avg_cost_price (documented as intentional in SQL).",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-03",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Spec trigger #1 ('tu tang current_debt khi tao purchase_orders'): at INSERT the PO total is 0, so suppliers.current_debt actually increases through the UPDATE path as purchase_order_items are inserted (net effect equivalent, but a bare header insert changes nothing).",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-04",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "P&L 'Net Profit / EBITDA': get_pnl_report.net_profit subtracts every expense_records row including any 'khau hao' (depreciation) category the spec lists, so it is net profit, not EBITDA; there is no way to exclude depreciation.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-05",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Labor cost in P&L/dashboard counts only payroll periods with status finalized/paid whose period_end falls in the range; draft periods are excluded, so get_dashboard_stats().month_labor_cost is 0 until the month's period is finalized (spec does not define this).",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-06",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "v_menu_engineering: menu_class uses coalesce fallbacks while is_popular/is_profitable do not, so with zero sales in the 30-day window every active item with CM >= 0 is classified 'puzzle' although is_profitable = false. Popularity is by quantity (Kasavana-Smith 70% rule), not 'doanh so' (revenue) as the spec wording suggests.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-07",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "record_stock_adjustment has no date parameter: waste/stocktake/adjustment rows are always created_at = now(), so waste COGS cannot be backdated, whereas purchase orders and orders can be backdated (their ledger rows are dated at the business date).",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-08",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Deleting a payroll_periods row cascades to payroll_items regardless of status (the guard returns early because the period row is already gone when the cascade fires), so a 'paid' period and its payment trail can be deleted directly, contradicting 'luu vet thanh toan' (spec module 4). No trigger blocks DELETE on payroll_periods.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-09",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Function grants: migration grants EXECUTE to authenticated/service_role but never revokes the Postgres default EXECUTE from PUBLIC, so DATABASE.generated.md shows anon=true for every function (including create_order etc.). RLS (SECURITY INVOKER) still denies data access to anon, but consider 'revoke execute on all functions in schema public from public, anon'.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-10",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "RLS is single-tenant 'authenticated full access'; the user_role enum (owner/manager/staff) on profiles is never referenced by any policy, so the spec's RLS requirement is only nominally met.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-11",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "ARCHITECTURE.md badge thresholds (FOOD_COST_WARN 30 / FOOD_COST_DANGER 35) have only a partial DB counterpart: app_settings.food_cost_target_pct = 35 exists but is not read by any SQL, and there is no key for the 30% warning threshold.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-12",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "P&L opex is accrual by expense_date and includes status = 'pending' records (unpaid bills count as cost); spec only mentions Pending/Paid status without defining P&L treatment.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "DOC-13",
+   "severity": "medium",
+   "area": "docs-vs-sql",
+   "location": "see description",
+   "description": "Spec module 3 expects supplier_payments to 'cap nhat purchase_orders'; SQL does this indirectly via the extra table supplier_payment_allocations (not in the spec table list) - fine functionally, but the app must read allocations, not supplier_payments.purchase_order_id, to know which POs a FIFO payment settled.",
+   "evidence": "reported by docs author",
+   "suggested_fix": "align SQL with spec/contract or document the deviation"
+  },
+  {
+   "id": "BL-01",
+   "severity": "high",
+   "area": "Inventory / weighted average cost",
+   "location": "supabase/migrations/20260911000000_init.sql lines 621-657 (trg_po_items_after_delete) and 664-675 (trg_po_items_no_update)",
+   "description": "Deleting a purchase_order_items row reverses the stock quantity but intentionally leaves ingredients.avg_cost_price unchanged, while UPDATE of a PO line is forbidden ('delete the line and insert it again'). So the ONLY sanctioned way to fix a mistyped line permanently corrupts the weighted-average cost: the wrong price stays baked into the average and the re-inserted correct line is averaged on top of it. Every later sale of that ingredient snapshots the wrong unit_cost into order_items.cogs_amount/orders.total_cogs, and v_recipe_costs/v_menu_item_costs/menu engineering show wrong ideal cost, CM and food cost %.",
+   "evidence": "Test in a rolled-back tx on review_business: NL-002 stock 4240 @ 135.0000. create_purchase_order(... NL-002 qty 10 kg @ 1,350,000 [typo, 10x]) -> stock 14240, avg 988.2303. delete from purchase_order_items where purchase_order_id=:po -> stock 4240, avg STILL 988.2303. Re-insert correct line 10 kg @ 135,000 -> stock 14240, avg 389.0517. Expected 135.0000 (4240*135 + 10000*135)/14240. Code comment: '-- AFTER DELETE: reverse the stock (avg cost is intentionally left unchanged)'.",
+   "suggested_fix": "On delete, un-blend the line: if (stock - base_qty) > 0 then new_avg = (stock*avg - base_qty*cost_base)/(stock - base_qty) (clamped >= 0), else keep avg; or store the pre-insert avg on the PO item (prev_avg_cost, prev_stock) and restore it when the line is the most recent movement; at minimum expose a 'recost ingredient' RPC that recomputes avg from the purchase ledger."
+  },
+  {
+   "id": "BL-02",
+   "severity": "high",
+   "area": "Payroll",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1745-1752 (generate_payroll employee filter) and 1781-1789 (delete of 'no longer eligible' rows)",
+   "description": "generate_payroll only pays employees with is_active = true. An employee who leaves mid-period (HR sets is_active=false and end_date) is excluded even though they have timekeeping rows inside the period, and any payroll_items row already generated for them is deleted by the cleanup step. Their final wages are silently dropped and P&L labor cost is understated.",
+   "evidence": "Rolled-back test: NV-012 has 6 timekeeping days this month and a draft payroll_items row with net_pay 756,000. `update employees set is_active=false, end_date=current_date-1 where code='NV-012'` then `select * from generate_payroll(<draft period>)` -> 0 rows for NV-012, total_rows 11 (was 12). Filter in code: `where is_active and (start_date is null or start_date <= v_period.period_end) and (end_date is null or end_date >= v_period.period_start)`.",
+   "suggested_fix": "Drop the is_active predicate (or use it only when end_date is null) and rely on start_date/end_date overlap, or additionally include any employee that has timekeeping rows within the period; never delete an existing item that still has timekeeping in range."
+  },
+  {
+   "id": "BL-03",
+   "severity": "medium",
+   "area": "P&L / labor cost",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1889-1895 (get_pnl_report CTE l: sum(pi.net_pay)) and payroll_items.net_pay definition line 971",
+   "description": "Labor cost in the P&L is sum(net_pay) = base+allowance+bonus+tips-advance_deduction-penalty. A salary advance is a cash prepayment of wages already earned, not a reduction of the labor expense, and the advance itself is never recorded anywhere as a cost. Every advance therefore understates labor cost and overstates net profit by the same amount.",
+   "evidence": "Seed row NV-004 (Aug 2026): base 9,230,769.23 + allowance 738,461.54 - advance_deduction 2,000,000 = net 7,969,230.77. get_pnl_report('2026-08-01','2026-08-31').labor_cost = 77,947,307.68 = sum(net_pay); gross wage expense is 79,947,307.68. No expense_records row exists for the 2,000,000 advance.",
+   "suggested_fix": "Use base_pay + allowance + bonus + tips - penalty (gross) for labor_cost, or add advance_deduction back: sum(net_pay + advance_deduction). Document that advances are cash-flow only."
+  },
+  {
+   "id": "BL-04",
+   "severity": "medium",
+   "area": "Payroll / P&L",
+   "location": "supabase/migrations/20260911000000_init.sql lines 908-924 (payroll_periods: only unique (period_start, period_end)) and 1889-1895 (labor filter period_end between p_start and p_end)",
+   "description": "Nothing prevents two payroll periods from overlapping (e.g. 08-01..08-15 and 08-01..08-31). Both can be generated and finalized, paying the same timekeeping twice, and get_pnl_report sums both because it only filters on period_end in range.",
+   "evidence": "Rolled-back test: insert payroll_periods('Nửa đầu 08','2026-08-01','2026-08-15') succeeded next to the existing 2026-08-01..2026-08-31 paid period; generate_payroll -> 12 rows, 37,452,153.84; finalize_payroll ok; get_pnl_report('2026-08-01','2026-08-31').labor_cost went from 77,947,307.68 to 115,399,461.52.",
+   "suggested_fix": "Add `exclude using gist (daterange(period_start, period_end, '[]') with &&)` (btree_gist) on payroll_periods, or a BEFORE INSERT/UPDATE trigger that rejects overlapping periods."
+  },
+  {
+   "id": "BL-05",
+   "severity": "medium",
+   "area": "Orders / revenue",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1130-1155 (trg_orders_before: total_amount := subtotal - discount) and 1629-1633 (DISCOUNT_EXCEEDS_SUBTOTAL check only inside create_order)",
+   "description": "The discount > subtotal guard lives only in the create_order RPC. A direct UPDATE of orders.discount (which the seed itself does, and the UI may do for post-hoc discounts) is accepted by trg_orders_before and yields a negative total_amount, which flows into revenue, v_daily_sales, P&L and menu engineering.",
+   "evidence": "Rolled-back test: `update orders set discount = subtotal + 100000 where id = (...) returning subtotal, discount, total_amount` -> 626000.00 | 726000.00 | -100000.00 (UPDATE 1, no error). orders has only `check (discount >= 0)`, no check on total_amount.",
+   "suggested_fix": "In trg_orders_before raise DISCOUNT_EXCEEDS_SUBTOTAL when new.discount > new.subtotal (skip on INSERT before items exist by checking on UPDATE, and re-check in create_order), and/or add `check (total_amount >= 0)`."
+  },
+  {
+   "id": "BL-06",
+   "severity": "medium",
+   "area": "P&L / dashboard",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1889-1895 (labor: pp.status in ('finalized','paid')) and get_dashboard_stats lines 1979-1981 (month KPIs from get_pnl_report(month_start, today))",
+   "description": "Labor is counted only for finalized/paid periods, so the current month's P&L and dashboard KPIs (month_labor_cost, month_net_profit) show zero labor until month-end payroll is finalized, overstating month-to-date net profit by the entire accrued payroll. Documented in the function comment, but the dashboard presents it as 'Lợi nhuận ròng' with no indication.",
+   "evidence": "get_dashboard_stats() on seed: month_labor_cost 0, month_net_profit 3,751,588.90, while payroll_periods 'Lương tháng 09/2026' (draft) has total_net_pay 23,400,153.86 for the same month; get_pnl_report(2026-09-01, 2026-09-11).labor_cost = 0.",
+   "suggested_fix": "Either include draft periods whose period_end falls in range (labelled as estimate), or expose an accrued/estimated labor figure (e.g. recompute from timekeeping) for open months, or surface a 'labor not yet finalized' flag in the JSON so the UI can badge it."
+  },
+  {
+   "id": "BL-07",
+   "severity": "medium",
+   "area": "Dates / timezone consistency",
+   "location": "supabase/migrations/20260911000000_init.sql: purchase_orders.order_date default current_date (line 384) + trg_purchase_orders_before (line 428), supplier_payments.payment_date default (686), expense_records.expense_date default (1050), record_supplier_payment/create_purchase_order coalesce(..., current_date) (1512, 1547, 1574), overdue tests `due_date < current_date` in v_supplier_debt_summary (1441-1443), v_purchase_orders_summary (1458-1459), get_dashboard_stats (1990)",
+   "description": "Sales, P&L and the ledger bucket by the restaurant's local date (app_timezone, to_local_date), but purchase/payment/expense business dates and all 'overdue' comparisons use Postgres current_date, which follows the session TimeZone (UTC on Supabase). Between 00:00 and 07:00 Ho Chi Minh time every PO/payment/expense created without an explicit date gets yesterday's date (so due_date is one day early), and a PO that became overdue at local midnight is not flagged until 07:00.",
+   "evidence": "`show timezone` -> UTC on the Supabase image. `select (timestamptz '2026-09-11 18:00:00+00')::date, to_local_date(timestamptz '2026-09-11 18:00:00+00')` -> 2026-09-11 | 2026-09-12. Seed and RPCs pass `current_date` explicitly for order_date/payment_date.",
+   "suggested_fix": "Replace current_date with public.to_local_date(now()) in the column defaults, trigger, RPC coalesces and overdue predicates (v_* views, get_dashboard_stats)."
+  },
+  {
+   "id": "BL-08",
+   "severity": "low",
+   "area": "Menu engineering",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1394-1404 (v_menu_engineering is_profitable vs menu_class CASE)",
+   "description": "When there are no completed sales in the 30-day window, benchmark_cm is NULL: is_profitable evaluates to false for every item, but menu_class uses coalesce(benchmark_cm, 0) so every item with CM >= 0 is classified 'puzzle'. The two columns contradict each other and 'puzzle' (profitable, unpopular) is asserted with no sales data at all.",
+   "evidence": "Rolled-back test: `update orders set order_date = order_date - interval '90 days'` then `select menu_class, count(*), bool_or(is_profitable), min(benchmark_cm) from v_menu_engineering group by 1` -> puzzle | 30 | f | NULL.",
+   "suggested_fix": "Make menu_class derive from the same booleans as is_popular/is_profitable (star/plowhorse/puzzle/dog from the two flags) and return NULL class (or 'dog') when benchmark_cm is null."
+  },
+  {
+   "id": "BL-09",
+   "severity": "low",
+   "area": "Menu engineering",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1381-1387 (agg.n_sold = count(*) filter (where qty_sold > 0)) and threshold 0.7 / n_sold",
+   "description": "Popularity threshold uses N = number of active items that had sales in the window, not the number of items on the menu being analysed (Kasavana-Smith uses all items in the category/menu). With unsold items on the menu the threshold becomes stricter than the textbook 70% of the fair share (0.7/N_menu). The seed does not reveal this because all 30 active items sold.",
+   "evidence": "Seed: popularity_threshold 0.0233 = 0.7/30 with n_active = 30 and n_sold = 30, so identical today; view comment: 'N = number of active items with sales in the window'.",
+   "suggested_fix": "Use count(*) of active items in `base` (or make N configurable) and document the choice in DATABASE.md."
+  },
+  {
+   "id": "BL-10",
+   "severity": "low",
+   "area": "Purchasing / debt terms",
+   "location": "supabase/migrations/20260911000000_init.sql lines 424-436 (trg_purchase_orders_before: due_date only derived on INSERT)",
+   "description": "If order_date is corrected after creation, due_date keeps the old value, so the FIFO order, overdue flags and days_overdue are computed from a stale due date.",
+   "evidence": "Rolled-back test: `update purchase_orders set order_date = order_date + 10 where po_number='PO-20260817-0001' returning order_date, due_date, due_date-order_date` -> 2026-08-27 | 2026-09-16 | 20 (supplier terms = 30).",
+   "suggested_fix": "On UPDATE, if order_date changed and due_date was not explicitly changed (new.due_date = old.due_date), recompute due_date = new.order_date + terms."
+  },
+  {
+   "id": "BL-11",
+   "severity": "low",
+   "area": "Inventory / waste attribution in P&L",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1667-1722 (record_stock_adjustment has no date parameter) and 1883-1887 (cogs_waste filtered by inventory_transactions.created_at); supabase/seed.sql lines 630-641",
+   "description": "Waste and stocktake rows created through the RPC are always stamped now(), and the P&L attributes cogs_waste by created_at. Waste discovered/entered after month-end lands in the wrong month. The seed itself has to bypass the RPC and insert ledger rows directly with a backdated created_at to get realistic history, showing the API gap.",
+   "evidence": "record_stock_adjustment signature: (p_ingredient_id, p_txn_type, p_quantity, p_note) — no date; insert omits created_at. Seed comment: 'Backdated waste rows (inserted straight into the ledger...)'.",
+   "suggested_fix": "Add p_txn_at timestamptz default now() to record_stock_adjustment (bounded to <= now()) and write it to created_at, mirroring how PO items and sales are dated at business time."
+  },
+  {
+   "id": "BL-12",
+   "severity": "low",
+   "area": "P&L / COGS waste composition",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1883-1887 (get_pnl_report CTE w)",
+   "description": "cogs_waste counts 'waste' rows and stocktake shortages only. Negative manual 'adjustment' rows (stock written off via adjustment) are not included, and stocktake surpluses are never credited, so shrinkage can be hidden by using txn_type 'adjustment' and the P&L is asymmetric.",
+   "evidence": "Filter: `(it.txn_type = 'waste' or (it.txn_type = 'stocktake' and it.quantity < 0))`. Seed has an 'adjustment' +2 lon NL-045 (35,833.33) that is excluded either way.",
+   "suggested_fix": "Include `adjustment` with quantity < 0 in cogs_waste (and optionally net stocktake/adjustment surpluses as a separate 'inventory_gain' column) and document it."
+  },
+  {
+   "id": "BL-13",
+   "severity": "low",
+   "area": "Safeguards / immutability",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1239-1250 (trg_order_items_immutable, app.order_items_unlock) and 985-1007 (trg_payroll_items_guard, app.payroll_unlock)",
+   "description": "The immutability/lock guards are bypassed by a transaction-local GUC that any authenticated caller can set with set_config, so order lines' cogs_amount and locked payroll items can be edited from the API. Consistent with the single-tenant 'full access' RLS model, but the guard gives a false sense of protection.",
+   "evidence": "Rolled-back test as the same role: `select set_config('app.order_items_unlock','on',true); update order_items set cogs_amount = 0 where id=(select id from order_items limit 1) returning cogs_amount` -> 0.00, UPDATE 1.",
+   "suggested_fix": "Have the RPCs run as SECURITY DEFINER owned by a dedicated role and check `current_user`/`session_user` (or pg_trigger_depth() > 0) inside the guards instead of a settable GUC; revoke UPDATE/DELETE on order_items and payroll_items from authenticated."
+  },
+  {
+   "id": "BL-14",
+   "severity": "low",
+   "area": "Payroll / part-time allowance",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1760-1765 (generate_payroll: PT branch sets v_allow := 0)",
+   "description": "employees.allowance can be entered for a part_time employee (no constraint), but generate_payroll silently discards it. Either enforce allowance = 0 for PT or pay it; today the data model and the calculation disagree.",
+   "evidence": "Code: `else v_base := round(e.hourly_rate * v_hours, 2); v_allow := 0;` with no check constraint tying allowance to employment_type.",
+   "suggested_fix": "Add `check (employment_type <> 'part_time' or allowance = 0)` on employees, or prorate/pay the PT allowance and document it."
+  },
+  {
+   "id": "SEC-01",
+   "severity": "high",
+   "area": "data integrity / privilege",
+   "location": "supabase/migrations/20260911000000_init.sql lines 2030-2038 (policy 'authenticated full access' FOR ALL) + 2054 (grant all on all tables); no column-level revoke or derived-column guard on ingredients, suppliers, purchase_orders, orders, payroll_periods",
+   "description": "Every derived financial/stock column that the triggers are supposed to own (ingredients.current_stock, ingredients.avg_cost_price, suppliers.current_debt, purchase_orders.total_amount/paid_amount, orders.subtotal/total_cogs/discount, payroll_periods.total_net_pay) is directly UPDATE-able by any authenticated user through PostgREST. This silently breaks the invariants the whole design relies on (ledger == stock, sum(PO debt) == supplier debt, sum(order lines) == revenue). The header says 'Every stock movement is written to inventory_transactions' but the schema does not enforce it.",
+   "evidence": "As role authenticated: `update ingredients set current_stock=current_stock+1000000, avg_cost_price=0.0001` -> UPDATE 1, ledger row count unchanged (17805 before/after). `update suppliers set current_debt=0` -> 'debt zeroed|0.00'. `update purchase_orders set paid_amount=total_amount where payment_status='unpaid'` -> 'po marked paid without payment|paid|0.00' (no supplier_payments row). `update orders set subtotal=0,total_cogs=0 where status='completed'` -> get_pnl_report revenue 282199000.00 -> -2076000.00 (trg_orders_before recomputes total_amount = 0 - discount), while sum(order_items.line_total) still 288106000. `update purchase_orders set total_amount=0 where payment_status='unpaid'` -> sum(suppliers.current_debt) 59109000 -> 33267000 while sum(po_items.line_total)=110804500.",
+   "suggested_fix": "Add BEFORE UPDATE (and INSERT) guard triggers that raise 'DERIVED_COLUMN_READONLY' when any of these columns changes and pg_trigger_depth() < 2 (i.e. the write is a top-level client statement rather than one issued by the maintaining trigger/RPC); alternatively column-level `revoke update (current_stock, avg_cost_price) on ingredients from authenticated` etc. and make the maintaining trigger functions/RPCs SECURITY DEFINER (owner postgres, search_path pinned). Add a test that direct updates of each derived column fail."
+  },
+  {
+   "id": "SEC-02",
+   "severity": "high",
+   "area": "financial history / delete behaviour",
+   "location": "supabase/migrations/20260911000000_init.sql lines 985-1007 (trg_payroll_items_guard: `if v_status is null then return`), 958-978 (payroll_items.payroll_period_id ON DELETE CASCADE); no BEFORE DELETE trigger on payroll_periods",
+   "description": "A finalized or paid payroll period can be deleted outright by any authenticated user. The FK cascade deletes payroll_items after the period row is gone, so the guard's lookup returns NULL and it explicitly lets the delete through. Labor cost disappears from P&L and the 'paid' record of 77.9M VND of salaries is destroyed with no trace.",
+   "evidence": "As authenticated: `delete from payroll_periods where status='paid'` -> 'Lương tháng 08/2026|paid|77947307.68 DELETE 1'; payroll_items for that period gone; get_pnl_report labor_cost 77947307.68 -> 0. Same for a finalized period: 'deleted finalized period|Lương tháng 09/2026|23400153.86 DELETE 1'.",
+   "suggested_fix": "Add `trg_payroll_periods_before_delete` raising 'PAYROLL_PERIOD_LOCKED' when status <> 'draft' (and consider forbidding delete of paid periods even with the unlock flag). In trg_payroll_items_guard treat v_status IS NULL on DELETE as an error unless the period is being deleted in draft. Consider ON DELETE RESTRICT on payroll_items.payroll_period_id and deleting items explicitly from the RPC."
+  },
+  {
+   "id": "SEC-03",
+   "severity": "medium",
+   "area": "privileges / RLS bypass",
+   "location": "supabase/migrations/20260911000000_init.sql line 2054: `grant all on all tables in schema public to authenticated, service_role` (plus default privileges arwdDxtm for anon/authenticated)",
+   "description": "`grant all` gives the API role TRUNCATE, TRIGGER and REFERENCES on every table. TRUNCATE is not subject to RLS and does not fire the BEFORE DELETE row triggers that make inventory_transactions / order_items 'immutable', so the append-only ledger guarantee is void for any SQL path running as authenticated (not exposed by PostgREST verbs, but any injected SQL, pooled connection, or edge-function using the role can do it).",
+   "evidence": "As authenticated: `truncate public.inventory_transactions` -> TRUNCATE TABLE; count 17805 -> 0. A single-row `delete` on the same table correctly fails with LEDGER_IMMUTABLE. has_table_privilege('authenticated','public.orders','truncate') = t, 'trigger' = t.",
+   "suggested_fix": "Replace `grant all` with explicit `grant select, insert, update, delete on all tables in schema public to authenticated` and `revoke truncate, trigger, references on all tables in schema public from authenticated, anon`; keep `all` for service_role only. Add `alter default privileges in schema public revoke truncate, trigger, references on tables from authenticated, anon` for future migrations."
+  },
+  {
+   "id": "SEC-04",
+   "severity": "medium",
+   "area": "function grants / anon exposure",
+   "location": "supabase/migrations/20260911000000_init.sql lines 2056-2071 (grant loop) - no REVOKE anywhere; scripts/db-shim.sql and Supabase default privileges grant EXECUTE to anon",
+   "description": "Every public function - all mutating RPCs (create_order, create_purchase_order, record_supplier_payment, record_stock_adjustment, cancel_order, generate/finalize/pay_payroll), helpers (next_order_number, app_timezone, ...), every trg_* trigger function and the SECURITY DEFINER handle_new_user - is executable by PUBLIC (`=X`) and anon. Because they are SECURITY INVOKER + RLS, an anonymous caller currently gets empty/zero results or an RLS error rather than data, but the attack surface is wrong: anon can invoke number generators (taking the pg_advisory_xact_lock), probe error messages, and any future SECURITY DEFINER function would be instantly exposed. Trigger functions should not be executable by API roles at all.",
+   "evidence": "pg_proc.proacl for all 39 functions: `{=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}`; docs/DATABASE.generated.md 'Grants' lists anon=true for every function. As anon: `select get_dashboard_stats()` returns a full JSON of zeros, `get_pnl_report(...)` returns 0|0, `next_order_number()` returns 'ORD-20260911-0001', `app_timezone()` returns default; `insert into suppliers` -> 'new row violates row-level security policy'. `select handle_new_user()` -> 'trigger functions can only be called as triggers' (harmless but should be revoked).",
+   "suggested_fix": "After creating functions: `revoke execute on all functions in schema public from public, anon;` then grant EXECUTE only on the RPC/report functions (create_*, record_*, cancel_order, generate/finalize/pay_payroll, get_*) to authenticated and service_role; revoke EXECUTE on all trg_* / set_updated_at / handle_new_user / helper functions from authenticated as well (helpers used inside views/RPCs still run because the invoker owns... note: helpers called from views/RPCs executed by authenticated DO need EXECUTE, so keep app_setting_bool/app_timezone/to_local_date/local_day_start granted to authenticated only). Add `alter default privileges in schema public revoke execute on functions from public, anon`. Regenerate docs/DATABASE.generated.md and assert anon=false in a test."
+  },
+  {
+   "id": "SEC-05",
+   "severity": "medium",
+   "area": "privileges / anon",
+   "location": "supabase/migrations/20260911000000_init.sql lines 2053-2055 (grant usage on schema public to anon; no revoke on tables/views/sequences from anon)",
+   "description": "anon holds SELECT/INSERT/UPDATE/DELETE/TRUNCATE on every table and view (Supabase/shim default privileges), with RLS as the only barrier. This app has no anonymous use-case (middleware blocks everything except /login), so a single misconfigured policy (e.g. `to public`) or a view created without security_invoker would leak all financial data. Defense in depth is absent.",
+   "evidence": "has_table_privilege('anon', tbl, 'select'/'insert') = t for all 19 tables and 7 views; has_table_privilege('anon','public.orders','delete') = t. pg_default_acl: anon=arwdDxtm on tables, rwU on sequences, X on functions.",
+   "suggested_fix": "`revoke all on all tables in schema public from anon; revoke all on all sequences in schema public from anon; revoke usage on schema public from anon;` and `alter default privileges in schema public revoke all on tables/sequences/functions from anon`. Keep anon only if a public endpoint is ever added, then grant explicitly."
+  },
+  {
+   "id": "SEC-06",
+   "severity": "medium",
+   "area": "RLS / privilege escalation",
+   "location": "supabase/migrations/20260911000000_init.sql lines 2047-2048: policy 'profiles update own' using (auth.uid()=id) with check (auth.uid()=id)",
+   "description": "The update-own policy does not restrict columns, so any user can set their own profiles.role to 'owner'. docs/DATABASE.md 1.5 says role is informational today, but the enum exists precisely to gate UI/actions, and the moment the app (or a future policy) trusts it this is a full privilege escalation. Also there is no owner-only path to change other users' roles.",
+   "evidence": "Seeded user demoted to staff, then as authenticated with sub=a0000000-...-000000000001: `update profiles set role='owner' where id=auth.uid()` -> 'after|owner UPDATE 1'.",
+   "suggested_fix": "`revoke update (role) on public.profiles from authenticated` (column-level) and manage roles via a SECURITY DEFINER RPC that checks the caller's own role = 'owner'; or a BEFORE UPDATE trigger raising when new.role <> old.role and (select role from profiles where id=auth.uid()) <> 'owner'."
+  },
+  {
+   "id": "SEC-07",
+   "severity": "medium",
+   "area": "delete behaviour / HR history",
+   "location": "supabase/migrations/20260911000000_init.sql lines 853-866: timekeeping.employee_id references employees(id) on delete cascade",
+   "description": "Deleting an employee silently deletes all their attendance rows. The FK from payroll_items is RESTRICT, so this only bites for employees who have timekeeping but no payroll row yet (new hires, current open month) - exactly the data still needed to run payroll. Spec asks for 'ghi vết' history; employees have is_active for soft-delete so hard cascade is unnecessary.",
+   "evidence": "As authenticated: insert employee 'tmp-pt' + 2 timekeeping rows; `delete from employees where id=...` -> DELETE 1; timekeeping rows for that employee 2 -> 0. Deleting an employee with payroll rows correctly fails with payroll_items_employee_id_fkey.",
+   "suggested_fix": "Change to `on delete restrict` (default NO ACTION) and rely on is_active/end_date for offboarding; if hard delete must remain, block it in a trigger when timekeeping/payroll rows exist."
+  },
+  {
+   "id": "SEC-08",
+   "severity": "medium",
+   "area": "financial history / delete behaviour",
+   "location": "supabase/migrations/20260911000000_init.sql lines 681-706 (supplier_payments has no delete guard; supplier_payment_allocations.payment_id on delete cascade) and 709-726 (trg_spa_apply DELETE branch)",
+   "description": "Any authenticated user can hard-delete a supplier payment; the cascade reverses PO paid_amount and supplier debt, so the money trail is rewritten with no audit record (no voided flag, no reversal entry). Combined with SEC-01 this makes the payables ledger un-auditable. Contrast: inventory_transactions and order_items are immutable, and purchase_orders with payments are protected by RESTRICT - payments themselves are the weak spot.",
+   "evidence": "As authenticated: supplier current_debt 5976000.00 -> `delete from supplier_payments where id=...` (amount 5872000.00) DELETE 1 -> current_debt 11848000.00. The trg_supplier_payments_before_update trigger blocks amount edits but nothing blocks DELETE.",
+   "suggested_fix": "Add a BEFORE DELETE trigger on supplier_payments raising PAYMENT_DELETE_NOT_ALLOWED (optionally allowed only while `payment_date = current_date` or via an owner-only void RPC that inserts a negative/reversal payment with a `voided_payment_id` reference). Same consideration for purchase_orders delete: keep the INSUFFICIENT_STOCK guard but require a 'void' note."
+  },
+  {
+   "id": "SEC-09",
+   "severity": "medium",
+   "area": "check constraints",
+   "location": "supabase/migrations/20260911000000_init.sql: payroll_items (958-978), orders (1093-1108), ingredients (209-225), employees (827-847), purchase_orders (379-394), inventory_transactions (238-251)",
+   "description": "Missing sanity checks let plain UPDATE/INSERT produce impossible money/stock values: payroll_items has no >= 0 checks on base_pay, allowance, bonus, tips, advance_deduction, penalty, total_hours, total_days (net_pay is a generated column, so negative penalty inflates pay); orders has no `discount <= subtotal` / `total_amount >= 0` / `subtotal >= 0` / `total_cogs >= 0` (create_order validates, direct UPDATE does not); ingredients has no `avg_cost_price >= 0` / `min_alert_stock >= 0`; employees has no `end_date >= start_date`; purchase_orders has no `due_date >= order_date` (trigger only checks paid vs total); inventory_transactions has no `quantity <> 0` / `unit_cost >= 0`; order_items has no `cogs_amount >= 0` (protected only by the immutability trigger).",
+   "evidence": "As authenticated (all accepted): `update payroll_items set penalty=-5000000, advance_deduction=-1000000, bonus=-1, total_hours=-10` -> net_pay 11192306.70; `update orders set discount=subtotal+100000` -> 'subtotal 626000.00 | discount 726000.00 | total_amount -100000.00'; `update ingredients set avg_cost_price=-1, min_alert_stock=-5, current_stock=-100` -> UPDATE 1; `update employees set start_date='2026-05-01', end_date='2026-01-01'` -> UPDATE 1; `insert into purchase_orders (supplier_id, order_date, due_date) values (..., '2026-09-10', '2026-01-01')` -> INSERT 0 1.",
+   "suggested_fix": "Add CHECKs: payroll_items (all eight numeric columns >= 0); orders (subtotal >= 0, total_cogs >= 0, discount <= subtotal, total_amount >= 0); ingredients (avg_cost_price >= 0, min_alert_stock >= 0; current_stock >= 0 unless allow_negative_stock is intended - then keep trigger-only); employees (end_date is null or end_date >= start_date); purchase_orders (due_date is null or due_date >= order_date, total_amount >= 0, paid_amount between 0 and total_amount); inventory_transactions (quantity <> 0, unit_cost is null or unit_cost >= 0); order_items (cogs_amount >= 0). Guard with `alter table ... add constraint if not exists`-style DO blocks to keep re-runnability."
+  },
+  {
+   "id": "SEC-10",
+   "severity": "medium",
+   "area": "app_settings validation / availability",
+   "location": "supabase/migrations/20260911000000_init.sql lines 76-133 (app_settings, app_timezone, to_local_date, app_setting_bool) - no validation trigger on app_settings",
+   "description": "app_settings is fully writable by every authenticated user and nothing validates values. Writing an invalid timezone makes every order insert (trg_orders_before -> next_order_number(to_local_date(...))) and every report fail; a non-boolean allow_negative_stock silently evaluates to false; any staff can flip allow_negative_stock to hide stock shortages. Settings that alter costing/stock semantics deserve at least type validation and ideally owner-only write.",
+   "evidence": "As authenticated: `update app_settings set value='\"Mars/Olympus\"' where key='timezone'` then create_order(...) -> ERROR: time zone \"Mars/Olympus\" not recognized (CONTEXT to_local_date / trg_orders_before line 8). `update app_settings set value='{\"x\":1}' where key='allow_negative_stock'` accepted; app_setting_bool returns f.",
+   "suggested_fix": "Add a BEFORE INSERT/UPDATE trigger on app_settings validating per key (timezone must exist in pg_timezone_names; allow_negative_stock must be jsonb boolean; food_cost_target_pct numeric 0..100) and raising 'INVALID_SETTING'. Restrict writes to owners (policy using profiles.role once SEC-06 is fixed) or move writes behind an RPC."
+  },
+  {
+   "id": "SEC-11",
+   "severity": "low",
+   "area": "immutability guard design",
+   "location": "supabase/migrations/20260911000000_init.sql lines 999, 1220-1222, 1245, 1839-1843 (app.payroll_unlock / app.order_items_unlock GUCs)",
+   "description": "The 'immutable' guards on payroll_items and order_items are keyed on ordinary session GUCs that any role may set (custom placeholders are unprivileged). Not reachable through PostgREST verbs, but any SQL path running as authenticated (SQL injection, edge function, direct pooled connection) can flip them and rewrite paid payroll or order lines. The RPCs do use is_local=true correctly, so there is no cross-request leak in transaction pooling.",
+   "evidence": "As authenticated: `set local app.payroll_unlock='on'; update payroll_items set bonus=bonus+99000000 where payroll_period_id=(paid period)` -> UPDATE 12, period total_net_pay 77947307.68 -> 1265947307.68. `select set_config('app.order_items_unlock','on',false)` as authenticated succeeds.",
+   "suggested_fix": "Replace the GUC checks with `pg_trigger_depth() > 1` (the legitimate writers are always nested triggers/RPCs), or perform the privileged inner updates through a SECURITY DEFINER helper owned by postgres and revoke its EXECUTE from API roles."
+  },
+  {
+   "id": "SEC-12",
+   "severity": "low",
+   "area": "audit attribution",
+   "location": "supabase/migrations/20260911000000_init.sql: created_by uuid default auth.uid() on inventory_transactions, purchase_orders, supplier_payments, orders, timekeeping, expense_records - no FK, no `with check (created_by = auth.uid())`",
+   "description": "created_by is a free uuid: the client can supply any value (or null) so the audit column cannot be trusted; it is also not a FK to profiles so orphan/garbage ids are accepted and joins to user names are unenforced.",
+   "evidence": "As authenticated: `insert into expense_records (..., created_by) values (..., 'ffffffff-ffff-4fff-8fff-ffffffffffff')` -> returns created_by ffffffff-... INSERT 0 1.",
+   "suggested_fix": "Set created_by in a BEFORE INSERT trigger (`new.created_by := coalesce(auth.uid(), new.created_by)` when auth.uid() is not null) or add `with check (created_by is null or created_by = auth.uid())` to the insert side of the policy; add `references public.profiles(id) on delete set null` plus indexes if you will filter by it."
+  },
+  {
+   "id": "SEC-13",
+   "severity": "low",
+   "area": "indexes / hot path",
+   "location": "supabase/migrations/20260911000000_init.sql lines 400-417 (next_po_number) and 1112-1128 (next_order_number): `where po_number like v_prefix || '%'` under pg_advisory_xact_lock",
+   "description": "With the database collation en_US.UTF-8 a btree index cannot serve LIKE-prefix, so each order insert runs a full index scan (orders) / sequential scan (purchase_orders) while holding a per-day advisory lock. Works for 1000 rows but becomes the serialization point of the POS as orders grow.",
+   "evidence": "EXPLAIN: orders -> 'Index Only Scan using orders_order_number_key ... Filter: (order_number ~~ 'ORD-20260911-%')' (filter, not index cond); purchase_orders -> 'Seq Scan on purchase_orders Filter: (po_number ~~ 'PO-20260911-%')'. pg_database.datcollate = en_US.UTF-8.",
+   "suggested_fix": "Add `create index ... on orders (order_number text_pattern_ops)` and the same for purchase_orders (or declare the columns `collate \"C\"`), or replace the max()+1 scan with a small `daily_counters(prefix, last_seq)` table updated with `insert ... on conflict do update returning`."
+  },
+  {
+   "id": "SEC-14",
+   "severity": "low",
+   "area": "RLS policy quality",
+   "location": "supabase/migrations/20260911000000_init.sql lines 2036-2038 and 2044-2045: `to authenticated using (auth.role() = 'authenticated')`",
+   "description": "The USING/WITH CHECK expression duplicates the `to authenticated` role filter, is evaluated per row (not wrapped as `(select auth.role())` so it is not hoisted to an initplan), and `auth.role()` is deprecated in Supabase in favour of the JWT claim. The user_role enum (owner/manager/staff) is defined but no policy uses it, so 'staff' can pay payroll, delete payments, view all salaries and change settings - the docs acknowledge this, but the schema provides no hook for the app to rely on.",
+   "evidence": "docs/DATABASE.md line 65: 'user_role ... exists on profiles but no policy uses it yet'. pg_policies shows one FOR ALL policy per table with qual `(auth.role() = 'authenticated'::text)`.",
+   "suggested_fix": "Simplify to `using (true) with check (true)` for `to authenticated` (role already restricts), or if a claim check is desired use `(select auth.jwt() ->> 'role') = 'authenticated'`. Plan role-aware policies (e.g. payroll/expenses/app_settings write only for owner/manager via a `public.current_role()` STABLE helper wrapped in select)."
+  },
+  {
+   "id": "SEC-15",
+   "severity": "low",
+   "area": "schema consistency",
+   "location": "supabase/migrations/20260911000000_init.sql lines 1036-1043 (expense_categories)",
+   "description": "expense_categories is the only editable master table without updated_at (and therefore without the set_updated_at trigger), inconsistent with suppliers/ingredients/menu_items/employees. All other updated_at triggers were verified to bump on UPDATE.",
+   "evidence": "Query of pg_attribute/pg_trigger: expense_categories has_updated_at=f, update_triggers=NULL; every other table with updated_at bumped it in the functional test (suppliers, employees, timekeeping, expense_records, purchase_orders, orders, payroll_periods, payroll_items, recipes, menu_items, ingredients, app_settings all 'bumped|t').",
+   "suggested_fix": "`alter table expense_categories add column if not exists updated_at timestamptz not null default now();` plus the standard trg_expense_categories_updated_at trigger."
+  },
+  {
+   "id": "SEC-16",
+   "severity": "low",
+   "area": "seed / credentials",
+   "location": "supabase/seed.sql lines 1-45 (truncate of every public table + profiles), 43 and 69 (delete/recreate auth user with password 'Admin@123'), 109 (role 'owner')",
+   "description": "The seed creates a well-known owner credential (admin@restaurant.local / Admin@123) and unconditionally truncates all public tables; it has no guard against being run on a non-local project (supabase db push does not run it, but `supabase db reset --linked` or a copy-paste into the SQL editor would wipe production and plant a default owner login).",
+   "evidence": "seed.sql: `truncate table public.supplier_payment_allocations, ... public.profiles`; `delete from auth.users where email = 'admin@restaurant.local'`; `'crypt(' || quote_literal('Admin@123') || ', gen_salt(''bf''))'`; `insert into public.profiles (id, full_name, role) values (v_uid, 'Quản lý', 'owner')`.",
+   "suggested_fix": "Add an environment guard at the top of seed.sql (e.g. `do $$ begin if current_setting('app.allow_seed', true) is distinct from 'on' then raise exception 'SEED_BLOCKED'; end if; end $$;` and have scripts/db-test.sh set it), or refuse when auth.users contains users other than the demo one; document that the demo password must be rotated before any shared deployment."
+  },
+  {
+   "id": "T-01",
+   "severity": "high",
+   "area": "supplier debt / allocations",
+   "location": "supabase/migrations/20260911000000_init.sql:697-731 (supplier_payment_allocations + trg_spa_apply); RLS 'authenticated full access' on the table",
+   "description": "trg_spa_apply applies any allocation row to purchase_orders.paid_amount (which cascades to suppliers.current_debt) without checking that (a) sum(allocations) <= payment.amount, (b) the PO belongs to the payment's supplier, or (c) the amount <= the PO's remaining debt. The table is REST-exposed with full access to every authenticated user, so debt can be reduced with no money behind it, and a payment's allocations can be deleted leaving an orphan payment.",
+   "evidence": "Scenario S1.6: PO1=200000 (payment 50000), PO2=100000 unpaid. `insert into supplier_payment_allocations(payment_id,purchase_order_id,amount) values (pay1, po2, 100000)` succeeded -> payment_amount 50000.00 | allocated 150000.00; NCC-003 debt dropped 250000 -> 150000, PO2 payment_status 'paid'. S1.6b: allocation of NCC-003's payment onto an NCC-001 PO succeeded -> NCC-001 debt 34324000 -> 34323000, `same_supplier = f`. S1.7: `delete from supplier_payment_allocations where payment_id=pay1` succeeded -> PO1 back to unpaid/200000 debt while the 50000 payment row still exists (allocated 0).",
+   "suggested_fix": "In trg_spa_apply (INSERT): lock the payment and PO rows, raise if po.supplier_id <> payment.supplier_id, if new.amount > po.debt_amount, or if sum(allocations of payment) + new.amount > payment.amount. Forbid direct DELETE unless the parent payment is being deleted (e.g. check `not exists (select 1 from supplier_payments where id = old.payment_id)` or use a transaction-local unlock flag set by a BEFORE DELETE trigger on supplier_payments). Alternatively revoke INSERT/UPDATE/DELETE on the table from authenticated and let only the payment trigger write it."
+  },
+  {
+   "id": "T-02",
+   "severity": "medium",
+   "area": "PO totals / supplier debt under concurrency",
+   "location": "supabase/migrations/20260911000000_init.sql:605-608 (trg_po_items_after_insert: `update purchase_orders set total_amount = (select sum(line_total) ...)`) and 653-656 (same in trg_po_items_after_delete)",
+   "description": "The PO total is recomputed from an aggregate subquery without first locking the purchase_orders row. When two sessions add lines to the same committed PO, the second session waits on the row lock, then (READ COMMITTED re-check) writes the total computed from its original snapshot, which excludes the first session's line. The stored total and the supplier debt end up lower than the sum of lines and no error is raised. The payroll sync trigger (which was also tested, C1) does not exhibit this because the payroll update path serializes differently; the order path is safe because it locks the order row FOR UPDATE first.",
+   "evidence": "C2 (run 3 times, identical): session A `begin; insert into purchase_order_items(... NL-020, 1, 100000); pg_sleep(4); commit;` session B 1s later `insert ... (NL-021, 1, 200000)` (B waited 3s on the PO row). Result: `po_total=200000.00 items_sum=300000.00 supplier_debt_delta=200000.00` (debt understated by 100000, invariant total==sum(items) broken).",
+   "suggested_fix": "At the start of trg_po_items_after_insert/after_delete do `perform 1 from purchase_orders where id = new.purchase_order_id for update` (or `for no key update`) BEFORE computing the sum, so the aggregate is evaluated after the lock is acquired (a fresh statement snapshot). Alternatively use an incremental update: `set total_amount = total_amount + new.line_total` (delete: `- old.line_total`), which is atomic like the supplier-debt delta update. Add a regression test with two sessions."
+  },
+  {
+   "id": "T-03",
+   "severity": "medium",
+   "area": "MAINTAINED columns unprotected",
+   "location": "supabase/migrations/20260911000000_init.sql:384-388 (purchase_orders.total_amount/paid_amount), 1099-1102 (orders.subtotal/discount/total_amount/total_cogs), 216-218 (ingredients.current_stock/avg_cost_price); trg_purchase_orders_before 419-470; trg_orders_before 1130-1159",
+   "description": "Columns documented as MAINTAINED can be written directly by any authenticated user (RLS full access). The triggers then treat the manual value as truth: supplier debt follows an arbitrary PO total, a PO becomes 'paid' with no payment row, an order's total goes negative when discount > subtotal, and stock/avg cost can be set without any ledger row (breaking the stock == sum(ledger) invariant).",
+   "evidence": "S1.8 `update purchase_orders set total_amount=999999 where id=po2` -> total 999999 vs items_sum 100000, NCC-003 debt 250000 -> 1149999. S1.8b `update purchase_orders set paid_amount=100000` -> payment_status 'paid', allocs=0, debt reduced by 100000. S2.6 `update orders set discount = subtotal + 100000` -> subtotal 190000 | discount 290000 | total_amount -100000.00 (accepted; feeds negative revenue into v_daily_sales/get_pnl_report). S2.13 `update ingredients set current_stock=999999, avg_cost_price=1` accepted with no ledger row.",
+   "suggested_fix": "In trg_purchase_orders_before (UPDATE): if total_amount/paid_amount changed and a transaction-local flag (set by the item/allocation triggers) is not on, raise or reset to the recomputed value. In trg_orders_before: raise DISCOUNT_EXCEEDS_SUBTOTAL when new.discount > new.subtotal and reject direct changes to subtotal/total_cogs outside the item trigger. Add a BEFORE UPDATE trigger on ingredients that rejects changes to current_stock/avg_cost_price unless a flag set by the ledger/PO-item triggers is on (or use column-level REVOKE UPDATE (current_stock, avg_cost_price) from authenticated)."
+  },
+  {
+   "id": "T-04",
+   "severity": "medium",
+   "area": "inventory ledger integrity",
+   "location": "supabase/migrations/20260911000000_init.sql:262-316 (trg_inventory_txn_before_insert, 'purchase' branch 285-291)",
+   "description": "A 'purchase' ledger row inserted directly (not via purchase_order_items) is recorded without moving stock, creating a phantom ledger entry that breaks stock == sum(ledger.quantity). Likewise 'sale'/'sale_reversal' rows can be inserted directly with no order reference and move stock. The ledger is REST-writable by every authenticated user.",
+   "evidence": "S2.3: `insert into inventory_transactions(ingredient_id,txn_type,quantity,unit_cost) values (NL-044,'purchase',500,10)` -> stock before 65 | after 65 | stock_minus_ledger -500.000. S2.4: `insert ... ('sale_reversal', 500)` -> stock 65 -> 565 with no order/reference.",
+   "suggested_fix": "In trg_inventory_txn_before_insert raise unless the transaction-local flag set by the PO-item / order-item / cancel triggers is on for txn_type in ('purchase','sale','sale_reversal') (or require reference_type/reference_id to point to an existing purchase_order_item/order_item). Manual types stay restricted to record_stock_adjustment."
+  },
+  {
+   "id": "T-05",
+   "severity": "medium",
+   "area": "payroll period lifecycle",
+   "location": "supabase/migrations/20260911000000_init.sql:908-956 (payroll_periods, trg_payroll_periods_before_update — no DELETE guard), 985-1011 (trg_payroll_items_guard returns early when the period row is already gone)",
+   "description": "'paid' is documented as terminal, but a paid (or finalized) period can be deleted; the cascade deletes its payroll_items (the guard sees v_status IS NULL and allows it), so recorded labor cost silently disappears from get_pnl_report. Dates of a paid period can also be edited.",
+   "evidence": "S3.3 on a period in status 'paid': `delete from payroll_periods where id=pa returning name,status` -> 'P-A | paid' deleted; `select count(*) from payroll_items where payroll_period_id=pa` -> 0. S3.5 `update payroll_periods set period_start='2026-05-01' where id=pa` -> accepted on status 'paid'.",
+   "suggested_fix": "Add a BEFORE DELETE trigger on payroll_periods raising PAYROLL_PERIOD_LOCKED when status <> 'draft'; in trg_payroll_periods_before_update raise when old.status = 'paid' and any of period_start/period_end/name/payment_method change."
+  },
+  {
+   "id": "T-06",
+   "severity": "medium",
+   "area": "payroll / P&L labor cost",
+   "location": "supabase/migrations/20260911000000_init.sql:923 (`unique (period_start, period_end)` only) and 1755-1760 (generate_payroll: `work_date between period_start and period_end`), 1899-1904 (get_pnl_report labor by period_end)",
+   "description": "Nothing prevents overlapping payroll periods; each period independently sums the same timekeeping rows, so hours/days are paid twice and labor cost is double counted in P&L.",
+   "evidence": "S7: employee pt2 with one 8h timekeeping row on 2026-06-20; periods P-A (06-01..06-30) and P-B (06-15..07-14) both generated+finalized -> P-A total_hours 8.00 net_pay 240000 | P-B total_hours 8.00 net_pay 240000; labor counted in P&L for Jun1-Jul31 = 480000.00 (expected 240000).",
+   "suggested_fix": "Add `exclude using gist (daterange(period_start, period_end, '[]') with &&)` (btree_gist) on payroll_periods, or raise in a BEFORE INSERT/UPDATE trigger when an overlapping period exists."
+  },
+  {
+   "id": "T-07",
+   "severity": "medium",
+   "area": "payroll status machine bypass",
+   "location": "supabase/migrations/20260911000000_init.sql:928-956 (trg_payroll_periods_before_update) vs finalize_payroll 1795-1814 and pay_payroll 1816-1854",
+   "description": "The RPCs enforce 'items exist' and mark items is_paid/paid_at, but a direct `update payroll_periods set status=...` (allowed by RLS) skips both: draft->finalized with zero items, and finalized->paid without marking any item paid or setting payment_method.",
+   "evidence": "S6.2: new period, `update payroll_periods set status='finalized'` -> finalized | has_fin t | items 0. On the seeded draft period after finalize_payroll: `update payroll_periods set status='paid'` -> status paid | has_paid t | payment_method NULL; `count(*) filter (where is_paid)` = 0 of 12 items.",
+   "suggested_fix": "In trg_payroll_periods_before_update: when moving to 'finalized' raise if no items exist; when moving to 'paid' require payment_method and (with app.payroll_unlock) update payroll_items set is_paid=true, paid_at=new.paid_at, or reject the transition unless a flag set by pay_payroll is on."
+  },
+  {
+   "id": "T-08",
+   "severity": "medium",
+   "area": "P&L COGS waste asymmetry",
+   "location": "supabase/migrations/20260911000000_init.sql:1892-1897 (get_pnl_report CTE w: `txn_type = 'waste' or (txn_type = 'stocktake' and quantity < 0)`)",
+   "description": "Stock that disappears via a negative 'adjustment' is never charged to COGS, and stocktake surplus (quantity > 0) is never credited, so cogs_waste only moves in one direction and depends on which manual type the user picked for the same physical event.",
+   "evidence": "S6.1 on NL-001 (avg 289.4444): waste 100 -> cogs_waste +28944.44; adjustment -100 -> +0.00; stocktake counted = current+100 -> +0.00.",
+   "suggested_fix": "Define the rule explicitly: either include negative 'adjustment' rows in cogs_waste (and subtract positive stocktake/adjustment rows as inventory gain), or restrict record_stock_adjustment('adjustment') to documented non-cost cases and state it in docs/DATABASE.md."
+  },
+  {
+   "id": "T-09",
+   "severity": "medium",
+   "area": "timezone / 'today'",
+   "location": "supabase/migrations/20260911000000_init.sql:383 (purchase_orders.order_date default current_date), 686 (supplier_payments.payment_date), 1050 (expense_records.expense_date), 429/1511/1571 (trg_purchase_orders_before / create_purchase_order / record_supplier_payment use current_date), 1440-1443 & 1459-1460 (v_supplier_debt_summary / v_purchase_orders_summary overdue), 1988-1989 (get_dashboard_stats overdue)",
+   "description": "Order/dashboard logic correctly uses app_timezone (to_local_date/local_day_start), but PO/payment/expense default dates and all overdue computations use current_date, which follows the session TimeZone (UTC on Supabase). Between 00:00 and 07:00 Vietnam time these are yesterday: PO numbers/due dates/expense dates land on the wrong business day (expense_date drives P&L month bucketing) and overdue flags lag 7 hours.",
+   "evidence": "S4.1 same instant, `set timezone='Etc/GMT+12'` -> current_date 2026-09-10 | to_local_date(now()) 2026-09-11; `set timezone='Pacific/Kiritimati'` -> current_date 2026-09-12 | to_local_date(now()) 2026-09-11. information_schema shows defaults `CURRENT_DATE` on expense_records.expense_date, purchase_orders.order_date, supplier_payments.payment_date; pg_proc/pg_views grep lists the 4 functions and 2 views above using current_date.",
+   "suggested_fix": "Replace `current_date` with `public.to_local_date(now())` in the column defaults (immutable-safe via a wrapper default expression), in the three functions and in the overdue expressions of both views and get_dashboard_stats."
+  },
+  {
+   "id": "T-10",
+   "severity": "medium",
+   "area": "payroll net pay sign",
+   "location": "supabase/migrations/20260911000000_init.sql:972 (payroll_items.net_pay generated, no check) and pay_payroll 1816-1854",
+   "description": "advance_deduction/penalty can exceed pay; net_pay goes negative, is summed into total_net_pay and the period can be finalized and paid, producing a negative labor cost in P&L.",
+   "evidence": "S3.2: PT item base_pay 1349400 + bonus 500000 + tips 100000 - advance 2000000 - penalty 50000 -> net_pay -100600.00; finalize_payroll + pay_payroll succeeded -> period status paid | total_net_pay -100600.00.",
+   "suggested_fix": "Add `check (base_pay + allowance + bonus + tips - advance_deduction - penalty >= 0)` on payroll_items (or raise in trg_payroll_items_guard / finalize_payroll when any net_pay < 0) and carry the excess advance to the next period in the app."
+  },
+  {
+   "id": "T-11",
+   "severity": "low",
+   "area": "orders after cancellation",
+   "location": "supabase/migrations/20260911000000_init.sql:1179-1236 (trg_order_items_after_insert) and 1130-1159 (trg_orders_before)",
+   "description": "Lines can be appended to a cancelled order (no stock movement, but subtotal/total_amount are recomputed and grow), and order_date can be edited after creation while order_number and the 'sale' ledger rows keep the original date.",
+   "evidence": "S2.5c after cancel_order: `insert into order_items(...)` on the cancelled order -> subtotal 190000 -> 240000, status cancelled. S2.7 `update orders set order_date = now() - interval '10 days'` -> order_number ORD-20260911-0011 with order_date 2026-09-01; ledger rows still dated 2026-09-11.",
+   "suggested_fix": "Raise in trg_order_items_after_insert (or a BEFORE INSERT trigger) when the order status is 'cancelled'; in trg_orders_before reject order_date changes once items exist (or renumber and re-date the ledger rows)."
+  },
+  {
+   "id": "T-12",
+   "severity": "low",
+   "area": "PO supplier change with payments",
+   "location": "supabase/migrations/20260911000000_init.sql:474-506 (trg_purchase_orders_debt UPDATE branch) / 805-822 (trg_supplier_payments_before_update)",
+   "description": "Changing purchase_orders.supplier_id when the PO already has payments/allocations moves the debt correctly but leaves supplier_payments.supplier_id pointing at the old supplier, so payment history and per-supplier paid totals are misattributed.",
+   "evidence": "S1.9: `update purchase_orders set supplier_id=NCC-004 where id=po1` (po1 has a 50000 payment) -> NCC-003 debt 250000 -> 100000, NCC-004 +150000 (consistent), but `payment.supplier_id = po.supplier_id` -> f.",
+   "suggested_fix": "In trg_purchase_orders_before (UPDATE) raise PO_HAS_PAYMENTS when supplier_id changes and allocations exist for the PO."
+  },
+  {
+   "id": "T-13",
+   "severity": "low",
+   "area": "stocktake / ledger noise",
+   "location": "supabase/migrations/20260911000000_init.sql:1667-1722 (record_stock_adjustment stocktake branch) and 1179-1236 (order item qty rounding)",
+   "description": "A stocktake whose count equals the book stock inserts a zero-quantity ledger row; and recipe quantities that round to 0.000 after multiplying by the order quantity are skipped, giving cogs 0 while ideal cost is > 0.",
+   "evidence": "S2.2: stocktake NL-044 counted 65 = current 65 -> ledger row `stocktake | 0.000 | 0.00 | ... Kiểm kê: đếm 65.000, sổ 65.000`. S2.9: recipe qty 0.001 x order qty 0.4 -> total_cogs 0.00 | ideal_per_unit 0.29 | ledger_rows 0.",
+   "suggested_fix": "Skip the insert (or return null) when v_delta = 0 for stocktake; keep the zero-row only if it is wanted as an audit mark, and document it. Consider rounding qty_out to 4-6 decimals or accumulating cost before rounding."
+  },
+  {
+   "id": "T-14",
+   "severity": "low",
+   "area": "order/PO creation serialization",
+   "location": "supabase/migrations/20260911000000_init.sql:1112-1128 (next_order_number) and 400-417 (next_po_number) — pg_advisory_xact_lock",
+   "description": "The number generator takes a transaction-scoped advisory lock inside a BEFORE INSERT trigger, so any transaction that has inserted an order (or PO) blocks every other order (PO) insert for the same day until it commits. Numbering is correct (verified), but one long/hung transaction stalls the whole POS.",
+   "evidence": "C3: overlapping sessions got PO-20260911-0002/0003 and ORD-20260911-0011/0012 (no collision). Serialization check: session A `begin; insert into orders ...; pg_sleep(4)`; session B's autocommit `insert into orders` waited 3s before returning ORD-20260911-0015.",
+   "suggested_fix": "Keep the lock but keep order/PO transactions short (create_order/create_purchase_order already are); alternatively use a per-day sequence table row updated with `update ... returning` so the wait is on a row lock with the same semantics, and document that apps must not hold open transactions after inserting an order."
+  },
+  {
+   "id": "T-15",
+   "severity": "low",
+   "area": "payroll for full-time staff",
+   "location": "supabase/migrations/20260911000000_init.sql:1762-1768 (generate_payroll FT branch)",
+   "description": "Full-time base pay is prorated by count(distinct work_date) in timekeeping; a full-time employee with no timekeeping rows (spec: 'lương cứng/tháng') gets base_pay 0 and allowance 0 without any warning.",
+   "evidence": "S3.2: FT employee T-FT (base 26,000,000) with no timekeeping -> `full_time | total_hours 0.00 | total_days 0.00 | base_pay 0.00 | allowance 0.00 | net_pay 0.00`.",
+   "suggested_fix": "Document the proration rule in docs/DATABASE.md and the UI, or treat missing timekeeping as full standard days (base_salary) with an explicit 'days worked' override; at minimum raise a NOTICE/flag on items with total_days = 0 for full_time."
+  },
+  {
+   "id": "T-16",
+   "severity": "low",
+   "area": "misc guards",
+   "location": "supabase/migrations/20260911000000_init.sql:1067-1088 (trg_expense_records_before), 379-397 (purchase_orders direct insert), 621-661 (trg_po_items_after_delete note)",
+   "description": "Expenses can be 'paid' with payment_method NULL and amount 0; a PO with zero lines can be created by direct insert (RPC forbids it); when a PO delete cascades, the reversal ledger note is 'Xóa dòng nhập ' with an empty PO number because the PO row is already gone and reference_id points at a deleted item.",
+   "evidence": "S6.3 `insert into expense_records(..., amount 0, status 'paid')` -> paid | payment_method NULL | has_paid_at t | amount 0.00. S1.12 `insert into purchase_orders(supplier_id)` -> PO-20260911-0003 | total 0 | unpaid. S1.11 after `delete from purchase_orders` -> ledger row `purchase | -1000.000 | purchase_order_item | Xóa dòng nhập ` (no number).",
+   "suggested_fix": "Require payment_method when status='paid' and amount > 0; add a BEFORE DELETE trigger on purchase_orders that snapshots po_number into a transaction-local setting (or writes the reversal rows itself) and forbids deleting POs with allocations/payments with a clear error; optionally forbid finalizing/paying POs with zero lines."
+  }
+ ],
+ "test_failures": [
+  {
+   "test": "05_rls.sql :: anon_no_execute_on_mutating_rpcs",
+   "expected": "has_function_privilege('anon', fn, 'execute') = false for create_purchase_order, record_supplier_payment, create_order, cancel_order, record_stock_adjustment, generate_payroll, finalize_payroll, pay_payroll",
+   "actual": "anon holds EXECUTE on all 8 mutating RPCs (pg_proc.proacl for create_order = {=X/postgres,postgres=X/postgres,anon=X/postgres,authenticated=X/postgres,service_role=X/postgres}). The calls still fail at runtime because RLS blocks the underlying table writes (anon_call_create_order_denied / anon_call_record_stock_adjustment_denied PASS), so this is a defense-in-depth gap rather than a data breach today.",
+   "spec_reference": "docs/restaurant_erp_prompt.md section 1 (RLS + Database Triggers/RPC) and migration section 18 GRANTS comment 'Execute on our own functions only'",
+   "suspected_cause": "supabase/migrations/20260911000000_init.sql section 18 only GRANTs execute to authenticated/service_role and never REVOKEs from PUBLIC/anon. Postgres grants EXECUTE to PUBLIC on every new function by default, and both the Supabase project and scripts/db-shim.sql additionally set 'alter default privileges in schema public grant all on functions to anon'. Fix: after creating the functions run 'revoke execute on all functions in schema public from public, anon' (and optionally 'alter default privileges in schema public revoke execute on functions from public, anon') before the explicit grants."
+  }
+ ]
+}
