@@ -6,6 +6,14 @@ Hợp đồng kỹ thuật: `docs/ARCHITECTURE.md` · `docs/DATABASE.md` · `doc
 Tài liệu này là **lộ trình duy nhất** để đưa dự án từ trạng thái hiện tại (khung đã có, app chưa chạy được) đến bản v1 chạy thật.
 Mỗi phase có deliverable + tiêu chí hoàn thành (DoD). Làm tuần tự; không nhảy phase khi DoD chưa đạt.
 
+> **Phân công (2026-09-12, 15:0x)**: việc triển khai code do phiên `restaurant-erp-08` thực hiện, chạy hai workflow đa agent
+> song song (workflow A: tầng DB `supabase/` + `docs/DATABASE*.md` + `src/types/database.ts`; workflow B: tầng app
+> `src/types/restaurant.ts`, `src/lib/`, `src/server-actions/`, `src/app/`, `src/components/`).
+> Phiên này (`restaurant-erp-1b`) chỉ giữ **tài liệu `docs/PLAN.md`** và không ghi vào `src/` hay `supabase/`.
+> **Phase 1.5 (nâng Next.js 16)** và **Phase 2B (báo cáo kiểm soát nguyên liệu hàng ngày)** do `restaurant-erp-08` thực hiện —
+> đừng giao cho phiên khác. Thứ tự đã thống nhất: app xanh trên Next 15.5 trước, nâng 16 sau; báo cáo ngày làm ngay sau khi
+> workflow DB đóng migration.
+
 ---
 
 ## 0. Hiện trạng đã kiểm chứng (2026-09-12)
@@ -128,7 +136,7 @@ Làm theo module, mỗi module một commit, dùng bảng §2 làm checklist. Th
 
 **DoD**: `tsc` 0 lỗi, lint sạch, `next build` thành công, 18 route smoke mở được với dữ liệu seed không lỗi console.
 
-### Phase 1.5 — Nâng cấp Next.js 16 (≈ 0.5 ngày) — *theo yêu cầu spec gốc*
+### Phase 1.5 — Nâng cấp Next.js 16 (≈ 0.5 ngày) — *theo spec gốc dòng 11* · **phụ trách: `restaurant-erp-08`**
 Làm **ngay sau** Phase 1 (code còn nhỏ, typecheck đang xanh nên dễ soi lỗi do upgrade).
 1. `npx @next/codemod@latest upgrade latest` (Next 16 + React 19.2 + `eslint-config-next` 16).
 2. Đổi `src/middleware.ts` → `src/proxy.ts` (Next 16 đổi tên middleware thành proxy); giữ logic `updateSession`.
@@ -159,7 +167,7 @@ Sửa tiếp trong `…_init.sql` (xem nguyên tắc §1.1). Mỗi thay đổi c
 
 Giữ nguyên (ghi rõ vào DATABASE.md là *by design*): DOC-03, DOC-05/BL-06 (labor chỉ tính kỳ đã chốt; dashboard thêm dòng "ước tính lương kỳ nháp"), DOC-12 (P&L tính dồn tích kể cả pending; UI có toggle "chỉ đã thanh toán"), DOC-04 (thêm cờ `expense_categories.is_depreciation` → báo cáo hiện thêm dòng EBITDA = net + khấu hao), T-08/BL-12 (adjustment không vào COGS, báo cáo hiện riêng), BL-13/SEC-11, T-14, SEC-13 (thêm index `text_pattern_ops` cho `order_number`, `po_number`).
 
-**2B. Báo cáo kiểm soát nguyên liệu hàng ngày (yêu cầu mới của spec)**
+**2B. Báo cáo kiểm soát nguyên liệu hàng ngày** (spec gốc dòng 6) · **phụ trách: `restaurant-erp-08`**
 - View `v_daily_menu_sales`: theo `to_local_date(orders.order_date)` × `menu_item_id` (đơn completed): `qty_sold, revenue, cogs, contribution_margin`.
 - View `v_daily_ingredient_usage`: theo ngày × nguyên liệu từ `inventory_transactions`: `qty_sold_usage` (−Σ sale + sale_reversal), `cost_sold_usage`, `qty_waste`, `cost_waste`, `qty_purchased`, `cost_purchased`, `qty_adjust`, `closing_stock` (stock_after của dòng cuối ngày), `opening_stock = closing − Σ quantity`.
 - View `v_daily_recipe_theoretical`: Σ `qty_sold × recipes.quantity × (1 + waste%)` theo ngày × nguyên liệu với **định lượng hiện tại** → so với `qty_sold_usage` để phát hiện lệch định lượng.
