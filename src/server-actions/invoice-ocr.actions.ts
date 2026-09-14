@@ -8,6 +8,7 @@ import {
   type IngredientMatchCandidate,
   type SupplierMatchCandidate,
 } from "@/lib/ai/invoice-matcher";
+import { uploadImage } from "@/lib/storage";
 import type { InvoiceOcrReviewData } from "@/types/restaurant";
 
 export interface ExtractInvoiceResponse {
@@ -74,32 +75,13 @@ export async function extractAndMatchInvoice(
     base64Data = buffer.toString("base64");
     mimeType = file.type || "image/jpeg";
 
-    // 2. Thử lưu ảnh vào Supabase Storage bucket 'invoices'
-    const timestamp = Date.now();
-    const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-    const filePath = `invoices/${timestamp}_${safeName}`;
-
-    try {
-      const { error: uploadError } = await supabase.storage
-        .from("invoices")
-        .upload(filePath, buffer, {
-          contentType: mimeType,
-          upsert: true,
-        });
-
-      if (!uploadError) {
-        const { data: publicUrlData } = supabase.storage
-          .from("invoices")
-          .getPublicUrl(filePath);
-        imageUrl = publicUrlData.publicUrl;
-      }
-    } catch {
-      // Nếu bucket chưa sẵn sàng, dùng data URL
-    }
-
-    if (!imageUrl) {
-      imageUrl = `data:${mimeType};base64,${base64Data}`;
-    }
+    // 2. Lưu ảnh qua Cloudinary (hoặc Supabase Storage fallback)
+    const uploadRes = await uploadImage(buffer, {
+      filename: file.name,
+      contentType: mimeType,
+      folder: "restaurant-erp/invoices",
+    });
+    imageUrl = uploadRes.url;
 
     // 3. Gọi AI OCR Engine
     const { data: parsedData, isMock, modelUsed } = await parseInvoiceImage({

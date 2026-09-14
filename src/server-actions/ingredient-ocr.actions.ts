@@ -1,12 +1,13 @@
 "use server";
 
-import { createClient } from "@/lib/supabase/server";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import {
   parseIngredientsFromImage,
   getMockIngredientResult,
   type IngredientOcrResult,
 } from "@/lib/ai/ingredient-ocr";
+
+import { uploadImage } from "@/lib/storage";
 
 /**
  * Server action: Trích xuất danh sách nguyên liệu từ ảnh (bảng báo giá, hóa đơn, bao bì).
@@ -32,32 +33,12 @@ export async function extractIngredientsFromImageAction(
     const base64Data = buffer.toString("base64");
     const mimeType = file.type || "image/jpeg";
 
-    const supabase = await createClient();
-    const timestamp = Date.now();
-    const safeName = file.name.replace(/[^a-zA-Z0-9.-]/g, "_");
-    const filePath = `ingredients_ocr/${timestamp}_${safeName}`;
-
-    let imageUrl = `data:${mimeType};base64,${base64Data}`;
-
-    try {
-      const { error: uploadError } = await supabase.storage
-        .from("invoices")
-        .upload(filePath, buffer, {
-          contentType: mimeType,
-          upsert: true,
-        });
-
-      if (!uploadError) {
-        const { data: publicUrlData } = supabase.storage
-          .from("invoices")
-          .getPublicUrl(filePath);
-        if (publicUrlData?.publicUrl) {
-          imageUrl = publicUrlData.publicUrl;
-        }
-      }
-    } catch {
-      // Storage upload error is non-fatal, proceed with base64
-    }
+    const uploadRes = await uploadImage(buffer, {
+      filename: file.name,
+      contentType: mimeType,
+      folder: "restaurant-erp/ingredients_ocr",
+    });
+    const imageUrl = uploadRes.url;
 
     const result = await parseIngredientsFromImage({
       base64Data,
