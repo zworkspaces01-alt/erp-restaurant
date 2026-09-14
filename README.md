@@ -1,8 +1,8 @@
 # Restaurant ERP — Hệ thống quản trị nhà hàng toàn diện
 
-ERP F&B khép kín: **Nhập hàng NCC → Kho & hao hụt → Định lượng món (BOM) & Food Cost realtime → Trừ kho khi bán → Công nợ gối đầu → Nhân sự & bảng lương → Chi phí vận hành → Báo cáo P&L**.
+ERP F&B khép kín: **Quét hóa đơn AI OCR (Groq) → Nhập hàng NCC → Kho & hao hụt → Định lượng món (BOM) & Food Cost realtime → Trừ kho khi bán → Công nợ gối đầu → Nhân sự & bảng lương → Chi phí vận hành → Báo cáo P&L & Tiêu hao ngày → Gửi báo cáo Telegram tự động**.
 
-Spec nghiệp vụ gốc: [docs/restaurant_erp_prompt.md](docs/restaurant_erp_prompt.md) · Kiến trúc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Schema DB: [docs/DATABASE.md](docs/DATABASE.md)
+Spec nghiệp vụ gốc: [docs/restaurant_erp_prompt.md](docs/restaurant_erp_prompt.md) · Kiến trúc: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) · Schema DB: [docs/DATABASE.md](docs/DATABASE.md) · Cấu trúc Cloud: [supabase/cloud_schema_full.sql](supabase/cloud_schema_full.sql)
 
 ## Stack
 Next.js 15 (App Router, Server Actions, React 19) · TypeScript strict · Supabase (PostgreSQL + RLS + Triggers + RPC) · Tailwind v4 + shadcn/ui · TanStack Table v8 · Recharts · React Hook Form + Zod.
