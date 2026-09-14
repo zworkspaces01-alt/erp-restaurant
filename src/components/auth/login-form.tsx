@@ -51,7 +51,7 @@ export function LoginForm({ next }: { next?: string }) {
           id="email"
           type="email"
           autoComplete="email"
-          placeholder="admin@restaurant.local"
+          placeholder="superadmin@restaurant.com"
           {...form.register("email")}
         />
         {form.formState.errors.email && (
