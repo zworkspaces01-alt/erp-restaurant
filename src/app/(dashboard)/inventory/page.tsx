@@ -1,133 +1,99 @@
 import Link from "next/link";
-import { AlertCircle, History, SlidersHorizontal } from "lucide-react";
-import { getIngredients } from "@/lib/queries/inventory.queries";
-import { PageHeader } from "@/components/shared/page-header";
-import { AddIngredientDialog } from "@/components/inventory/add-ingredient-dialog";
+import { AlertTriangle, FolderTree, History, Package, SlidersHorizontal, Wallet } from "lucide-react";
+import { getInventoryStatus, getSupplierOptions } from "@/lib/queries/inventory.queries";
+import { getIngredientCategoryOptions } from "@/lib/queries/categories.queries";
+import { PageHeader, StatCard, EmptyState } from "@/components/shared";
+import { InventoryTable } from "@/components/inventory/inventory-table";
 import { formatNumber, formatVND } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
 export const metadata = { title: "Kho nguyên liệu | Restaurant ERP" };
+export const dynamic = "force-dynamic";
 
 export default async function InventoryPage() {
-  const ingredients = await getIngredients();
+  const [rows, suppliers, categoryOptions] = await Promise.all([
+    getInventoryStatus(),
+    getSupplierOptions(),
+    getIngredientCategoryOptions(),
+  ]);
 
-  const totalInventoryValue = ingredients.reduce(
-    (sum, item) => sum + Number(item.current_stock) * Number(item.avg_cost_price),
-    0
-  );
-  const lowStockCount = ingredients.filter(
-    (item) => Number(item.current_stock) <= Number(item.min_alert_stock)
-  ).length;
+  const totalValue = rows.reduce((sum, r) => sum + Number(r.stock_value ?? 0), 0);
+  const lowStock = rows.filter((r) => r.is_below_min);
+  const lowStockValue = lowStock.reduce((sum, r) => sum + Number(r.stock_value ?? 0), 0);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Kho nguyên liệu & Giá vốn bình quân"
-        description="Quản lý tồn kho theo đơn vị cơ sở, hệ số quy đổi nhập hàng và cập nhật giá vốn bình quân gia quyền tự động."
+        title="Kho nguyên liệu"
+        description="Tồn kho theo đơn vị cơ sở và đơn vị nhập, giá vốn bình quân gia quyền được cập nhật tự động."
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <Button asChild variant="outline" size="sm">
+              <Link href="/inventory/categories">
+                <FolderTree className="size-4" />
+                Danh mục nguyên liệu
+              </Link>
+            </Button>
             <Button asChild variant="outline" size="sm">
               <Link href="/inventory/adjustments">
-                <SlidersHorizontal className="mr-1.5 size-4" />
-                Kiểm kê & Hao hụt
+                <SlidersHorizontal className="size-4" />
+                Kiểm kê & hao hụt
               </Link>
             </Button>
             <Button asChild variant="outline" size="sm">
               <Link href="/inventory/transactions">
-                <History className="mr-1.5 size-4" />
+                <History className="size-4" />
                 Sổ kho
               </Link>
             </Button>
-            <AddIngredientDialog />
           </div>
         }
       />
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        <Card className="p-4">
-          <p className="text-xs font-medium text-muted-foreground">Tổng số mặt hàng</p>
-          <p className="mt-1 text-2xl font-semibold">{ingredients.length} nguyên liệu</p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs font-medium text-muted-foreground">Tổng giá trị vốn trong kho</p>
-          <p className="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
-            {formatVND(totalInventoryValue)}
-          </p>
-        </Card>
-        <Card className="p-4">
-          <p className="text-xs font-medium text-muted-foreground">Mặt hàng dưới mức an toàn</p>
-          <p className={`mt-1 text-2xl font-semibold ${lowStockCount > 0 ? "text-destructive" : "text-emerald-600"}`}>
-            {lowStockCount} mặt hàng
-          </p>
-        </Card>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard title="Số mặt hàng" value={String(rows.length)} icon={Package} hint="Nguyên liệu đang sử dụng" />
+        <StatCard title="Giá trị tồn kho" value={formatVND(totalValue)} icon={Wallet} tone="info" />
+        <StatCard
+          title="Dưới định mức"
+          value={String(lowStock.length)}
+          icon={AlertTriangle}
+          tone={lowStock.length > 0 ? "danger" : "success"}
+          hint={lowStock.length > 0 ? `Giá trị còn lại ${formatVND(lowStockValue)}` : "Tồn kho an toàn"}
+        />
       </div>
 
-      {/* Table */}
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Mã / Tên</th>
-                  <th className="px-4 py-3 font-medium">Danh mục</th>
-                  <th className="px-4 py-3 font-medium">Quy cách quy đổi</th>
-                  <th className="px-4 py-3 font-medium text-right">Tồn kho hiện tại</th>
-                  <th className="px-4 py-3 font-medium text-right">Mức an toàn</th>
-                  <th className="px-4 py-3 font-medium text-right">Giá vốn BQ / ĐV</th>
-                  <th className="px-4 py-3 font-medium text-right">Tổng giá trị</th>
-                  <th className="px-4 py-3 font-medium text-center">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {ingredients.map((item) => {
-                  const isLow = Number(item.current_stock) <= Number(item.min_alert_stock);
-                  const totalVal = Number(item.current_stock) * Number(item.avg_cost_price);
-
-                  return (
-                    <tr key={item.id} className="hover:bg-muted/30">
-                      <td className="px-4 py-3">
-                        <p className="font-medium text-foreground">{item.name}</p>
-                        <p className="font-mono text-xs text-muted-foreground">{item.code}</p>
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground">{item.category}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground">
-                        1 {item.import_unit} = {formatNumber(item.conversion_factor)} {item.base_unit}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {formatNumber(item.current_stock)} {item.base_unit}
-                      </td>
-                      <td className="px-4 py-3 text-right text-muted-foreground">
-                        {formatNumber(item.min_alert_stock)} {item.base_unit}
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        {formatVND(item.avg_cost_price)}/{item.base_unit}
-                      </td>
-                      <td className="px-4 py-3 text-right font-semibold">
-                        {formatVND(totalVal)}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        {isLow ? (
-                          <Badge variant="destructive" className="gap-1">
-                            <AlertCircle className="size-3" /> Thiếu hàng
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-emerald-600 dark:text-emerald-400">
-                            Đủ tồn
-                          </Badge>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+      {lowStock.length > 0 && (
+        <div className="rounded-lg border border-destructive/30 bg-destructive/5 p-4">
+          <div className="mb-2 flex items-center gap-2 text-sm font-medium text-destructive">
+            <AlertTriangle className="size-4" />
+            Nguyên liệu cần nhập thêm ({lowStock.length})
           </div>
-        </CardContent>
-      </Card>
+          <div className="flex flex-wrap gap-2">
+            {lowStock.slice(0, 12).map((r) => (
+              <Link
+                key={r.id}
+                href={`/inventory/${r.id}`}
+                className="rounded-md border bg-background px-2.5 py-1 text-xs hover:bg-accent"
+              >
+                {r.name}
+                <span className="ml-1.5 text-muted-foreground tabular-nums">
+                  {formatNumber(r.current_stock)}/{formatNumber(r.min_alert_stock)} {r.base_unit}
+                </span>
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {rows.length === 0 ? (
+        <EmptyState
+          title="Chưa có nguyên liệu"
+          description="Thêm nguyên liệu để bắt đầu quản lý tồn kho và giá vốn."
+          icon={Package}
+        />
+      ) : (
+        <InventoryTable rows={rows} suppliers={suppliers} categoryOptions={categoryOptions} />
+      )}
     </div>
   );
 }

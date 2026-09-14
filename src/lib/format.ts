@@ -1,5 +1,4 @@
-import { format as formatDateFns, parseISO, isValid } from "date-fns";
-import { vi } from "date-fns/locale";
+import { parseISO, isValid } from "date-fns";
 
 const vndFormatter = new Intl.NumberFormat("vi-VN", {
   style: "currency",
@@ -59,37 +58,109 @@ export function formatPercent(
   return `${formatNumber(n, digits, digits)}%`;
 }
 
+/** Múi giờ nhà hàng (app_settings.timezone, mặc định theo DATABASE.md §9). */
+export const RESTAURANT_TIMEZONE = "Asia/Ho_Chi_Minh";
+
+const DATE_ONLY_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
 function toDate(value: string | Date | null | undefined): Date | null {
   if (!value) return null;
   const d = typeof value === "string" ? parseISO(value) : value;
   return isValid(d) ? d : null;
 }
 
-/** "2026-09-11" -> "11/09/2026" */
-export function formatDate(
-  value: string | Date | null | undefined,
-  pattern = "dd/MM/yyyy"
-): string {
-  const d = toDate(value);
-  return d ? formatDateFns(d, pattern, { locale: vi }) : "—";
+interface DateParts {
+  yyyy: string;
+  MM: string;
+  dd: string;
+  HH: string;
+  mm: string;
 }
 
-export function formatDateTime(value: string | Date | null | undefined): string {
-  return formatDate(value, "dd/MM/yyyy HH:mm");
+const partsFormatterCache = new Map<string, Intl.DateTimeFormat>();
+
+function partsFormatter(timeZone: string): Intl.DateTimeFormat {
+  let f = partsFormatterCache.get(timeZone);
+  if (!f) {
+    f = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      hour12: false,
+    });
+    partsFormatterCache.set(timeZone, f);
+  }
+  return f;
+}
+
+/** Tách một thời điểm thành các thành phần ngày/giờ **theo múi giờ nhà hàng**. */
+function zonedParts(date: Date, timeZone: string): DateParts {
+  const map: Record<string, string> = {};
+  for (const part of partsFormatter(timeZone).formatToParts(date)) {
+    if (part.type !== "literal") map[part.type] = part.value;
+  }
+  return {
+    yyyy: map.year ?? "",
+    MM: map.month ?? "",
+    dd: map.day ?? "",
+    HH: map.hour === "24" ? "00" : (map.hour ?? "00"),
+    mm: map.minute ?? "00",
+  };
+}
+
+function renderParts(parts: DateParts, pattern: string): string {
+  return pattern.replace(/yyyy|dd|MM|HH|mm/g, (token) => parts[token as keyof DateParts]);
+}
+
+/**
+ * "2026-09-11" -> "11/09/2026". Timestamptz được hiển thị theo giờ Việt Nam
+ * (server chạy UTC vẫn ra đúng ngày); chuỗi date-only không bị đổi múi giờ.
+ */
+export function formatDate(
+  value: string | Date | null | undefined,
+  pattern = "dd/MM/yyyy",
+  timeZone: string = RESTAURANT_TIMEZONE
+): string {
+  if (typeof value === "string") {
+    const dateOnly = DATE_ONLY_RE.exec(value.trim());
+    if (dateOnly) {
+      const [, yyyy, MM, dd] = dateOnly;
+      return renderParts({ yyyy, MM, dd, HH: "00", mm: "00" }, pattern);
+    }
+  }
+  const d = toDate(value);
+  return d ? renderParts(zonedParts(d, timeZone), pattern) : "—";
+}
+
+export function formatDateTime(
+  value: string | Date | null | undefined,
+  timeZone: string = RESTAURANT_TIMEZONE
+): string {
+  return formatDate(value, "dd/MM/yyyy HH:mm", timeZone);
 }
 
 /** Month label: "2026-09" or Date -> "Tháng 9/2026" */
-export function formatMonth(value: string | Date | null | undefined): string {
-  const d = typeof value === "string" && /^\d{4}-\d{2}$/.test(value) ? parseISO(`${value}-01`) : toDate(value);
-  return d ? `Tháng ${d.getMonth() + 1}/${d.getFullYear()}` : "—";
+export function formatMonth(
+  value: string | Date | null | undefined,
+  timeZone: string = RESTAURANT_TIMEZONE
+): string {
+  if (typeof value === "string" && /^\d{4}-\d{2}$/.test(value.trim())) {
+    const [yyyy, MM] = value.trim().split("-");
+    return `Tháng ${Number(MM)}/${yyyy}`;
+  }
+  const d = toDate(value);
+  if (!d) return "—";
+  const p = zonedParts(d, timeZone);
+  return `Tháng ${Number(p.MM)}/${p.yyyy}`;
 }
 
-/** Today's date as YYYY-MM-DD in local time (for <input type="date"> defaults). */
-export function todayISO(): string {
-  const d = new Date();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${d.getFullYear()}-${m}-${day}`;
+/** Hôm nay (YYYY-MM-DD) **theo giờ nhà hàng** — dùng làm mặc định cho <input type="date">. */
+export function todayISO(timeZone: string = RESTAURANT_TIMEZONE): string {
+  const p = zonedParts(new Date(), timeZone);
+  return `${p.yyyy}-${p.MM}-${p.dd}`;
 }
 
 /** Food cost thresholds used by badges across the app. */

@@ -53,7 +53,9 @@ done
 
 if [ "${SKIP_SEED:-0}" != "1" ] && [ -e "$ROOT/supabase/seed.sql" ]; then
   echo "==> Seed: supabase/seed.sql"
-  psql_db "$DB_NAME" < "$ROOT/supabase/seed.sql"
+  # SEC-16: the seed refuses to wipe a database that holds real auth users unless
+  # the caller opts in explicitly; a throwaway test DB always opts in.
+  { echo "set app.allow_seed = 'on';"; cat "$ROOT/supabase/seed.sql"; } | psql_db "$DB_NAME"
 fi
 
 if [ "${SKIP_TESTS:-0}" != "1" ]; then

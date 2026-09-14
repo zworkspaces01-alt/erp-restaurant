@@ -1,195 +1,162 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Check } from "lucide-react";
-import { toast } from "sonner";
-import { recordTimekeeping } from "@/server-actions/hr.actions";
-import {
-  TIMEKEEPING_STATUSES,
-  TIMEKEEPING_STATUS_LABELS,
-  type TimekeepingStatus,
-} from "@/types/restaurant";
+import Link from "next/link";
+import { Trash2 } from "lucide-react";
+import type { ColumnDef } from "@tanstack/react-table";
+import type { TimekeepingRow } from "@/lib/queries/hr.queries";
+import { deleteTimekeeping } from "@/server-actions/hr.actions";
+import { useAction } from "@/hooks/use-action";
+import { formatDate, formatNumber } from "@/lib/format";
+import { ConfirmDialog, DataTable, DataTableColumnHeader } from "@/components/shared";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-
-interface EmployeeRow {
-  id: string;
-  code: string;
-  full_name: string;
-  role: string;
-  employment_type: string;
-}
-
-interface LogEntry {
-  employee_id: string;
-  shift: "morning" | "evening" | "full" | "custom";
-  hours_worked: number;
-  status: TimekeepingStatus;
-  notes: string;
-}
 
 interface TimekeepingTableProps {
-  targetDate: string;
-  employees: EmployeeRow[];
-  timekeeping: Array<{
-    employee_id: string;
-    shift: string;
-    hours_worked: number;
-    status: string;
-    notes: string | null;
-  }>;
+  rows: TimekeepingRow[];
+  shiftOptions: string[];
 }
 
-export function TimekeepingTable({
-  targetDate,
-  employees,
-  timekeeping,
-}: TimekeepingTableProps) {
+export function TimekeepingTable({ rows, shiftOptions }: TimekeepingTableProps) {
   const router = useRouter();
+  const [target, setTarget] = useState<TimekeepingRow | null>(null);
 
-  // Khởi tạo state từ dữ liệu sẵn có hoặc mặc định
-  const [entries, setEntries] = useState<Record<string, LogEntry>>(() => {
-    const map: Record<string, LogEntry> = {};
-    for (const emp of employees) {
-      const existing = timekeeping.find((t) => t.employee_id === emp.id);
-      map[emp.id] = {
-        employee_id: emp.id,
-        shift: (existing?.shift as "morning" | "evening" | "full" | "custom") ?? "full",
-        hours_worked: existing ? Number(existing.hours_worked) : emp.employment_type === "full_time" ? 8 : 5,
-        status: (existing?.status as TimekeepingStatus) ?? "present",
-        notes: existing?.notes ?? "",
-      };
-    }
-    return map;
+  const { execute } = useAction<string, { id: string }>(deleteTimekeeping, {
+    successMessage: "Đã xóa dòng chấm công",
+    onSuccess: () => {
+      setTarget(null);
+      router.refresh();
+    },
   });
 
-  const [savingId, setSavingId] = useState<string | null>(null);
-
-  const updateEntry = <K extends keyof LogEntry>(empId: string, field: K, value: LogEntry[K]) => {
-    setEntries((prev) => ({
-      ...prev,
-      [empId]: {
-        ...prev[empId],
-        [field]: value,
+  const columns = useMemo<ColumnDef<TimekeepingRow>[]>(
+    () => [
+      {
+        accessorKey: "work_date",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Ngày" />,
+        cell: ({ row }) => (
+          <span className="whitespace-nowrap font-medium">{formatDate(row.original.work_date)}</span>
+        ),
       },
-    }));
-  };
-
-  const saveOne = async (empId: string) => {
-    setSavingId(empId);
-    const entry = entries[empId];
-    const res = await recordTimekeeping({
-      employee_id: empId,
-      work_date: targetDate,
-      shift: entry.shift,
-      hours_worked: Number(entry.hours_worked),
-      status: entry.status,
-      notes: entry.notes || undefined,
-    });
-    setSavingId(null);
-
-    if (!res.success) {
-      toast.error(res.error);
-      return;
-    }
-    toast.success("Đã lưu chấm công!");
-    router.refresh();
-  };
+      {
+        id: "employee",
+        accessorFn: (row) => row.employees?.full_name ?? "",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Nhân viên" />,
+        cell: ({ row }) => {
+          const emp = row.original.employees;
+          if (!emp) return <span className="text-muted-foreground">—</span>;
+          return (
+            <Link href={`/employees/${emp.id}`} className="font-medium hover:underline">
+              {emp.full_name}
+            </Link>
+          );
+        },
+      },
+      {
+        id: "position",
+        accessorFn: (row) => row.employees?.position ?? "",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Vị trí" />,
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">{row.original.employees?.position ?? "—"}</span>
+        ),
+      },
+      {
+        id: "shift",
+        accessorFn: (row) => row.shift ?? "Không chia ca",
+        filterFn: "equals",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Ca" />,
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">{row.original.shift ?? "—"}</span>
+        ),
+      },
+      {
+        accessorKey: "check_in",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Giờ vào" />,
+        cell: ({ row }) => (
+          <span className="tabular-nums">{row.original.check_in?.slice(0, 5) ?? "—"}</span>
+        ),
+      },
+      {
+        accessorKey: "check_out",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Giờ ra" />,
+        cell: ({ row }) => (
+          <span className="tabular-nums">{row.original.check_out?.slice(0, 5) ?? "—"}</span>
+        ),
+      },
+      {
+        accessorKey: "hours_worked",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Số giờ" />,
+        cell: ({ row }) => (
+          <span className="font-semibold tabular-nums">
+            {formatNumber(row.original.hours_worked, 1)}
+          </span>
+        ),
+      },
+      {
+        accessorKey: "note",
+        header: ({ column }) => <DataTableColumnHeader column={column} title="Ghi chú" />,
+        cell: ({ row }) => (
+          <span className="text-muted-foreground">{row.original.note ?? "—"}</span>
+        ),
+      },
+      {
+        id: "actions",
+        header: "",
+        enableSorting: false,
+        cell: ({ row }) => (
+          <div className="flex justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              aria-label="Xóa dòng chấm công"
+              onClick={() => setTarget(row.original)}
+            >
+              <Trash2 className="size-4 text-destructive" />
+            </Button>
+          </div>
+        ),
+      },
+    ],
+    []
+  );
 
   return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-left text-sm">
-        <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-          <tr>
-            <th className="px-4 py-3 font-medium">Nhân viên</th>
-            <th className="px-4 py-3 font-medium">Vị trí</th>
-            <th className="px-4 py-3 font-medium">Trạng thái công</th>
-            <th className="px-4 py-3 font-medium">Ca làm</th>
-            <th className="px-4 py-3 font-medium text-right">Số giờ làm</th>
-            <th className="px-4 py-3 font-medium">Ghi chú</th>
-            <th className="px-4 py-3 text-center">Lưu</th>
-          </tr>
-        </thead>
-        <tbody className="divide-y">
-          {employees.map((emp) => {
-            const entry = entries[emp.id] || {
-              employee_id: emp.id,
-              shift: "full",
-              hours_worked: 8,
-              status: "present",
-              notes: "",
-            };
+    <>
+      <DataTable
+        columns={columns}
+        data={rows}
+        searchable
+        searchPlaceholder="Tìm theo nhân viên, ca..."
+        filters={
+          shiftOptions.length > 0
+            ? [
+                {
+                  columnId: "shift",
+                  title: "Ca làm",
+                  options: shiftOptions.map((s) => ({ label: s, value: s })),
+                },
+              ]
+            : undefined
+        }
+        emptyMessage="Chưa có dữ liệu chấm công trong khoảng thời gian này."
+        initialSorting={[{ id: "work_date", desc: true }]}
+      />
 
-            return (
-              <tr key={emp.id} className="hover:bg-muted/30">
-                <td className="px-4 py-2.5">
-                  <p className="font-medium text-foreground">{emp.full_name}</p>
-                  <p className="font-mono text-xs text-muted-foreground">{emp.code}</p>
-                </td>
-                <td className="px-4 py-2.5 text-xs text-muted-foreground">{emp.role}</td>
-                <td className="px-4 py-2.5">
-                  <select
-                    value={entry.status}
-                    onChange={(e) => updateEntry(emp.id, "status", e.target.value as TimekeepingStatus)}
-                    className="rounded-md border bg-background px-2.5 py-1 text-xs shadow-xs"
-                  >
-                    {TIMEKEEPING_STATUSES.map((st) => (
-                      <option key={st} value={st}>
-                        {TIMEKEEPING_STATUS_LABELS[st]}
-                      </option>
-                    ))}
-                  </select>
-                </td>
-                <td className="px-4 py-2.5">
-                  <select
-                    value={entry.shift}
-                    onChange={(e) =>
-                      updateEntry(emp.id, "shift", e.target.value as "morning" | "evening" | "full" | "custom")
-                    }
-                    className="rounded-md border bg-background px-2.5 py-1 text-xs shadow-xs"
-                  >
-                    <option value="morning">Ca sáng</option>
-                    <option value="evening">Ca tối</option>
-                    <option value="full">Cả ngày</option>
-                    <option value="custom">Tùy biến</option>
-                  </select>
-                </td>
-                <td className="px-4 py-2.5 text-right">
-                  <Input
-                    type="number"
-                    step="0.5"
-                    min="0"
-                    max="24"
-                    value={entry.hours_worked}
-                    onChange={(e) => updateEntry(emp.id, "hours_worked", Number(e.target.value))}
-                    className="h-8 w-20 text-right text-xs"
-                  />
-                </td>
-                <td className="px-4 py-2.5">
-                  <Input
-                    placeholder="Đi trễ, đổi ca..."
-                    value={entry.notes}
-                    onChange={(e) => updateEntry(emp.id, "notes", e.target.value)}
-                    className="h-8 text-xs"
-                  />
-                </td>
-                <td className="px-4 py-2.5 text-center">
-                  <Button
-                    type="button"
-                    size="icon-xs"
-                    variant="outline"
-                    disabled={savingId === emp.id}
-                    onClick={() => saveOne(emp.id)}
-                  >
-                    <Check className="size-3.5" />
-                  </Button>
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
+      <ConfirmDialog
+        open={target !== null}
+        onOpenChange={(open) => !open && setTarget(null)}
+        title="Xóa dòng chấm công?"
+        description={
+          target
+            ? `${target.employees?.full_name ?? "Nhân viên"} · ${formatDate(target.work_date)}${target.shift ? ` · ${target.shift}` : ""}`
+            : undefined
+        }
+        confirmLabel="Xóa"
+        destructive
+        onConfirm={async () => {
+          if (target) await execute(target.id);
+        }}
+      />
+    </>
   );
 }

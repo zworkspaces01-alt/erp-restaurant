@@ -40,6 +40,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: Package,
         children: [
           { title: "Nguyên liệu", href: "/inventory" },
+          { title: "Danh mục nguyên liệu", href: "/inventory/categories" },
           { title: "Sổ kho", href: "/inventory/transactions" },
           { title: "Kiểm kê & hao hụt", href: "/inventory/adjustments" },
         ],
@@ -50,6 +51,7 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: UtensilsCrossed,
         children: [
           { title: "Món ăn", href: "/menu" },
+          { title: "Danh mục món", href: "/menu/categories" },
           { title: "Menu Engineering", href: "/menu/engineering" },
         ],
       },
@@ -84,7 +86,15 @@ export const NAV_GROUPS: NavGroup[] = [
           { title: "Danh mục chi phí", href: "/expenses/categories" },
         ],
       },
-      { title: "Báo cáo P&L", href: "/reports/pnl", icon: BarChart3 },
+      {
+        title: "Báo cáo tài chính",
+        href: "/reports/daily",
+        icon: BarChart3,
+        children: [
+          { title: "Tiêu hao & Lỗ lãi ngày", href: "/reports/daily" },
+          { title: "Báo cáo P&L (Tháng/Quý)", href: "/reports/pnl" },
+        ],
+      },
     ],
   },
 ];

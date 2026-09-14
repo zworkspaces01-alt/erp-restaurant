@@ -1,198 +1,135 @@
-import { getPnLReport } from "@/lib/queries/reports.queries";
-import { getDailyIngredientUsage } from "@/lib/queries/inventory.queries";
-import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
-import { PnLCharts } from "@/components/reports/pnl-charts";
+import Link from "next/link";
+import { Calendar, CircleDollarSign, Percent, Receipt, Wallet } from "lucide-react";
+import { buildPeriod, getPnlPageData, trendPct } from "@/lib/queries/reports.queries";
+import { PnlCharts } from "@/components/reports/pnl-charts";
+import { PnlPeriodSelector } from "@/components/reports/pnl-period-selector";
+import { PnlStatement } from "@/components/reports/pnl-statement";
+import { PageHeader, StatCard } from "@/components/shared";
 import { formatDate, formatNumber, formatPercent, formatVND } from "@/lib/format";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { CircleDollarSign, TrendingUp, Wallet } from "lucide-react";
+import { Button } from "@/components/ui/button";
 
-export const metadata = { title: "Báo cáo P&L & Tiêu hao nguyên liệu | Restaurant ERP" };
+export const metadata = { title: "Báo cáo P&L | Restaurant ERP" };
 
-export default async function PnLReportPage({
-  searchParams,
-}: {
-  searchParams: Promise<{ start?: string; end?: string }>;
-}) {
-  const { start, end } = await searchParams;
-  const startDate = start ?? "2026-09-01";
-  const endDate = end ?? "2026-09-30";
+type SearchParams = Promise<Record<string, string | string[] | undefined>>;
 
-  const [{ summary, categoryBreakdown }, dailyUsage] = await Promise.all([
-    getPnLReport(startDate, endDate),
-    getDailyIngredientUsage(),
-  ]);
+function firstValue(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function parseInteger(value: string | undefined, fallback: number, min: number, max: number): number {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < min || n > max) return fallback;
+  return n;
+}
+
+export default async function PnlReportPage({ searchParams }: { searchParams: SearchParams }) {
+  const params = await searchParams;
+  const now = new Date();
+
+  const kind = firstValue(params.kind) === "quarter" ? "quarter" : "month";
+  const year = parseInteger(firstValue(params.year), now.getFullYear(), 2000, 2100);
+  const defaultIndex =
+    kind === "quarter" ? Math.floor(now.getMonth() / 3) + 1 : now.getMonth() + 1;
+  const index = parseInteger(
+    firstValue(params.period),
+    defaultIndex,
+    1,
+    kind === "quarter" ? 4 : 12
+  );
+
+  const period = buildPeriod(kind, year, index);
+  const { current, previous, previousPeriodLabel, monthly, draftPayrollPeriods } =
+    await getPnlPageData(period);
+
+  const years = Array.from({ length: 5 }, (_, i) => now.getFullYear() - i);
+  const hasPrevious = previous.revenue > 0 || previous.order_count > 0;
+  const laborProvisional = draftPayrollPeriods.length > 0;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Báo cáo Lãi / Lỗ (P&L) & Kiểm soát nguyên liệu"
-        description={`Kỳ tài chính từ ${formatDate(startDate)} đến ${formatDate(endDate)}. Tổng hợp Doanh thu - COGS = Lãi gộp - Nhân sự - OPEX = Lợi nhuận ròng.`}
+        title="Báo cáo lãi lỗ (P&amp;L)"
+        description={`${period.label} · từ ${formatDate(period.start)} đến ${formatDate(period.end)}. So sánh với ${previousPeriodLabel}.`}
+        breadcrumbs={[{ label: "Báo cáo" }, { label: "Lãi lỗ (P&L)" }]}
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            <Button asChild variant="outline" size="sm" className="gap-1.5 text-xs">
+              <Link href="/reports/daily">
+                <Calendar className="size-3.5 text-emerald-600" />
+                <span>Tiêu hao &amp; Lỗ lãi ngày</span>
+              </Link>
+            </Button>
+            <PnlPeriodSelector kind={period.kind} year={period.year} index={period.index} years={years} />
+          </div>
+        }
       />
 
-      {/* High-level P&L Stats */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <StatCard
-          title="Tổng doanh thu (Revenue)"
-          value={formatVND(summary.revenue)}
+          title="Doanh thu"
+          value={formatVND(current.revenue)}
+          hint={`${formatNumber(current.order_count, 0)} đơn · TB ${formatVND(current.avg_order_value)}/đơn`}
           icon={CircleDollarSign}
-          tone="success"
-        />
-        <StatCard
-          title="Lợi nhuận gộp (Gross Profit)"
-          value={formatVND(summary.gross_profit)}
-          hint={`Biên lãi gộp: ${formatPercent(summary.gross_margin_pct)}`}
-          icon={TrendingUp}
           tone="info"
+          trend={hasPrevious ? trendPct(current.revenue, previous.revenue) : null}
+          trendLabel={`so với ${previousPeriodLabel}`}
         />
         <StatCard
-          title="Tổng chi phí (COGS + Lương + OPEX)"
-          value={formatVND(Number(summary.cogs) + Number(summary.labor_cost) + Number(summary.opex))}
+          title="Lợi nhuận gộp"
+          value={formatVND(current.gross_profit)}
+          hint={`Biên gộp ${formatPercent(current.gross_margin_pct)} · COGS ${formatVND(current.cogs_total)}`}
+          icon={Receipt}
+          tone={current.gross_profit >= 0 ? "success" : "danger"}
+          trend={hasPrevious ? trendPct(current.gross_profit, previous.gross_profit) : null}
+          trendLabel={`so với ${previousPeriodLabel}`}
+        />
+        <StatCard
+          title="Lợi nhuận ròng"
+          value={formatVND(current.net_profit)}
+          hint={
+            laborProvisional
+              ? `Biên ròng ${formatPercent(current.net_margin_pct)} · Tạm tính (kỳ lương chưa chốt)`
+              : `Biên ròng ${formatPercent(current.net_margin_pct)}`
+          }
           icon={Wallet}
+          tone={current.net_profit >= 0 ? "success" : "danger"}
+          trend={hasPrevious ? trendPct(current.net_profit, previous.net_profit) : null}
+          trendLabel={`so với ${previousPeriodLabel}`}
+        />
+        <StatCard
+          title="Tổng chi phí"
+          value={formatVND(current.labor_cost + current.opex_total)}
+          hint={`Nhân sự ${formatVND(current.labor_cost)}${laborProvisional ? " (tạm tính)" : ""} · Vận hành ${formatVND(current.opex_total)}`}
+          icon={Percent}
           tone="warning"
-        />
-        <StatCard
-          title="Lợi nhuận ròng (Net Profit)"
-          value={formatVND(summary.net_profit)}
-          hint={`Biên ròng: ${formatPercent(summary.net_margin_pct)}`}
-          icon={Wallet}
-          tone={Number(summary.net_profit) >= 0 ? "success" : "danger"}
+          invertTrend
+          trend={
+            hasPrevious
+              ? trendPct(
+                  current.labor_cost + current.opex_total,
+                  previous.labor_cost + previous.opex_total
+                )
+              : null
+          }
+          trendLabel={`so với ${previousPeriodLabel}`}
         />
       </div>
 
-      {/* P&L Statement Details Table */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">Báo cáo kết quả hoạt động kinh doanh</CardTitle>
-          <CardDescription>Bảng phân tích dòng tiền theo chuẩn kế toán quản trị F&B</CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Chỉ tiêu tài chính</th>
-                  <th className="px-4 py-3 font-medium text-right">Số tiền (VNĐ)</th>
-                  <th className="px-4 py-3 font-medium text-right">Tỷ trọng / Doanh thu (%)</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                <tr className="font-semibold text-foreground">
-                  <td className="px-4 py-2.5">1. Doanh thu bán hàng (Revenue)</td>
-                  <td className="px-4 py-2.5 text-right">{formatVND(summary.revenue)}</td>
-                  <td className="px-4 py-2.5 text-right">100%</td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-4 py-2.5 pl-8">2. Giá vốn hàng bán (COGS xuất bán + Hao hụt)</td>
-                  <td className="px-4 py-2.5 text-right text-amber-600 dark:text-amber-400">
-                    -{formatVND(summary.cogs)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {summary.revenue > 0 ? formatPercent((summary.cogs / summary.revenue) * 100) : "0%"}
-                  </td>
-                </tr>
-                <tr className="bg-muted/20 font-bold text-foreground">
-                  <td className="px-4 py-2.5">3. Lợi nhuận gộp (Gross Profit = 1 - 2)</td>
-                  <td className="px-4 py-2.5 text-right text-primary">{formatVND(summary.gross_profit)}</td>
-                  <td className="px-4 py-2.5 text-right">{formatPercent(summary.gross_margin_pct)}</td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-4 py-2.5 pl-8">4. Chi phí nhân sự (Labor Cost)</td>
-                  <td className="px-4 py-2.5 text-right text-destructive">
-                    -{formatVND(summary.labor_cost)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {summary.revenue > 0 ? formatPercent((summary.labor_cost / summary.revenue) * 100) : "0%"}
-                  </td>
-                </tr>
-                <tr className="text-muted-foreground">
-                  <td className="px-4 py-2.5 pl-8">5. Chi phí vận hành cố định & phát sinh (OPEX)</td>
-                  <td className="px-4 py-2.5 text-right text-destructive">
-                    -{formatVND(summary.opex)}
-                  </td>
-                  <td className="px-4 py-2.5 text-right">
-                    {summary.revenue > 0 ? formatPercent((summary.opex / summary.revenue) * 100) : "0%"}
-                  </td>
-                </tr>
-                <tr className="bg-muted/40 font-bold text-foreground">
-                  <td className="px-4 py-3 text-base">6. Lợi nhuận ròng thực tế (Net Profit = 3 - 4 - 5)</td>
-                  <td className={`px-4 py-3 text-right text-base ${Number(summary.net_profit) >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-destructive"}`}>
-                    {formatVND(summary.net_profit)}
-                  </td>
-                  <td className="px-4 py-3 text-right text-base">{formatPercent(summary.net_margin_pct)}</td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+      <PnlStatement
+        report={current}
+        periodLabel={period.label}
+        previous={hasPrevious ? previous : undefined}
+        previousLabel={previousPeriodLabel}
+        draftPayrollPeriods={draftPayrollPeriods}
+      />
 
-      {/* Visual Charts */}
-      <PnLCharts summary={summary} categoryBreakdown={categoryBreakdown} />
-
-      {/* Daily Raw Material Usage & Cost Control Report (Dòng 6 trong spec) */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base font-semibold">
-            Báo cáo kiểm soát tiêu hao nguyên liệu hàng ngày (Daily Raw Material Control)
-          </CardTitle>
-          <CardDescription>
-            Bán từng này món ăn → Tiêu hao bao nhiêu nguyên liệu theo định lượng BOM (kèm % hao hụt) → Quy ra tiền vốn giá xuất kho trong ngày.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Ngày bán</th>
-                  <th className="px-4 py-3 font-medium">Mã nguyên liệu</th>
-                  <th className="px-4 py-3 font-medium">Tên nguyên liệu</th>
-                  <th className="px-4 py-3 font-medium text-right">Khối lượng tiêu hao theo món</th>
-                  <th className="px-4 py-3 font-medium text-right">Đơn vị</th>
-                  <th className="px-4 py-3 font-medium text-right">Đơn giá vốn BQ</th>
-                  <th className="px-4 py-3 font-medium text-right">Quy ra tiền vốn tiêu hao</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {dailyUsage.length === 0 ? (
-                  <tr>
-                    <td colSpan={7} className="py-8 text-center text-muted-foreground">
-                      Chưa có dữ liệu tiêu hao nguyên liệu trong ngày.
-                    </td>
-                  </tr>
-                ) : (
-                  dailyUsage.map((row, idx) => (
-                    <tr key={idx} className="hover:bg-muted/30">
-                      <td className="whitespace-nowrap px-4 py-2.5 text-xs text-muted-foreground">
-                        {formatDate(row.usage_date)}
-                      </td>
-                      <td className="px-4 py-2.5 font-mono text-xs text-muted-foreground">
-                        {row.ingredient_code}
-                      </td>
-                      <td className="px-4 py-2.5 font-medium text-foreground">
-                        {row.ingredient_name}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-semibold text-foreground">
-                        {formatNumber(row.theoretical_quantity)}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs text-muted-foreground">
-                        {row.base_unit}
-                      </td>
-                      <td className="px-4 py-2.5 text-right text-xs text-muted-foreground">
-                        {formatVND(row.avg_cost_price)}/{row.base_unit}
-                      </td>
-                      <td className="px-4 py-2.5 text-right font-bold text-amber-600 dark:text-amber-400">
-                        {formatVND(row.theoretical_cost)}
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+      <PnlCharts
+        monthly={monthly}
+        report={current}
+        year={period.year}
+        periodLabel={period.label}
+        laborProvisional={laborProvisional}
+      />
     </div>
   );
 }

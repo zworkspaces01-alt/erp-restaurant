@@ -5,6 +5,7 @@ import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createClient } from "@/lib/supabase/server";
 import { fail, ok, type ActionResult } from "@/types/actions";
+import { safeNextPath } from "@/types/restaurant";
 
 const loginSchema = z.object({
   email: z.string().trim().email("Email không hợp lệ"),
@@ -35,7 +36,10 @@ export async function signIn(input: LoginInput): Promise<ActionResult<{ redirect
   }
 
   revalidatePath("/", "layout");
-  const next = parsed.data.next && parsed.data.next.startsWith("/") ? parsed.data.next : "/dashboard";
+  // Chờ ngắn để clock giữa GoTrue và PostgREST đồng bộ, tránh lỗi JWT issued at future
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  // safeNextPath chặn URL tuyệt đối và protocol-relative (`//evil.example`).
+  const next = safeNextPath(parsed.data.next);
   return ok({ redirectTo: next });
 }
 

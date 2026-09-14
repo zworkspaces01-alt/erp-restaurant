@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { ChefHat } from "lucide-react";
 import { LoginForm } from "@/components/auth/login-form";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { safeNextPath } from "@/types/restaurant";
 
 export const metadata: Metadata = { title: "Đăng nhập" };
 
@@ -11,6 +12,8 @@ export default async function LoginPage({
   searchParams: Promise<{ next?: string }>;
 }) {
   const { next } = await searchParams;
+  // Chặn open redirect: chỉ nhận đường dẫn nội bộ `/...` (không nhận `//evil.example`).
+  const safeNext = safeNextPath(next);
 
   return (
     <div className="flex min-h-svh items-center justify-center bg-muted/40 px-4">
@@ -23,7 +26,7 @@ export default async function LoginPage({
           <CardDescription>Đăng nhập để quản trị nhà hàng</CardDescription>
         </CardHeader>
         <CardContent>
-          <LoginForm next={next} />
+          <LoginForm next={safeNext} />
           <p className="mt-4 text-center text-xs text-muted-foreground">
             Tài khoản demo: admin@restaurant.local / Admin@123
           </p>

@@ -190,7 +190,7 @@ begin
   perform cancel_order(v_ord);
   perform pg_temp.chk_num('me_active_rows', 5, (select count(*) from v_menu_engineering));
   select * into r from v_menu_engineering where id = v_a;
-  perform pg_temp.chk_num('me_threshold_0175', 0.175, r.popularity_threshold, 0.0001);
+  perform pg_temp.chk_num('me_threshold_014', 0.14, r.popularity_threshold, 0.0001);   -- BL-09: 0.7 / 5 active menu items (not 0.7 / 4 sold)
   perform pg_temp.chk_num('me_benchmark_cm_26250', 26250, r.benchmark_cm);
   perform pg_temp.chk_num('me_a_qty_sold', 12, r.qty_sold, 0.001);
   perform pg_temp.chk_num('me_a_revenue', 600000, r.revenue);
@@ -215,6 +215,121 @@ begin
   perform pg_temp.chk_num('me_e_avg_cm_is_current_cm', 50000, r.avg_cm);
   perform pg_temp.chk_txt('me_e_puzzle', 'puzzle', r.menu_class::text);
   perform pg_temp.chk_num('me_class_distribution', 5, (select count(*) from v_menu_engineering where menu_class in ('star','plowhorse','puzzle','dog')));
+  -- BL-08: menu_class is exactly the star/plowhorse/puzzle/dog matrix of (is_popular, is_profitable)
+  perform pg_temp.chk_num('me_class_matches_flags', 5, (select count(*) from v_menu_engineering
+    where menu_class = (case when is_popular and is_profitable then 'star' when is_popular then 'plowhorse' when is_profitable then 'puzzle' else 'dog' end)::menu_class));
+end $$;
+
+-- -----------------------------------------------------------------------------
+-- 7. COMBO ITEMS & COMBO SALES
+-- -----------------------------------------------------------------------------
+do $$
+declare
+  v_combo_id   uuid;
+  v_dish_a     uuid;
+  v_dish_b     uuid;
+  v_nested     uuid;
+  v_order_id   uuid;
+  v_x          uuid := (select v from t03 where k = 'x');
+  v_y          uuid := (select v from t03 where k = 'y');
+  v_stock_x    numeric;
+  v_stock_y    numeric;
+  r            record;
+begin
+  -- Dish A & Dish B
+  insert into menu_items (code, name, category, selling_price, is_combo)
+  values ('MI-TEST-A', 'Món A', 'Món chính', 60000, false) returning id into v_dish_a;
+
+  insert into menu_items (code, name, category, selling_price, is_combo)
+  values ('MI-TEST-B', 'Món B', 'Đồ uống', 10000, false) returning id into v_dish_b;
+
+  -- Combo: 1 Món A + 2 Món B
+  insert into menu_items (code, name, category, selling_price, is_combo)
+  values ('COMBO-TEST-1', 'Combo Tiết Kiệm', 'Combo', 70000, true) returning id into v_combo_id;
+
+  -- Recipe for Dish A: 100g X (unit_cost 200) -> component_cost 20000
+  insert into recipes (menu_item_id, ingredient_id, quantity, waste_percent)
+  values (v_dish_a, v_x, 100, 0);
+
+  -- Recipe for Dish B: 50g Y (unit_cost 50) -> component_cost 2500
+  insert into recipes (menu_item_id, ingredient_id, quantity, waste_percent)
+  values (v_dish_b, v_y, 50, 0);
+
+  -- Add to combo: 1x Dish A + 2x Dish B
+  insert into combo_items (combo_id, menu_item_id, quantity) values
+    (v_combo_id, v_dish_a, 1),
+    (v_combo_id, v_dish_b, 2);
+
+  -- 1. Check v_menu_item_costs for combo
+  select * into r from v_menu_item_costs where id = v_combo_id;
+  -- ideal_cost = 1 * 20000 + 2 * 2500 = 25000
+  perform pg_temp.chk_num('combo_ideal_cost', 25000, r.ideal_cost);
+  -- contribution_margin = 70000 - 25000 = 45000
+  perform pg_temp.chk_num('combo_cm', 45000, r.contribution_margin);
+  -- food_cost_pct = 25000 / 70000 * 100 = 35.71%
+  perform pg_temp.chk_num('combo_food_cost_pct', 35.71, r.food_cost_pct, 0.01);
+  perform pg_temp.chk_txt('combo_is_combo', 'true', r.is_combo::text);
+  perform pg_temp.chk_txt('combo_missing_recipe', 'false', r.missing_recipe::text);
+
+  -- 2. Validation guards
+  -- Cannot contain self
+  begin
+    insert into combo_items (combo_id, menu_item_id, quantity) values (v_combo_id, v_combo_id, 1);
+    raise exception 'combo_self_guard_failed';
+  exception when others then
+    if sqlerrm like '%INVALID_COMBO_ITEM%' then
+      raise notice 'PASS combo_self_guard';
+    else
+      raise;
+    end if;
+  end;
+
+  -- Cannot nest combo inside combo
+  insert into menu_items (code, name, category, selling_price, is_combo)
+  values ('COMBO-TEST-2', 'Combo Lồng', 'Combo', 100000, true) returning id into v_nested;
+
+  begin
+    insert into combo_items (combo_id, menu_item_id, quantity) values (v_nested, v_combo_id, 1);
+    raise exception 'combo_nesting_guard_failed';
+  exception when others then
+    if sqlerrm like '%INVALID_COMBO_ITEM%' then
+      raise notice 'PASS combo_nesting_guard';
+    else
+      raise;
+    end if;
+  end;
+
+  -- 3. Selling combo in an order
+  select current_stock into v_stock_x from ingredients where id = v_x;
+  select current_stock into v_stock_y from ingredients where id = v_y;
+
+  -- Sell 2 combos:
+  -- Should deduct X: 2 combos * 1 Dish A * 100g = 200g
+  -- Should deduct Y: 2 combos * 2 Dish B * 50g = 200g
+  v_order_id := create_order(
+    jsonb_build_array(
+      jsonb_build_object('menu_item_id', v_combo_id::text, 'quantity', 2)
+    ),
+    now(), 'Table 10', 0, 'cash', 'Đơn thử combo'
+  );
+
+  select current_stock into r from ingredients where id = v_x;
+  perform pg_temp.chk_num('combo_deduct_x', v_stock_x - 200, r.current_stock);
+
+  select current_stock into r from ingredients where id = v_y;
+  perform pg_temp.chk_num('combo_deduct_y', v_stock_y - 200, r.current_stock);
+
+  -- Check order_items COGS: 2 * 25000 = 50000
+  select cogs_amount into r from order_items where order_id = v_order_id and menu_item_id = v_combo_id;
+  perform pg_temp.chk_num('combo_order_cogs', 50000, r.cogs_amount);
+
+  -- 4. Cancel order restores ingredients
+  perform cancel_order(v_order_id);
+  select current_stock into r from ingredients where id = v_x;
+  perform pg_temp.chk_num('combo_cancel_restores_x', v_stock_x, r.current_stock);
+
+  select current_stock into r from ingredients where id = v_y;
+  perform pg_temp.chk_num('combo_cancel_restores_y', v_stock_y, r.current_stock);
 end $$;
 
 rollback;

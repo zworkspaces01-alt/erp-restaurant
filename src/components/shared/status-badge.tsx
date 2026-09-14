@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { classifyFoodCost } from "@/types/restaurant";
 import { Badge } from "@/components/ui/badge";
 
 export type BadgeTone = "success" | "warning" | "danger" | "info" | "neutral" | "primary";
@@ -30,10 +31,19 @@ export function StatusBadge({ tone, children, className, dot = false }: StatusBa
   );
 }
 
-/** Food cost % -> badge tone per spec: red > 35%, amber 30–35%, green otherwise. */
+/**
+ * Food cost % -> badge tone (DATABASE.md §7.10). Ngưỡng lấy từ classifyFoodCost
+ * (FOOD_COST_WARN / FOOD_COST_DANGER trong @/lib/format) để hai nơi không lệch nhau.
+ */
 export function foodCostTone(pct: number | null | undefined): BadgeTone {
-  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "neutral";
-  if (pct > 35) return "danger";
-  if (pct >= 30) return "warning";
-  return "success";
+  switch (classifyFoodCost(pct)) {
+    case "danger":
+      return "danger";
+    case "warn":
+      return "warning";
+    case "ok":
+      return "success";
+    default:
+      return "neutral";
+  }
 }

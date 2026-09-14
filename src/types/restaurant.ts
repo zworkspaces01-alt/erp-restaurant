@@ -20,7 +20,7 @@ export type FunctionReturns<F extends keyof PublicSchema["Functions"]> = PublicS
 export type { Json };
 
 // ============================================================================
-// 2. Row aliases — tables
+// 2. Row aliases — tables & views
 // ============================================================================
 
 export type Ingredient = Tables<"ingredients">;
@@ -43,7 +43,6 @@ export type OrderItem = Tables<"order_items">;
 export type Profile = Tables<"profiles">;
 export type AppSetting = Tables<"app_settings">;
 
-// Row aliases — views
 export type RecipeCostRow = Views<"v_recipe_costs">;
 export type MenuItemCostRow = Views<"v_menu_item_costs">;
 export type MenuEngineeringRow = Views<"v_menu_engineering">;
@@ -51,8 +50,12 @@ export type InventoryStatusRow = Views<"v_inventory_status">;
 export type SupplierDebtSummaryRow = Views<"v_supplier_debt_summary">;
 export type PurchaseOrderSummaryRow = Views<"v_purchase_orders_summary">;
 export type DailySalesRow = Views<"v_daily_sales">;
+export type MenuCategoryRow = Views<"v_menu_categories">;
+export type IngredientCategoryRow = Views<"v_ingredient_categories">;
+export type MenuCategory = Tables<"menu_categories">;
+export type IngredientCategory = Tables<"ingredient_categories">;
 
-// RPC result types (DATABASE.md §5.9 – §5.11)
+// --- RPC result types (DATABASE.md §5.9 – §5.11) ------------------------------
 
 /** One row of `get_pnl_report(p_start, p_end)` — supabase returns an array with a single row. */
 export interface PnlReport {
@@ -134,7 +137,7 @@ export type ExpenseType = Enums<"expense_type">;
 export type UserRole = Enums<"user_role">;
 export type MenuClass = Enums<"menu_class">;
 
-/** Manual stock movements accepted by `record_stock_adjustment`. */
+/** Ledger types the app may create directly via `record_stock_adjustment`. */
 export type StockAdjustmentType = Extract<InventoryTxnType, "waste" | "adjustment" | "stocktake">;
 
 export interface SelectOption<V extends string | number = string> {
@@ -150,62 +153,73 @@ export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
   full_time: "Toàn thời gian",
   part_time: "Bán thời gian",
 };
+
 export const PAYMENT_METHOD_LABELS: Record<PaymentMethod, string> = {
   cash: "Tiền mặt",
   bank_transfer: "Chuyển khoản",
 };
+
 export const PO_PAYMENT_STATUS_LABELS: Record<PoPaymentStatus, string> = {
   unpaid: "Chưa thanh toán",
   partial: "Thanh toán một phần",
   paid: "Đã thanh toán",
 };
+
 export const INVENTORY_TXN_TYPE_LABELS: Record<InventoryTxnType, string> = {
-  purchase: "Nhập hàng",
-  sale: "Bán hàng",
-  sale_reversal: "Hủy đơn (hoàn kho)",
-  waste: "Hao hụt / hủy bỏ",
+  purchase: "Nhập kho",
+  sale: "Xuất bán",
+  sale_reversal: "Hoàn kho (hủy đơn)",
+  waste: "Hao hụt",
   adjustment: "Điều chỉnh",
   stocktake: "Kiểm kê",
 };
+
 export const STOCK_ADJUSTMENT_TYPE_LABELS: Record<StockAdjustmentType, string> = {
-  waste: INVENTORY_TXN_TYPE_LABELS.waste,
-  adjustment: INVENTORY_TXN_TYPE_LABELS.adjustment,
-  stocktake: INVENTORY_TXN_TYPE_LABELS.stocktake,
+  waste: "Hao hụt",
+  adjustment: "Điều chỉnh",
+  stocktake: "Kiểm kê",
 };
+
 export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
-  completed: "Hoàn thành",
+  completed: "Hoàn tất",
   cancelled: "Đã hủy",
 };
+
 export const PAYROLL_STATUS_LABELS: Record<PayrollStatus, string> = {
   draft: "Nháp",
   finalized: "Đã chốt",
   paid: "Đã chi trả",
 };
+
 export const EXPENSE_STATUS_LABELS: Record<ExpenseStatus, string> = {
   pending: "Chờ thanh toán",
   paid: "Đã thanh toán",
 };
+
 export const EXPENSE_TYPE_LABELS: Record<ExpenseType, string> = {
   fixed: "Chi phí cố định",
-  variable: "Chi phí vận hành",
+  variable: "Chi phí biến đổi",
 };
+
 export const USER_ROLE_LABELS: Record<UserRole, string> = {
-  owner: "Chủ",
+  owner: "Chủ nhà hàng",
   manager: "Quản lý",
   staff: "Nhân viên",
 };
+
 export const MENU_CLASS_LABELS: Record<MenuClass, string> = {
-  star: "STAR (bán chạy, lãi cao)",
-  plowhorse: "PLOWHORSE (bán chạy, lãi thấp)",
-  puzzle: "PUZZLE (bán chậm, lãi cao)",
-  dog: "DOG (bán chậm, lãi thấp)",
+  star: "Ngôi sao",
+  plowhorse: "Bò kéo cày",
+  puzzle: "Câu đố",
+  dog: "Món ế",
 };
-/** Short action hint per menu class (Kasavana-Smith). */
+
+/** Short Vietnamese hint for each Kasavana-Smith class (menu engineering). */
 export const MENU_CLASS_HINTS: Record<MenuClass, string> = {
-  star: "Duy trì chất lượng, đẩy mạnh quảng bá.",
-  plowhorse: "Tối ưu định lượng, giảm hao hụt hoặc tăng nhẹ giá.",
-  puzzle: "Tăng cường quảng bá, đặt ở vị trí nổi bật trên thực đơn.",
-  dog: "Cân nhắc điều chỉnh công thức hoặc loại khỏi thực đơn.",
+  star: "Bán chạy & lãi cao — giữ nguyên, đưa lên đầu menu.",
+  plowhorse: "Bán chạy nhưng lãi thấp — giảm giá vốn hoặc tăng giá nhẹ.",
+  puzzle: "Lãi cao nhưng bán ít — đẩy marketing, gợi ý cho khách.",
+  dog: "Bán ít & lãi thấp — cân nhắc bỏ khỏi menu.",
 };
 
 export const EMPLOYMENT_TYPE_OPTIONS = toOptions(EMPLOYMENT_TYPE_LABELS);
@@ -220,13 +234,14 @@ export const EXPENSE_TYPE_OPTIONS = toOptions(EXPENSE_TYPE_LABELS);
 export const USER_ROLE_OPTIONS = toOptions(USER_ROLE_LABELS);
 export const MENU_CLASS_OPTIONS = toOptions(MENU_CLASS_LABELS);
 
-// Payment terms (suppliers.payment_terms_days): 0 = COD, else gối đầu N ngày
+// --- Supplier payment terms ---------------------------------------------------
+
 export const PAYMENT_TERM_DAYS = [0, 7, 15, 30] as const;
 export type PaymentTermDays = (typeof PAYMENT_TERM_DAYS)[number];
 
 export function paymentTermLabel(days: number | null | undefined): string {
-  const n = Number(days ?? 0);
-  return n > 0 ? `Gối đầu ${n} ngày` : "Thanh toán ngay (COD)";
+  const d = days ?? 0;
+  return d <= 0 ? "Thanh toán ngay (COD)" : `Gối đầu ${d} ngày`;
 }
 
 export const PAYMENT_TERM_OPTIONS: SelectOption<number>[] = PAYMENT_TERM_DAYS.map((value) => ({
@@ -234,7 +249,8 @@ export const PAYMENT_TERM_OPTIONS: SelectOption<number>[] = PAYMENT_TERM_DAYS.ma
   label: paymentTermLabel(value),
 }));
 
-// Reference lists (values taken from supabase/seed.sql)
+// --- Domain vocabularies (values seen in supabase/seed.sql) -------------------
+
 export const BASE_UNITS = ["g", "ml", "pcs", "quả", "chai", "lon"] as const;
 export const IMPORT_UNITS = [
   "kg",
@@ -258,19 +274,19 @@ export const INGREDIENT_CATEGORIES = [
   "Hải sản",
   "Rau củ",
   "Trái cây",
-  "Gia vị",
   "Gạo & mì",
+  "Gia vị",
   "Sữa & bơ",
   "Đồ uống",
   "Bao bì",
 ] as const;
-export const MENU_CATEGORIES = ["Khai vị", "Món chính", "Cơm & Bún", "Tráng miệng", "Đồ uống"] as const;
-export const SHIFT_OPTIONS = ["Sáng", "Chiều", "Tối", "Full", "Tăng ca"] as const;
+export const MENU_CATEGORIES = ["Khai vị", "Món chính", "Cơm & Bún", "Đồ uống", "Tráng miệng"] as const;
+export const SHIFT_OPTIONS = ["Sáng", "Chiều", "Tối", "Full"] as const;
 
 export type BaseUnit = (typeof BASE_UNITS)[number];
 export type ImportUnit = (typeof IMPORT_UNITS)[number];
-export type IngredientCategory = (typeof INGREDIENT_CATEGORIES)[number];
-export type MenuCategory = (typeof MENU_CATEGORIES)[number];
+export type LegacyIngredientCategory = (typeof INGREDIENT_CATEGORIES)[number];
+export type LegacyMenuCategory = (typeof MENU_CATEGORIES)[number];
 export type Shift = (typeof SHIFT_OPTIONS)[number];
 
 // ============================================================================
@@ -278,7 +294,6 @@ export type Shift = (typeof SHIFT_OPTIONS)[number];
 // ============================================================================
 
 const MSG = {
-  required: "Trường này là bắt buộc",
   uuid: "Giá trị không hợp lệ",
   date: "Ngày không hợp lệ (YYYY-MM-DD)",
   time: "Giờ không hợp lệ (HH:mm)",
@@ -302,6 +317,16 @@ const requiredText = (msg: string, min = 1) => z.string({ required_error: msg })
 
 const uuid = (msg: string = MSG.uuid) => z.string({ required_error: msg }).uuid(msg);
 const dateString = (msg: string = MSG.date) => z.string({ required_error: msg }).trim().regex(DATE_RE, msg);
+
+const optionalUuid = (msg: string) =>
+  z
+    .string()
+    .trim()
+    .optional()
+    .nullable()
+    .transform((v) => (v ? v : null))
+    .refine((v) => v === null || z.string().uuid().safeParse(v).success, msg);
+
 const optionalDate = z
   .string()
   .trim()
@@ -309,6 +334,7 @@ const optionalDate = z
   .nullable()
   .transform((v) => (v ? v : null))
   .refine((v) => v === null || DATE_RE.test(v), MSG.date);
+
 const optionalTime = z
   .string()
   .trim()
@@ -316,6 +342,7 @@ const optionalTime = z
   .nullable()
   .transform((v) => (v ? v : null))
   .refine((v) => v === null || TIME_RE.test(v), MSG.time);
+
 const optionalEmail = z
   .string()
   .trim()
@@ -323,6 +350,8 @@ const optionalEmail = z
   .nullable()
   .transform((v) => (v ? v : null))
   .refine((v) => v === null || z.string().email().safeParse(v).success, "Email không hợp lệ");
+
+/** URL or empty → null. */
 const optionalUrl = z
   .string()
   .trim()
@@ -331,17 +360,45 @@ const optionalUrl = z
   .transform((v) => (v ? v : null))
   .refine((v) => v === null || z.string().url().safeParse(v).success, "Đường dẫn không hợp lệ");
 
-const money = (msg: string = MSG.nonneg) => z.coerce.number({ invalid_type_error: "Số tiền không hợp lệ" }).min(0, msg);
+const optionalTimestamp = z
+  .string()
+  .trim()
+  .optional()
+  .nullable()
+  .transform((v) => (v ? v : null))
+  .refine((v) => v === null || !Number.isNaN(Date.parse(v)), "Thời điểm không hợp lệ");
+
+const money = (msg: string = MSG.nonneg) =>
+  z.coerce.number({ invalid_type_error: "Số tiền không hợp lệ" }).min(0, msg);
 const positiveNumber = (msg: string = MSG.positive) =>
   z.coerce.number({ invalid_type_error: "Số không hợp lệ" }).positive(msg);
 
-const employmentTypeEnum = z.enum(["full_time", "part_time"], { errorMap: () => ({ message: "Loại hợp đồng không hợp lệ" }) });
-const paymentMethodEnum = z.enum(["cash", "bank_transfer"], { errorMap: () => ({ message: "Phương thức thanh toán không hợp lệ" }) });
+const employmentTypeEnum = z.enum(["full_time", "part_time"], {
+  errorMap: () => ({ message: "Loại hợp đồng không hợp lệ" }),
+});
+const paymentMethodEnum = z.enum(["cash", "bank_transfer"], {
+  errorMap: () => ({ message: "Phương thức thanh toán không hợp lệ" }),
+});
 const expenseStatusEnum = z.enum(["pending", "paid"], { errorMap: () => ({ message: "Trạng thái không hợp lệ" }) });
 const expenseTypeEnum = z.enum(["fixed", "variable"], { errorMap: () => ({ message: "Loại chi phí không hợp lệ" }) });
 const stockAdjustmentTypeEnum = z.enum(["waste", "adjustment", "stocktake"], {
   errorMap: () => ({ message: "Loại giao dịch kho không hợp lệ" }),
 });
+
+/** Nullable `payment_method` column (empty select → null). */
+const optionalPaymentMethod = z
+  .union([paymentMethodEnum, z.literal(""), z.null(), z.undefined()])
+  .transform((v) => (v === "" || v === null || v === undefined ? null : v));
+
+// --- Categories ---------------------------------------------------------------
+
+export const categorySchema = z.object({
+  name: requiredText("Vui lòng nhập tên danh mục", 2).max(100, "Tên danh mục tối đa 100 ký tự"),
+  description: optionalText,
+  display_order: z.coerce.number().int("Thứ tự hiển thị phải là số nguyên").default(0),
+  is_active: z.boolean().default(true),
+});
+export type CategoryInput = z.infer<typeof categorySchema>;
 
 // --- Master data --------------------------------------------------------------
 
@@ -352,14 +409,9 @@ export const ingredientSchema = z.object({
   base_unit: requiredText("Đơn vị cơ sở là bắt buộc (vd: g, ml, pcs)"),
   import_unit: requiredText("Đơn vị nhập là bắt buộc (vd: kg, thùng, lít)"),
   conversion_factor: positiveNumber("Hệ số quy đổi phải lớn hơn 0"),
-  min_alert_stock: money("Mức cảnh báo tồn kho phải lớn hơn hoặc bằng 0"),
-  default_supplier_id: z
-    .string()
-    .trim()
-    .optional()
-    .nullable()
-    .transform((v) => (v ? v : null))
-    .refine((v) => v === null || z.string().uuid().safeParse(v).success, "Nhà cung cấp không hợp lệ"),
+  min_alert_stock: money("Mức cảnh báo tồn kho phải lớn hơn hoặc bằng 0").default(0),
+  default_price: money("Đơn giá nhập ngầm định phải lớn hơn hoặc bằng 0").optional().default(0),
+  default_supplier_id: optionalUuid("Nhà cung cấp không hợp lệ"),
   is_active: z.boolean().default(true),
   note: optionalText,
 });
@@ -369,8 +421,15 @@ export const menuItemSchema = z.object({
   code: optionalText,
   name: requiredText("Tên món là bắt buộc", 2),
   category: optionalText,
+  item_group: optionalText,
   selling_price: money("Giá bán phải lớn hơn hoặc bằng 0"),
+  tax_percent: z.coerce
+    .number({ invalid_type_error: "Thuế suất không hợp lệ" })
+    .min(0, "Thuế suất phải từ 0% đến 100%")
+    .max(100, "Thuế suất không được vượt quá 100%")
+    .default(0),
   is_active: z.boolean().default(true),
+  is_combo: z.boolean().default(false),
   description: optionalText,
   image_url: optionalUrl,
 });
@@ -388,6 +447,23 @@ export const recipeLineSchema = z.object({
 });
 export type RecipeLineInput = z.infer<typeof recipeLineSchema>;
 
+export const recipeImportRowSchema = z.object({
+  menu_item_code: optionalText,
+  menu_item_name: optionalText,
+  ingredient_code: optionalText,
+  ingredient_name: optionalText,
+  quantity: positiveNumber("Định lượng phải lớn hơn 0"),
+  waste_percent: z.coerce
+    .number({ invalid_type_error: "Tỷ lệ hao hụt không hợp lệ" })
+    .min(0, "Tỷ lệ hao hụt phải từ 0 đến 100")
+    .max(100, "Tỷ lệ hao hụt phải từ 0 đến 100")
+    .default(0),
+  unit: optionalText,
+  note: optionalText,
+});
+export type RecipeImportRowInput = z.infer<typeof recipeImportRowSchema>;
+
+/** Full BOM of one menu item (`/menu/[id]`): replaces `recipes` rows + updates the price. */
 export const recipeSchema = z
   .object({
     menu_item_id: uuid("Món ăn không hợp lệ"),
@@ -398,12 +474,52 @@ export const recipeSchema = z
     const seen = new Set<string>();
     val.lines.forEach((line, i) => {
       if (seen.has(line.ingredient_id)) {
-        ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["lines", i, "ingredient_id"], message: "Nguyên liệu bị trùng" });
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["lines", i, "ingredient_id"],
+          message: "Nguyên liệu bị trùng trong định lượng",
+        });
       }
       seen.add(line.ingredient_id);
     });
   });
 export type RecipeInput = z.infer<typeof recipeSchema>;
+
+export const comboLineSchema = z.object({
+  menu_item_id: uuid("Chưa chọn món ăn"),
+  quantity: positiveNumber("Số lượng phải lớn hơn 0"),
+  note: optionalText,
+});
+export type ComboLineInput = z.infer<typeof comboLineSchema>;
+
+/** Full child items list of one combo (`/menu/[id]`): replaces `combo_items` rows + updates the price. */
+export const comboSchema = z
+  .object({
+    combo_id: uuid("Combo không hợp lệ"),
+    selling_price: money("Giá bán phải lớn hơn hoặc bằng 0"),
+    lines: z.array(comboLineSchema),
+  })
+  .superRefine((val, ctx) => {
+    const seen = new Set<string>();
+    val.lines.forEach((line, i) => {
+      if (line.menu_item_id === val.combo_id) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["lines", i, "menu_item_id"],
+          message: "Combo không thể chứa chính nó",
+        });
+      }
+      if (seen.has(line.menu_item_id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["lines", i, "menu_item_id"],
+          message: "Món ăn bị trùng trong combo",
+        });
+      }
+      seen.add(line.menu_item_id);
+    });
+  });
+export type ComboInput = z.infer<typeof comboSchema>;
 
 export const supplierSchema = z.object({
   code: optionalText,
@@ -429,6 +545,7 @@ export const purchaseOrderItemSchema = z.object({
   ingredient_id: uuid("Chưa chọn nguyên liệu"),
   quantity: positiveNumber("Số lượng nhập phải lớn hơn 0"),
   unit_price: money("Đơn giá phải lớn hơn hoặc bằng 0"),
+  /** Defaults to the ingredient's `conversion_factor` on the DB side. */
   conversion_factor: z.coerce.number().positive("Hệ số quy đổi phải lớn hơn 0").optional(),
   unit: optionalText,
 });
@@ -440,29 +557,92 @@ export const purchaseOrderSchema = z
     order_date: dateString("Ngày nhập không hợp lệ"),
     due_date: optionalDate,
     invoice_number: optionalText,
+    invoice_image_url: optionalText,
     note: optionalText,
     items: z.array(purchaseOrderItemSchema).min(1, "Phiếu nhập phải có ít nhất một dòng"),
     paid_now: money("Số tiền trả ngay phải lớn hơn hoặc bằng 0").default(0),
     paid_method: paymentMethodEnum.default("cash"),
   })
   .refine(
-    (v) => v.paid_now <= v.items.reduce((sum, it) => sum + calcPoLine(it.quantity, it.unit_price, it.conversion_factor ?? 1).lineTotal, 0),
+    (v) =>
+      v.paid_now <=
+      v.items.reduce((sum, it) => sum + calcPoLine(it.quantity, it.unit_price, it.conversion_factor ?? 1).lineTotal, 0),
     { path: ["paid_now"], message: "Số tiền trả ngay không được vượt quá tổng phiếu nhập" }
   );
 export type PurchaseOrderInput = z.infer<typeof purchaseOrderSchema>;
+
+/** Sửa phần "mềm" của phiếu nhập (DATABASE.md §1.3/§4.2) — chỉ gửi các trường thực sự đổi. */
+export const purchaseOrderMetaSchema = z.object({
+  invoice_number: optionalText.optional(),
+  invoice_image_url: optionalText.optional(),
+  note: optionalText.optional(),
+  due_date: optionalDate.optional(),
+});
+export type PurchaseOrderMetaInput = z.infer<typeof purchaseOrderMetaSchema>;
+
+// --- Invoice OCR & Review Types -----------------------------------------------
+
+export interface InvoiceParsedItem {
+  raw_name: string;
+  quantity: number;
+  unit?: string | null;
+  unit_price: number;
+  line_total?: number;
+  note?: string | null;
+}
+
+export interface InvoiceParsedData {
+  supplier_name?: string | null;
+  supplier_tax_code?: string | null;
+  supplier_phone?: string | null;
+  supplier_address?: string | null;
+  invoice_number?: string | null;
+  order_date?: string | null;
+  items: InvoiceParsedItem[];
+  subtotal?: number;
+  tax_percent?: number;
+  tax_amount?: number;
+  total_amount?: number;
+  confidence_score?: number;
+}
+
+export interface MatchedInvoiceItem {
+  raw_name: string;
+  quantity: number;
+  unit: string;
+  unit_price: number;
+  line_total: number;
+  ingredient_id: string | null;
+  matched_ingredient_name: string | null;
+  conversion_factor: number;
+  match_confidence: "exact" | "high" | "partial" | "unmatched";
+}
+
+export interface InvoiceOcrReviewData {
+  image_url: string;
+  supplier_id: string | null;
+  supplier_name_raw: string | null;
+  supplier_match_confidence: "exact" | "partial" | "unmatched";
+  invoice_number: string;
+  order_date: string;
+  items: MatchedInvoiceItem[];
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  raw_extracted: InvoiceParsedData;
+}
+
+/** Thêm một dòng vào phiếu nhập đã tồn tại (sửa dòng = xóa + nhập lại, §7.1). */
+export const purchaseOrderLineSchema = purchaseOrderItemSchema;
+export type PurchaseOrderLineInput = z.infer<typeof purchaseOrderLineSchema>;
 
 export const supplierPaymentSchema = z.object({
   supplier_id: uuid("Chưa chọn nhà cung cấp"),
   amount: positiveNumber("Số tiền thanh toán phải lớn hơn 0"),
   payment_date: dateString("Ngày thanh toán không hợp lệ"),
   method: paymentMethodEnum.default("cash"),
-  purchase_order_id: z
-    .string()
-    .trim()
-    .optional()
-    .nullable()
-    .transform((v) => (v ? v : null))
-    .refine((v) => v === null || z.string().uuid().safeParse(v).success, "Phiếu nhập không hợp lệ"),
+  /** `null` → trừ dần theo FIFO toàn bộ công nợ NCC. */
+  purchase_order_id: optionalUuid("Phiếu nhập không hợp lệ"),
   reference: optionalText,
   note: optionalText,
 });
@@ -499,14 +679,8 @@ export const orderSchema = z.object({
   table_number: optionalText,
   payment_method: paymentMethodEnum.default("cash"),
   note: optionalText,
-  /** ISO timestamp; omitted → now() on the DB side. */
-  order_date: z
-    .string()
-    .trim()
-    .optional()
-    .nullable()
-    .transform((v) => (v ? v : null))
-    .refine((v) => v === null || !Number.isNaN(Date.parse(v)), "Thời gian đơn hàng không hợp lệ"),
+  /** ISO timestamp; `null` → `now()` on the DB side. */
+  order_date: optionalTimestamp,
 });
 export type OrderInput = z.infer<typeof orderSchema>;
 
@@ -536,10 +710,18 @@ export const employeeSchema = z
   })
   .superRefine((v, ctx) => {
     if (v.employment_type === "full_time" && v.base_salary <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["base_salary"], message: "Nhân viên toàn thời gian cần lương cơ bản lớn hơn 0" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["base_salary"],
+        message: "Nhân viên toàn thời gian cần lương cơ bản lớn hơn 0",
+      });
     }
     if (v.employment_type === "part_time" && v.hourly_rate <= 0) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["hourly_rate"], message: "Nhân viên bán thời gian cần lương theo giờ lớn hơn 0" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["hourly_rate"],
+        message: "Nhân viên bán thời gian cần lương theo giờ lớn hơn 0",
+      });
     }
     if (v.start_date && v.end_date && v.end_date < v.start_date) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["end_date"], message: "Ngày nghỉ việc phải sau ngày vào làm" });
@@ -554,6 +736,7 @@ export const timekeepingSchema = z
     shift: optionalText,
     check_in: optionalTime,
     check_out: optionalTime,
+    /** Bỏ trống → DB tự tính từ giờ vào/ra (`trg_timekeeping_before`). */
     hours_worked: z
       .union([z.coerce.number({ invalid_type_error: "Số giờ không hợp lệ" }), z.literal(""), z.null(), z.undefined()])
       .transform((v) => (v === "" || v === null || v === undefined ? null : v))
@@ -563,10 +746,433 @@ export const timekeepingSchema = z
   .superRefine((v, ctx) => {
     const hasTimes = Boolean(v.check_in && v.check_out);
     if (v.hours_worked === null && !hasTimes) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ["hours_worked"], message: "Cần nhập số giờ làm hoặc cả giờ vào và giờ ra" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["hours_worked"],
+        message: "Cần nhập số giờ làm hoặc cả giờ vào và giờ ra",
+      });
     }
     if ((v.check_in && !v.check_out) || (!v.check_in && v.check_out)) {
-      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [v.check_in ? "check_out" : "check_in"], message: "Cần nhập cả giờ vào và giờ ra" });
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [v.check_in ? "check_out" : "check_in"],
+        message: "Cần nhập cả giờ vào và giờ ra",
+      });
     }
   });
 export type TimekeepingInput = z.infer<typeof timekeepingSchema>;
+
+export const payrollPeriodSchema = z
+  .object({
+    name: requiredText("Tên kỳ lương là bắt buộc", 2),
+    period_start: dateString("Ngày bắt đầu không hợp lệ"),
+    period_end: dateString("Ngày kết thúc không hợp lệ"),
+    note: optionalText,
+  })
+  .refine((v) => v.period_start <= v.period_end, {
+    path: ["period_end"],
+    message: "Ngày kết thúc phải sau hoặc bằng ngày bắt đầu",
+  });
+export type PayrollPeriodInput = z.infer<typeof payrollPeriodSchema>;
+
+/** Editable columns of a `payroll_items` row while the period is `draft`. */
+export const payrollItemAdjustSchema = z.object({
+  bonus: money("Thưởng phải lớn hơn hoặc bằng 0").default(0),
+  tips: money("Tip phải lớn hơn hoặc bằng 0").default(0),
+  advance_deduction: money("Tạm ứng phải lớn hơn hoặc bằng 0").default(0),
+  penalty: money("Khấu trừ phải lớn hơn hoặc bằng 0").default(0),
+  note: optionalText,
+});
+export type PayrollItemAdjustInput = z.infer<typeof payrollItemAdjustSchema>;
+
+/** Arguments of `pay_payroll(p_period_id, p_method, p_paid_at)`. */
+export const payrollPaySchema = z.object({
+  method: paymentMethodEnum.default("bank_transfer"),
+  paid_at: optionalTimestamp,
+});
+export type PayrollPayInput = z.infer<typeof payrollPaySchema>;
+
+// --- Expenses -----------------------------------------------------------------
+
+export const expenseCategorySchema = z.object({
+  name: requiredText("Tên nhóm chi phí là bắt buộc", 2),
+  expense_type: expenseTypeEnum.default("variable"),
+  description: optionalText,
+  is_active: z.boolean().default(true),
+});
+export type ExpenseCategoryInput = z.infer<typeof expenseCategorySchema>;
+
+export const expenseRecordSchema = z
+  .object({
+    category_id: uuid("Chưa chọn nhóm chi phí"),
+    title: requiredText("Nội dung chi phí là bắt buộc", 2),
+    amount: money("Số tiền phải lớn hơn hoặc bằng 0"),
+    expense_date: dateString("Ngày chi không hợp lệ"),
+    status: expenseStatusEnum.default("pending"),
+    payment_method: optionalPaymentMethod,
+    paid_at: optionalTimestamp,
+    vendor: optionalText,
+    invoice_number: optionalText,
+    attachment_url: optionalUrl,
+    note: optionalText,
+  })
+  .superRefine((v, ctx) => {
+    if (v.status === "paid" && !v.payment_method) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["payment_method"],
+        message: "Chi phí đã thanh toán cần phương thức thanh toán",
+      });
+    }
+    if (v.status === "paid" && v.amount <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["amount"],
+        message: "Chi phí đã thanh toán phải có số tiền lớn hơn 0",
+      });
+    }
+  });
+export type ExpenseRecordInput = z.infer<typeof expenseRecordSchema>;
+
+export const markExpensePaidSchema = z.object({
+  id: uuid("Chi phí không hợp lệ"),
+  payment_method: paymentMethodEnum.default("cash"),
+  paid_at: optionalTimestamp,
+});
+export type MarkExpensePaidInput = z.infer<typeof markExpensePaidSchema>;
+
+// --- Auth ---------------------------------------------------------------------
+
+export const loginSchema = z.object({
+  email: z
+    .string({ required_error: "Email là bắt buộc" })
+    .trim()
+    .min(1, "Email là bắt buộc")
+    .email("Email không hợp lệ"),
+  password: z.string({ required_error: "Mật khẩu là bắt buộc" }).min(6, "Mật khẩu tối thiểu 6 ký tự"),
+  /** Đường dẫn nội bộ để quay lại sau khi đăng nhập (middleware gắn `?next=`). */
+  next: optionalText,
+});
+export type LoginInput = z.infer<typeof loginSchema>;
+
+/**
+ * Chỉ chấp nhận đường dẫn nội bộ dạng `/abc`: chặn URL tuyệt đối và
+ * protocol-relative (`//evil.example`) để tránh open redirect sau khi đăng nhập.
+ */
+export function safeNextPath(next: string | null | undefined, fallback = "/dashboard"): string {
+  const value = (next ?? "").trim();
+  if (!value) return fallback;
+  if (!value.startsWith("/")) return fallback;
+  if (value.startsWith("//")) return fallback;
+  if (value.includes("\\") || /[\u0000-\u001f]/.test(value)) return fallback;
+  return value;
+}
+
+// ============================================================================
+// 5. Pure helpers mirroring the SQL (views & triggers)
+// ============================================================================
+
+/** Round half-up to `digits` decimals, like Postgres `round(numeric, n)`. */
+function roundTo(value: number, digits: number): number {
+  if (!Number.isFinite(value)) return 0;
+  const f = 10 ** digits;
+  return Math.round((value + Number.EPSILON * Math.sign(value)) * f) / f;
+}
+
+function num(value: number | string | null | undefined): number {
+  if (value === null || value === undefined || value === "") return 0;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** `v_recipe_costs.component_cost` = round(quantity × (1 + waste%/100) × avg_cost_price, 2). */
+export function calcComponentCost(
+  qty: number | string | null | undefined,
+  wastePct: number | string | null | undefined,
+  avgCost: number | string | null | undefined
+): number {
+  return roundTo(num(qty) * (1 + num(wastePct) / 100) * num(avgCost), 2);
+}
+
+export interface RecipeTotals {
+  /** Σ component cost (VND). */
+  idealCost: number;
+  /** selling price − ideal cost (VND). */
+  contributionMargin: number;
+  /** ideal cost / selling price × 100, or `null` when the price is 0. */
+  foodCostPct: number | null;
+}
+
+/** `v_menu_item_costs` maths for a draft BOM (before it is saved). */
+export function calcRecipeTotals(
+  lines: { quantity: number | string; waste_percent: number | string; avg_cost_price: number | string }[],
+  sellingPrice: number | string | null | undefined
+): RecipeTotals {
+  const price = num(sellingPrice);
+  const idealCost = roundTo(
+    lines.reduce((sum, l) => sum + calcComponentCost(l.quantity, l.waste_percent, l.avg_cost_price), 0),
+    2
+  );
+  return {
+    idealCost,
+    contributionMargin: roundTo(price - idealCost, 2),
+    foodCostPct: price > 0 ? roundTo((idealCost / price) * 100, 2) : null,
+  };
+}
+
+export interface ComboTotals {
+  /** Tổng giá trị nếu mua lẻ từng món (VND). */
+  retailTotal: number;
+  /** Tiết kiệm được khi mua combo (VND). */
+  savings: number;
+  /** Tổng giá vốn của các món trong combo (VND). */
+  idealCost: number;
+  /** selling price − ideal cost (VND). */
+  contributionMargin: number;
+  /** ideal cost / selling price × 100, or `null` when the price is 0. */
+  foodCostPct: number | null;
+}
+
+export function calcComboTotals(
+  lines: Array<{
+    quantity: number | string;
+    item_selling_price: number;
+    item_ideal_cost: number;
+  }>,
+  sellingPrice: number | string | null | undefined
+): ComboTotals {
+  const price = num(sellingPrice);
+  let retailTotal = 0;
+  let idealCost = 0;
+
+  for (const l of lines) {
+    const q = num(l.quantity);
+    retailTotal += q * (l.item_selling_price || 0);
+    idealCost += q * (l.item_ideal_cost || 0);
+  }
+
+  const cm = price - idealCost;
+  const foodCostPct = price > 0 ? (idealCost / price) * 100 : null;
+  const savings = Math.max(0, retailTotal - price);
+
+  return {
+    retailTotal: roundTo(retailTotal, 2),
+    savings: roundTo(savings, 2),
+    idealCost: roundTo(idealCost, 2),
+    contributionMargin: roundTo(cm, 2),
+    foodCostPct: foodCostPct != null ? roundTo(foodCostPct, 2) : null,
+  };
+}
+
+export interface PoLineTotals {
+  /** `purchase_order_items.line_total` = round(quantity × unit_price, 2). */
+  lineTotal: number;
+  /** `purchase_order_items.base_quantity` = round(quantity × conversion_factor, 3). */
+  baseQty: number;
+  /** Giá vốn / đơn vị cơ sở = round(unit_price / conversion_factor, 4). */
+  costPerBase: number;
+}
+
+export function calcPoLine(
+  qty: number | string | null | undefined,
+  unitPrice: number | string | null | undefined,
+  conversionFactor: number | string | null | undefined
+): PoLineTotals {
+  const q = num(qty);
+  const price = num(unitPrice);
+  const factor = num(conversionFactor);
+  return {
+    lineTotal: roundTo(q * price, 2),
+    baseQty: factor > 0 ? roundTo(q * factor, 3) : 0,
+    costPerBase: factor > 0 ? roundTo(price / factor, 4) : 0,
+  };
+}
+
+/**
+ * Weighted-average cost after an import (mirrors `trg_po_items_after_insert`):
+ * with no positive stock the new average is simply the import cost per base unit.
+ */
+export function calcNewAvgCost(
+  oldStock: number | string | null | undefined,
+  oldAvg: number | string | null | undefined,
+  importQtyBase: number | string | null | undefined,
+  importCostPerBase: number | string | null | undefined
+): number {
+  const stock = num(oldStock);
+  const avg = num(oldAvg);
+  const qty = num(importQtyBase);
+  const cost = num(importCostPerBase);
+  if (stock <= 0 || stock + qty <= 0) return roundTo(cost, 4);
+  return roundTo((stock * avg + qty * cost) / (stock + qty), 4);
+}
+
+/** Food cost % → traffic light (DATABASE.md §7.10): danger > 35, warn 30–35. */
+export function classifyFoodCost(
+  pct: number | null | undefined
+): "unknown" | "ok" | "warn" | "danger" {
+  if (pct === null || pct === undefined || !Number.isFinite(pct)) return "unknown";
+  if (pct > FOOD_COST_DANGER) return "danger";
+  if (pct >= FOOD_COST_WARN) return "warn";
+  return "ok";
+}
+
+/** Trạng thái kỳ lương → badge tone (nháp = vàng, đã chốt = xanh dương, đã chi trả = xanh lá). */
+export function payrollStatusTone(status: PayrollStatus | null | undefined): BadgeTone {
+  switch (status) {
+    case "draft":
+      return "warning";
+    case "finalized":
+      return "info";
+    case "paid":
+      return "success";
+    default:
+      return "neutral";
+  }
+}
+
+/** Loại hợp đồng nhân viên → badge tone. */
+export function employmentTypeTone(type: EmploymentType | null | undefined): BadgeTone {
+  return type === "full_time" ? "info" : "neutral";
+}
+
+/** Kasavana-Smith class → badge tone. */
+export function menuClassTone(cls: MenuClass | null | undefined): BadgeTone {
+  switch (cls) {
+    case "star":
+      return "success";
+    case "plowhorse":
+      return "info";
+    case "puzzle":
+      return "warning";
+    case "dog":
+      return "danger";
+    default:
+      return "neutral";
+  }
+}
+
+// --- DB error mapping (DATABASE.md §8) ----------------------------------------
+
+const DB_ERROR_CODE_RE = /^([A-Z_]+):\s*([\s\S]*)$/;
+
+/** `error.message` = `'CODE: detail'` → Vietnamese message for the user. */
+export const DB_ERROR_MESSAGES: Record<string, string> = {
+  ALLOCATION_UPDATE_NOT_ALLOWED: "Không thể sửa phân bổ thanh toán. Hãy xóa và ghi lại phiếu chi.",
+  ALLOCATION_DELETE_NOT_ALLOWED: "Không thể xóa dòng phân bổ. Hãy xóa phiếu chi để hoàn tác.",
+  ALLOCATION_EXCEEDS_PAYMENT: "Tổng phân bổ vượt quá số tiền của phiếu chi.",
+  DISCOUNT_EXCEEDS_SUBTOTAL: "Giảm giá vượt quá tổng tiền hàng.",
+  EXPENSE_INVALID: "Chi phí đã thanh toán phải có hình thức thanh toán và số tiền lớn hơn 0.",
+  HOURS_REQUIRED: "Cần nhập số giờ làm hoặc cả giờ vào và giờ ra.",
+  INGREDIENT_NOT_FOUND: "Không tìm thấy nguyên liệu.",
+  INSUFFICIENT_STOCK: "Không đủ tồn kho.",
+  INVALID_AMOUNT: "Số tiền không hợp lệ.",
+  INVALID_CONVERSION: "Hệ số quy đổi phải lớn hơn 0.",
+  INVALID_QUANTITY: "Số lượng không hợp lệ.",
+  INVALID_RANGE: "Khoảng thời gian không hợp lệ.",
+  INVALID_SETTING: "Giá trị cấu hình không hợp lệ.",
+  INVALID_TXN_DATE: "Ngày ghi nhận không được ở tương lai.",
+  INVALID_TXN_TYPE: "Loại giao dịch kho không hợp lệ.",
+  LEDGER_IMMUTABLE: "Sổ kho không thể sửa hoặc xóa. Hãy tạo giao dịch điều chỉnh.",
+  LEDGER_MANUAL_FORBIDDEN:
+    "Không thể ghi tay dòng sổ kho này. Hãy dùng phiếu nhập, đơn hàng hoặc điều chỉnh kho.",
+  MENU_ITEM_INACTIVE: "Món ăn đã ngừng bán.",
+  MENU_ITEM_NOT_FOUND: "Không tìm thấy món ăn.",
+  ORDER_ALREADY_CANCELLED: "Đơn hàng đã bị hủy trước đó.",
+  ORDER_CANCEL_IRREVERSIBLE: "Đơn đã hủy không thể khôi phục. Hãy tạo đơn mới.",
+  ORDER_CANCELLED: "Đơn hàng đã hủy, không thể thêm món.",
+  ORDER_DATE_LOCKED: "Chỉ Chủ/Quản lý mới được đổi ngày của đơn đã tạo.",
+  ORDER_ITEMS_IMMUTABLE: "Không thể sửa dòng đơn hàng. Hãy hủy đơn và tạo lại.",
+  ORDER_ITEMS_REQUIRED: "Đơn hàng phải có ít nhất một món.",
+  ORDER_NOT_FOUND: "Không tìm thấy đơn hàng.",
+  PAYMENT_NOT_FOUND: "Không tìm thấy phiếu chi.",
+  PAYMENT_EXCEEDS_DEBT: "Số tiền thanh toán vượt quá tổng công nợ của nhà cung cấp.",
+  PAYMENT_EXCEEDS_PO_DEBT: "Số tiền thanh toán vượt quá công nợ còn lại của phiếu nhập.",
+  PAYMENT_UPDATE_NOT_ALLOWED: "Không thể sửa phiếu chi. Hãy xóa và ghi lại.",
+  PAYROLL_NOT_FINALIZED: "Cần chốt bảng lương trước khi chi trả.",
+  PAYROLL_NO_ITEMS: "Chưa tính lương cho kỳ này. Hãy tính lương trước.",
+  PAYROLL_PAYMENT_METHOD_REQUIRED: "Chọn hình thức chi lương trước khi đánh dấu đã trả.",
+  PAYROLL_PERIOD_LOCKED: "Kỳ lương đã chốt, không thể chỉnh sửa hoặc xóa.",
+  PAYROLL_PERIOD_NOT_FOUND: "Không tìm thấy kỳ lương.",
+  PAYROLL_PERIOD_PAID: "Kỳ lương đã chi trả, không thể thay đổi.",
+  PAYROLL_PERIOD_OVERLAP: "Kỳ lương bị trùng ngày với kỳ lương đã có. Hãy chọn khoảng ngày khác.",
+  NET_PAY_NEGATIVE: "Thực lĩnh âm: tạm ứng hoặc phạt lớn hơn thu nhập. Hãy giảm tạm ứng hoặc phạt.",
+  PERMISSION_DENIED: "Bạn không có quyền thực hiện thao tác này (cần Chủ/Quản lý).",
+  PO_ITEM_DELETE_FORBIDDEN: "Chỉ Chủ/Quản lý mới được xóa dòng phiếu nhập.",
+  PO_ITEM_UPDATE_NOT_ALLOWED: "Không thể sửa dòng nhập. Hãy xóa dòng và nhập lại.",
+  PO_ITEMS_REQUIRED: "Phiếu nhập phải có ít nhất một dòng.",
+  PO_NOT_FOUND: "Không tìm thấy phiếu nhập.",
+  PO_SUPPLIER_LOCKED: "Phiếu nhập đã có thanh toán, không thể đổi nhà cung cấp.",
+  PO_SUPPLIER_MISMATCH: "Phiếu nhập không thuộc nhà cung cấp đã chọn.",
+  PO_TOTAL_BELOW_PAID: "Tổng phiếu nhập không thể nhỏ hơn số tiền đã thanh toán.",
+  SEED_BLOCKED: "Không thể chạy dữ liệu mẫu trên cơ sở dữ liệu đang có người dùng thật.",
+  SUPPLIER_NOT_FOUND: "Không tìm thấy nhà cung cấp.",
+};
+
+/** Codes whose `detail` is meaningful to the user (appended to the message). */
+const DB_ERROR_WITH_DETAIL = new Set(["INSUFFICIENT_STOCK", "MENU_ITEM_INACTIVE"]);
+
+/** Native Postgres SQLSTATE → Vietnamese message (DATABASE.md §8, cuối mục). */
+export const PG_ERROR_MESSAGES: Record<string, string> = {
+  "23505": "Dữ liệu đã tồn tại (mã hoặc số phiếu bị trùng).",
+  "23503": "Không thể xóa: dữ liệu đang được sử dụng.",
+  "23514": "Giá trị không hợp lệ.",
+  "42501": "Không thể ghi trực tiếp giá trị này; hãy dùng chức năng nghiệp vụ tương ứng.",
+  "23P01": "Kỳ lương bị chồng lấn với một kỳ đã có.",
+  PGRST301: "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại.",
+  PGRST116: "Không tìm thấy dữ liệu.",
+};
+
+/** Extract the `CODE` prefix of a DB error message, or `null` when unknown. */
+export function dbErrorCode(message: string | null | undefined): string | null {
+  const m = DB_ERROR_CODE_RE.exec((message ?? "").trim());
+  return m ? m[1] : null;
+}
+
+export function isDbErrorCode(message: string | null | undefined, code: string): boolean {
+  return dbErrorCode(message) === code;
+}
+
+/** Shape of a Supabase/PostgREST error as far as error mapping is concerned. */
+export type DbErrorLike = { message?: string | null; code?: string | null };
+
+/** Patterns of raw (English) Postgres messages that arrive without a SQLSTATE. */
+const PG_MESSAGE_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/duplicate key value violates unique constraint/i, PG_ERROR_MESSAGES["23505"]],
+  [/violates foreign key constraint/i, PG_ERROR_MESSAGES["23503"]],
+  [/violates check constraint/i, PG_ERROR_MESSAGES["23514"]],
+  [/permission denied|row-level security/i, PG_ERROR_MESSAGES["42501"]],
+  [/conflicting key value violates exclusion constraint/i, "Kỳ lương bị chồng lấn với một kỳ đã có."],
+  [/JWT expired|invalid claim/i, "Phiên đăng nhập đã hết hạn. Hãy đăng nhập lại."],
+  [/JWT issued at future/i, "Phiên đăng nhập đang đồng bộ thời gian. Vui lòng tải lại trang."],
+];
+
+/**
+ * `'CODE: detail'` → câu tiếng Việt (docs/DATABASE.md §8).
+ * Nhận cả chuỗi `message` lẫn đối tượng lỗi `{ message, code }` của Supabase,
+ * để còn ánh xạ được SQLSTATE (23505, 23503...) khi trigger không ném mã nghiệp vụ.
+ */
+export function parseDbError(input: string | DbErrorLike | null | undefined): string {
+  const raw = (typeof input === "string" ? input : (input?.message ?? "")).trim();
+  const pgCode = typeof input === "string" ? null : (input?.code ?? null);
+
+  const m = DB_ERROR_CODE_RE.exec(raw);
+  if (m) {
+    const code = m[1];
+    const detail = m[2].trim();
+    const mapped = DB_ERROR_MESSAGES[code];
+    if (mapped) {
+      return DB_ERROR_WITH_DETAIL.has(code) && detail ? `${mapped.replace(/\.$/, "")}: ${detail}` : mapped;
+    }
+    // Mã nghiệp vụ chưa được ánh xạ: không bao giờ hiện chuỗi thô cho người dùng.
+    return "Đã xảy ra lỗi. Vui lòng thử lại hoặc liên hệ quản trị viên.";
+  }
+
+  if (pgCode && PG_ERROR_MESSAGES[pgCode]) return PG_ERROR_MESSAGES[pgCode];
+  if (PG_ERROR_MESSAGES[raw]) return PG_ERROR_MESSAGES[raw];
+  for (const [re, text] of PG_MESSAGE_PATTERNS) {
+    if (re.test(raw)) return text;
+  }
+
+  if (!raw) return "Đã xảy ra lỗi. Vui lòng thử lại.";
+  return raw;
+}

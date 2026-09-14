@@ -19,6 +19,7 @@
 set client_min_messages = warning;   -- hide 'does not exist, skipping' notices on re-runs
 
 create extension if not exists pgcrypto;
+create extension if not exists btree_gist;   -- D5: EXCLUDE constraint on payroll period ranges
 
 -- -----------------------------------------------------------------------------
 -- 1. ENUM TYPES  (kiểu liệt kê)
@@ -100,6 +101,22 @@ as $$
     p_default);
 $$;
 
+-- SEC-11: co "mo khoa" cho cac trigger bat bien (ledger noi bo / dong don hang).
+-- GUC `app.*` la placeholder tu do nen BAT KY role nao cung set duoc, va trigger chay
+-- SECURITY DEFINER (current_user luon = postgres) nen role khong phan biet duoc ai goi.
+-- Diem khac biet that su: moi lan ghi hop le deu la lenh LONG trong mot trigger khac
+-- (trg_po_items_*, trg_order_items_after_insert, trg_orders_after_cancel), tuc la
+-- pg_trigger_depth() >= 2 khi trigger kiem tra chay. Mot cau lenh go tay tu phien
+-- authenticated (SQL injection, edge function, ket noi pooled) chay o depth 1 ->
+-- co set GUC cung khong mo duoc khoa.
+create or replace function public.internal_unlocked(p_flag text)
+returns boolean
+language sql
+stable
+as $$
+  select coalesce(current_setting(p_flag, true), '') = 'on' and pg_trigger_depth() > 1;
+$$;
+
 -- Restaurant local timezone used to bucket orders into calendar days.
 -- Múi giờ dùng để gom đơn theo ngày (mặc định Asia/Ho_Chi_Minh).
 create or replace function public.app_timezone()
@@ -130,6 +147,18 @@ stable
 set search_path = public
 as $$
   select (p_date::timestamp) at time zone public.app_timezone();
+$$;
+
+-- D8: "today" in the restaurant's local timezone. Use this instead of current_date
+-- everywhere (column defaults, overdue comparisons, RPC date defaults) so that the
+-- business day does not follow the session TimeZone (UTC on Supabase).
+create or replace function public.local_today()
+returns date
+language sql
+stable
+set search_path = public
+as $$
+  select public.to_local_date(now());
 $$;
 
 -- -----------------------------------------------------------------------------
@@ -204,6 +233,26 @@ create trigger trg_suppliers_updated_at
   for each row execute function public.set_updated_at();
 
 -- -----------------------------------------------------------------------------
+-- 4b. INGREDIENT CATEGORIES (danh mục nguyên liệu)
+-- -----------------------------------------------------------------------------
+create table if not exists public.ingredient_categories (
+  id            uuid primary key default gen_random_uuid(),
+  name          text not null unique,
+  description   text,
+  display_order int not null default 0,
+  is_active     boolean not null default true,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index if not exists idx_ingredient_categories_display_order on public.ingredient_categories (display_order);
+
+drop trigger if exists trg_ingredient_categories_updated_at on public.ingredient_categories;
+create trigger trg_ingredient_categories_updated_at
+  before update on public.ingredient_categories
+  for each row execute function public.set_updated_at();
+
+-- -----------------------------------------------------------------------------
 -- 5. INGREDIENTS  (nguyên liệu)
 -- -----------------------------------------------------------------------------
 create table if not exists public.ingredients (
@@ -273,6 +322,14 @@ begin
   if new.quantity is null then
     raise exception 'INVALID_QUANTITY: quantity is required';
   end if;
+  -- T-04: 'purchase' / 'sale' / 'sale_reversal' rows are written by the PO-item,
+  -- order-item and cancel_order triggers only (they carry the matching stock move).
+  -- A hand-made row of those types would break stock == sum(ledger.quantity);
+  -- manual corrections must go through record_stock_adjustment.
+  if new.txn_type in ('purchase', 'sale', 'sale_reversal')
+     and not public.internal_unlocked('app.ledger_internal') then   -- SEC-11
+    raise exception 'LEDGER_MANUAL_FORBIDDEN: dùng phiếu nhập / đơn hàng hoặc điều chỉnh kho (waste/adjustment/stocktake)';
+  end if;
 
   select current_stock, avg_cost_price, name
     into v_stock, v_avg, v_name
@@ -331,15 +388,38 @@ create trigger trg_inventory_txn_immutable
   for each row execute function public.trg_ledger_immutable();
 
 -- -----------------------------------------------------------------------------
+-- 6b. MENU CATEGORIES (danh mục món ăn)
+-- -----------------------------------------------------------------------------
+create table if not exists public.menu_categories (
+  id            uuid primary key default gen_random_uuid(),
+  name          text not null unique,
+  description   text,
+  display_order int not null default 0,
+  is_active     boolean not null default true,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now()
+);
+
+create index if not exists idx_menu_categories_display_order on public.menu_categories (display_order);
+
+drop trigger if exists trg_menu_categories_updated_at on public.menu_categories;
+create trigger trg_menu_categories_updated_at
+  before update on public.menu_categories
+  for each row execute function public.set_updated_at();
+
+-- -----------------------------------------------------------------------------
 -- 7. MENU ITEMS & RECIPES  (món ăn & định lượng / BOM)
 -- -----------------------------------------------------------------------------
 create table if not exists public.menu_items (
   id            uuid primary key default gen_random_uuid(),
-  code          text unique,
+  code          text unique,                                                    -- 'MON-001'
   name          text not null,
-  category      text,
+  category      text,                                                           -- 'Khai vị', 'Món chính', 'Đồ uống'...
+  item_group    text,                                                           -- 'Trà trái cây', 'Cà phê', 'Món nướng'...
   selling_price numeric(14,2) not null default 0 check (selling_price >= 0),
+  tax_percent   numeric(5,2)  not null default 0 check (tax_percent >= 0 and tax_percent <= 100),
   is_active     boolean not null default true,
+  is_combo      boolean not null default false,
   description   text,
   image_url     text,
   created_at    timestamptz not null default now(),
@@ -347,6 +427,8 @@ create table if not exists public.menu_items (
 );
 
 create index if not exists idx_menu_items_category on public.menu_items (category);
+create index if not exists idx_menu_items_item_group on public.menu_items (item_group);
+create index if not exists idx_menu_items_is_combo on public.menu_items (is_combo);
 
 drop trigger if exists trg_menu_items_updated_at on public.menu_items;
 create trigger trg_menu_items_updated_at
@@ -373,6 +455,58 @@ create trigger trg_recipes_updated_at
   before update on public.recipes
   for each row execute function public.set_updated_at();
 
+-- Combo items (món thành phần trong Combo / Set menu)
+create table if not exists public.combo_items (
+  id            uuid primary key default gen_random_uuid(),
+  combo_id      uuid not null references public.menu_items (id) on delete cascade,
+  menu_item_id  uuid not null references public.menu_items (id),
+  quantity      numeric(10,2) not null check (quantity > 0),
+  note          text,
+  created_at    timestamptz not null default now(),
+  updated_at    timestamptz not null default now(),
+  unique (combo_id, menu_item_id)
+);
+
+create index if not exists idx_combo_items_combo on public.combo_items (combo_id);
+create index if not exists idx_combo_items_menu_item on public.combo_items (menu_item_id);
+
+drop trigger if exists trg_combo_items_updated_at on public.combo_items;
+create trigger trg_combo_items_updated_at
+  before update on public.combo_items
+  for each row execute function public.set_updated_at();
+
+-- Combo validation: combo_id != menu_item_id, combo_id.is_combo = true, menu_item_id.is_combo = false
+create or replace function public.trg_combo_items_validate()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_is_combo boolean;
+  v_child_is_combo boolean;
+begin
+  if new.combo_id = new.menu_item_id then
+    raise exception 'INVALID_COMBO_ITEM: combo không thể chứa chính nó';
+  end if;
+
+  select is_combo into v_is_combo from public.menu_items where id = new.combo_id;
+  if not coalesce(v_is_combo, false) then
+    raise exception 'INVALID_COMBO_ITEM: món cha không phải là combo';
+  end if;
+
+  select is_combo into v_child_is_combo from public.menu_items where id = new.menu_item_id;
+  if coalesce(v_child_is_combo, false) then
+    raise exception 'INVALID_COMBO_ITEM: không thể lồng combo vào trong combo khác';
+  end if;
+
+  return new;
+end $$;
+
+drop trigger if exists trg_combo_items_validate on public.combo_items;
+create trigger trg_combo_items_validate
+  before insert or update on public.combo_items
+  for each row execute function public.trg_combo_items_validate();
+
 -- -----------------------------------------------------------------------------
 -- 8. PURCHASE ORDERS  (phiếu nhập hàng)
 -- -----------------------------------------------------------------------------
@@ -380,13 +514,14 @@ create table if not exists public.purchase_orders (
   id             uuid primary key default gen_random_uuid(),
   po_number      text unique,                                                    -- auto 'PO-yyyymmdd-0001' (from order_date)
   supplier_id    uuid not null references public.suppliers (id),
-  order_date     date not null default current_date,
+  order_date     date not null default public.local_today(),
   due_date       date,                                                           -- default order_date + supplier.payment_terms_days
   total_amount   numeric(14,2) not null default 0,                               -- MAINTAINED = sum(items.line_total)
   paid_amount    numeric(14,2) not null default 0,                               -- MAINTAINED by payment allocations
   debt_amount    numeric(14,2) generated always as (total_amount - paid_amount) stored,
   payment_status public.po_payment_status not null default 'unpaid',            -- MAINTAINED
   invoice_number text,
+  invoice_image_url text,
   note           text,
   created_by     uuid default auth.uid(),
   created_at     timestamptz not null default now(),
@@ -395,9 +530,12 @@ create table if not exists public.purchase_orders (
 
 create index if not exists idx_purchase_orders_supplier_due on public.purchase_orders (supplier_id, due_date);
 create index if not exists idx_purchase_orders_order_date on public.purchase_orders (order_date);
+-- SEC-13: next_po_number() dung `po_number like 'PO-yyyymmdd-%'`; index unique mac dinh
+-- khong phuc vu duoc LIKE-prefix voi collation en_US.UTF-8 -> them text_pattern_ops.
+create index if not exists idx_purchase_orders_po_number_pattern on public.purchase_orders (po_number text_pattern_ops);
 
 -- Next PO number for a date: PO-YYYYMMDD-#### (serialized with an advisory lock).
-create or replace function public.next_po_number(p_date date default current_date)
+create or replace function public.next_po_number(p_date date default public.local_today())
 returns text
 language plpgsql
 set search_path = public
@@ -426,7 +564,7 @@ declare
 begin
   if tg_op = 'INSERT' then
     if new.order_date is null then
-      new.order_date := current_date;
+      new.order_date := public.local_today();
     end if;
     if new.po_number is null or new.po_number = '' then
       new.po_number := public.next_po_number(new.order_date);
@@ -437,6 +575,22 @@ begin
         raise exception 'SUPPLIER_NOT_FOUND: %', new.supplier_id;
       end if;
       new.due_date := new.order_date + v_terms;
+    end if;
+  else
+    -- T-12/D14: supplier_payments rows keep their own supplier_id, so moving the PO
+    -- to another supplier would misattribute the money already paid against it.
+    if new.supplier_id is distinct from old.supplier_id
+       and exists (select 1 from public.supplier_payment_allocations where purchase_order_id = old.id
+                   union all
+                   select 1 from public.supplier_payments where purchase_order_id = old.id) then
+      raise exception 'PO_SUPPLIER_LOCKED: phiếu nhập % đã có thanh toán, không thể đổi nhà cung cấp', old.po_number;
+    end if;
+    -- BL-10/D10: the due date follows the order date unless it is set explicitly in
+    -- the same UPDATE (otherwise a re-dated PO keeps a due date from the old date).
+    if new.order_date is distinct from old.order_date
+       and new.due_date is not distinct from old.due_date then
+      select payment_terms_days into v_terms from public.suppliers where id = new.supplier_id;
+      new.due_date := new.order_date + coalesce(v_terms, 0);
     end if;
   end if;
 
@@ -574,6 +728,12 @@ declare
   v_po_date      date;
   v_txn_at       timestamptz;
 begin
+  -- T-02: lock the parent PO BEFORE the total is recomputed from the line aggregate.
+  -- Without the lock two concurrent inserts each compute the sum from their own
+  -- snapshot and the later write silently drops the other line from total_amount.
+  select po_number, order_date into v_po_number, v_po_date
+    from public.purchase_orders where id = new.purchase_order_id for update;
+
   select current_stock, avg_cost_price into v_stock, v_avg
     from public.ingredients where id = new.ingredient_id for update;
 
@@ -592,16 +752,17 @@ begin
          avg_cost_price = v_new_avg
    where id = new.ingredient_id;
 
-  select po_number, order_date into v_po_number, v_po_date from public.purchase_orders where id = new.purchase_order_id;
   -- ledger row dated at the PO's business date (09:00 local) when the PO is backdated
   v_txn_at := case when v_po_date is null or v_po_date >= public.to_local_date(now()) then now()
                    else public.local_day_start(v_po_date) + interval '9 hours' end;
 
+  perform set_config('app.ledger_internal', 'on', true);
   insert into public.inventory_transactions
     (ingredient_id, txn_type, quantity, unit_cost, stock_after, reference_type, reference_id, note, created_at)
   values
     (new.ingredient_id, 'purchase', v_base_qty, v_cost_base, v_new_stock, 'purchase_order_item', new.id,
      'Nhập hàng ' || coalesce(v_po_number, ''), v_txn_at);
+  perform set_config('app.ledger_internal', 'off', true);
 
   update public.purchase_orders
      set total_amount = (select coalesce(sum(line_total), 0) from public.purchase_order_items where purchase_order_id = new.purchase_order_id)
@@ -629,6 +790,19 @@ declare
   v_new_stock numeric(14,3);
   v_po_number text;
 begin
+  -- BL-01/D10: deleting a PO line un-does the stock but NOT the weighted average
+  -- cost it moved (that would need the full purchase history) - restrict it to
+  -- manager/owner so the avg cost drift stays a deliberate, traceable act.
+  if not public.is_manager() then
+    raise exception 'PO_ITEM_DELETE_FORBIDDEN: chỉ quản lý mới được xóa dòng phiếu nhập';
+  end if;
+
+  -- T-02: lock the parent PO first (same order as the insert trigger) so the
+  -- total_amount recompute below sees a fresh snapshot. The row may already be
+  -- gone when the delete cascades from purchase_orders - then nothing is locked.
+  select po_number into v_po_number
+    from public.purchase_orders where id = old.purchase_order_id for update;
+
   select current_stock, name into v_stock, v_name
     from public.ingredients where id = old.ingredient_id for update;
 
@@ -639,13 +813,13 @@ begin
 
   update public.ingredients set current_stock = v_new_stock where id = old.ingredient_id;
 
-  select po_number into v_po_number from public.purchase_orders where id = old.purchase_order_id;
-
+  perform set_config('app.ledger_internal', 'on', true);
   insert into public.inventory_transactions
     (ingredient_id, txn_type, quantity, unit_cost, stock_after, reference_type, reference_id, note)
   values
     (old.ingredient_id, 'purchase', -old.base_quantity, round(old.unit_price / old.conversion_factor, 4), v_new_stock,
      'purchase_order_item', old.id, 'Xóa dòng nhập ' || coalesce(v_po_number, ''));
+  perform set_config('app.ledger_internal', 'off', true);
 
   -- PO may already be gone when the delete cascades from purchase_orders.
   update public.purchase_orders
@@ -683,7 +857,7 @@ create table if not exists public.supplier_payments (
   supplier_id       uuid not null references public.suppliers (id),
   purchase_order_id uuid references public.purchase_orders (id),               -- đích danh PO (null = trừ dần FIFO)
   amount            numeric(14,2) not null check (amount > 0),
-  payment_date      date not null default current_date,
+  payment_date      date not null default public.local_today(),
   method            public.payment_method not null default 'cash',
   reference         text,
   note              text,
@@ -711,12 +885,51 @@ returns trigger
 language plpgsql
 set search_path = public
 as $$
+declare
+  v_pay_supplier uuid;
+  v_pay_amount   numeric(14,2);
+  v_allocated    numeric(14,2);
+  v_po_supplier  uuid;
+  v_po_number    text;
+  v_po_debt      numeric(14,2);
 begin
   if tg_op = 'INSERT' then
-    perform 1 from public.purchase_orders where id = new.purchase_order_id for update;
+    -- T-01/D10: an allocation row moves real money (paid_amount -> supplier debt),
+    -- so it is validated here as well as in the payment trigger: the table is
+    -- REST-exposed and a hand-made row must not be able to erase debt.
+    select supplier_id, amount into v_pay_supplier, v_pay_amount
+      from public.supplier_payments where id = new.payment_id for update;
+    if not found then
+      raise exception 'PAYMENT_NOT_FOUND: %', new.payment_id;
+    end if;
+
+    select supplier_id, po_number, debt_amount into v_po_supplier, v_po_number, v_po_debt
+      from public.purchase_orders where id = new.purchase_order_id for update;
+    if not found then
+      raise exception 'PO_NOT_FOUND: %', new.purchase_order_id;
+    end if;
+    if v_po_supplier <> v_pay_supplier then
+      raise exception 'PO_SUPPLIER_MISMATCH: PO % does not belong to supplier %', v_po_number, v_pay_supplier;
+    end if;
+    if new.amount > v_po_debt then
+      raise exception 'PAYMENT_EXCEEDS_PO_DEBT: PO % còn nợ %, phân bổ %', v_po_number, v_po_debt, new.amount;
+    end if;
+
+    -- the new row is already visible to this AFTER trigger
+    select coalesce(sum(amount), 0) into v_allocated
+      from public.supplier_payment_allocations where payment_id = new.payment_id;
+    if v_allocated > v_pay_amount then
+      raise exception 'ALLOCATION_EXCEEDS_PAYMENT: phiếu chi %, đã phân bổ %', v_pay_amount, v_allocated;
+    end if;
+
     update public.purchase_orders set paid_amount = paid_amount + new.amount where id = new.purchase_order_id;
     return new;
   elsif tg_op = 'DELETE' then
+    -- Allocations are only removed together with their payment (cascade); a direct
+    -- delete would re-create debt with no trace of the money that was paid.
+    if exists (select 1 from public.supplier_payments where id = old.payment_id) then
+      raise exception 'ALLOCATION_DELETE_NOT_ALLOWED: xóa phiếu chi để hoàn tác, không xóa dòng phân bổ';
+    end if;
     perform 1 from public.purchase_orders where id = old.purchase_order_id for update;
     update public.purchase_orders set paid_amount = paid_amount - old.amount where id = old.purchase_order_id;
     return old;
@@ -853,7 +1066,7 @@ create trigger trg_employees_updated_at
 create table if not exists public.timekeeping (
   id           uuid primary key default gen_random_uuid(),
   employee_id  uuid not null references public.employees (id) on delete cascade,
-  work_date    date not null,
+  work_date    date not null default public.local_today(),
   shift        text,                                                 -- 'Sáng' | 'Chiều' | 'Tối' | 'Full' ...
   check_in     time,
   check_out    time,
@@ -919,7 +1132,10 @@ create table if not exists public.payroll_periods (
   created_at     timestamptz not null default now(),
   updated_at     timestamptz not null default now(),
   check (period_end >= period_start),
-  unique (period_start, period_end)
+  unique (period_start, period_end),
+  -- D5 / BL-04: two payroll periods may never overlap, otherwise the same
+  -- timekeeping can be paid twice and the P&L counts both.
+  exclude using gist (daterange(period_start, period_end, '[]') with &&)
 );
 
 create index if not exists idx_payroll_periods_dates on public.payroll_periods (period_start, period_end);
@@ -934,13 +1150,30 @@ begin
   if old.status = 'paid' and new.status <> 'paid' then
     raise exception 'PAYROLL_PERIOD_PAID: a paid period cannot be changed';
   end if;
+  -- T-05: 'paid' is terminal, so the paid period's identity is frozen too
+  -- (re-dating it would move recorded labor cost between P&L months).
+  if old.status = 'paid'
+     and (new.period_start <> old.period_start
+          or new.period_end <> old.period_end
+          or new.name <> old.name
+          or new.payment_method is distinct from old.payment_method) then
+    raise exception 'PAYROLL_PERIOD_PAID: a paid period cannot be changed';
+  end if;
   if new.status = 'paid' and old.status <> 'paid' then
     if old.status <> 'finalized' then
       raise exception 'PAYROLL_NOT_FINALIZED: finalize the period before paying it';
     end if;
+    -- T-07: a direct status update must not bypass what pay_payroll guarantees.
+    if new.payment_method is null then
+      raise exception 'PAYROLL_PAYMENT_METHOD_REQUIRED: chọn hình thức chi lương trước khi đánh dấu đã trả';
+    end if;
     new.paid_at := coalesce(new.paid_at, now());
   end if;
   if new.status = 'finalized' and old.status = 'draft' then
+    -- T-07: finalizing an empty period would record a zero labor cost as final.
+    if not exists (select 1 from public.payroll_items where payroll_period_id = old.id) then
+      raise exception 'PAYROLL_NO_ITEMS: kỳ lương chưa có bảng lương, hãy tạo bảng lương trước';
+    end if;
     new.finalized_at := coalesce(new.finalized_at, now());
   end if;
   if new.status = 'draft' and old.status = 'finalized' then
@@ -954,6 +1187,32 @@ drop trigger if exists trg_payroll_periods_before_update on public.payroll_perio
 create trigger trg_payroll_periods_before_update
   before update on public.payroll_periods
   for each row execute function public.trg_payroll_periods_before_update();
+
+-- D5 / BL-04: the EXCLUDE constraint above is the real guarantee, but it reports
+-- SQLSTATE 23P01 with a constraint name. Raise a readable application code first.
+create or replace function public.trg_payroll_periods_no_overlap()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  v_other text;
+begin
+  select name into v_other
+    from public.payroll_periods
+   where id <> new.id
+     and daterange(period_start, period_end, '[]') && daterange(new.period_start, new.period_end, '[]')
+   limit 1;
+  if v_other is not null then
+    raise exception 'PAYROLL_PERIOD_OVERLAP: kỳ lương % trùng ngày với kỳ lương đã có (%)', new.name, v_other;
+  end if;
+  return new;
+end $$;
+
+drop trigger if exists trg_payroll_periods_no_overlap on public.payroll_periods;
+create trigger trg_payroll_periods_no_overlap
+  before insert or update of period_start, period_end on public.payroll_periods
+  for each row execute function public.trg_payroll_periods_no_overlap();
 
 create table if not exists public.payroll_items (
   id                uuid primary key default gen_random_uuid(),
@@ -969,19 +1228,31 @@ create table if not exists public.payroll_items (
   advance_deduction numeric(14,2) not null default 0,
   penalty           numeric(14,2) not null default 0,
   net_pay           numeric(14,2) generated always as (base_pay + allowance + bonus + tips - advance_deduction - penalty) stored,
+  -- D6 / BL-03: labor COST for the P&L. An advance is a cash prepayment of wages
+  -- already earned, not a reduction of the expense, so it is not deducted here.
+  gross_pay         numeric(14,2) generated always as (base_pay + allowance + bonus + tips - penalty) stored,
   is_paid           boolean not null default false,
   paid_at           timestamptz,
   note              text,
   created_at        timestamptz not null default now(),
   updated_at        timestamptz not null default now(),
-  unique (payroll_period_id, employee_id)
+  unique (payroll_period_id, employee_id),
+  -- SEC-09: money/time columns are amounts, never negative.
+  check (total_hours >= 0),
+  check (total_days >= 0),
+  check (base_pay >= 0),
+  check (allowance >= 0),
+  check (bonus >= 0),
+  check (tips >= 0),
+  check (advance_deduction >= 0),
+  check (penalty >= 0)
 );
 
 create index if not exists idx_payroll_items_period on public.payroll_items (payroll_period_id);
 create index if not exists idx_payroll_items_employee on public.payroll_items (employee_id);
 
--- Items may only change while the period is 'draft' (pay_payroll unlocks via a
--- transaction-local setting app.payroll_unlock = 'on').
+-- Items may only change while the period is 'draft'; once finalized/paid the only
+-- accepted UPDATE is pay_payroll marking is_paid/paid_at (SEC-11, no GUC unlock).
 create or replace function public.trg_payroll_items_guard()
 returns trigger
 language plpgsql
@@ -996,11 +1267,26 @@ begin
     -- period is being deleted (cascade) or does not exist; FK handles the latter
     return case when tg_op = 'DELETE' then old else new end;
   end if;
-  if v_status <> 'draft' and coalesce(current_setting('app.payroll_unlock', true), '') <> 'on' then
+  -- SEC-11: pay_payroll chi danh dau da tra (is_paid/paid_at) nen khong can GUC mo
+  -- khoa nua: ky da chot chi cho phep UPDATE khong dong den bat ky cot nao khac.
+  -- (net_pay/gross_pay la GENERATED nen con null trong BEFORE trigger -> loai ra.)
+  if v_status <> 'draft'
+     and (tg_op <> 'UPDATE'
+          or (to_jsonb(new) - 'is_paid' - 'paid_at' - 'updated_at' - 'net_pay' - 'gross_pay')
+             is distinct from
+             (to_jsonb(old) - 'is_paid' - 'paid_at' - 'updated_at' - 'net_pay' - 'gross_pay')) then
     raise exception 'PAYROLL_PERIOD_LOCKED: period is %, items can only be edited in draft', v_status;
   end if;
   if tg_op = 'UPDATE' then
     new.updated_at := now();
+  end if;
+  -- D5 / T-15: an item may never pay out a negative amount (an advance or a
+  -- penalty larger than the earnings). net_pay is GENERATED, so it is still null
+  -- in a BEFORE trigger - recompute it here to surface a clear error code.
+  if tg_op in ('INSERT', 'UPDATE')
+     and (new.base_pay + new.allowance + new.bonus + new.tips
+          - new.advance_deduction - new.penalty) < 0 then
+    raise exception 'NET_PAY_NEGATIVE: thực lĩnh âm (tạm ứng/phạt lớn hơn thu nhập), hãy giảm tạm ứng hoặc phạt';
   end if;
   return case when tg_op = 'DELETE' then old else new end;
 end $$;
@@ -1039,15 +1325,21 @@ create table if not exists public.expense_categories (
   expense_type public.expense_type not null default 'variable',
   description  text,
   is_active    boolean not null default true,
-  created_at   timestamptz not null default now()
+  created_at   timestamptz not null default now(),
+  updated_at   timestamptz not null default now()          -- SEC-15: every mutable table carries it
 );
+
+drop trigger if exists trg_expense_categories_updated_at on public.expense_categories;
+create trigger trg_expense_categories_updated_at
+  before update on public.expense_categories
+  for each row execute function public.set_updated_at();
 
 create table if not exists public.expense_records (
   id             uuid primary key default gen_random_uuid(),
   category_id    uuid not null references public.expense_categories (id),
   title          text not null,
   amount         numeric(14,2) not null default 0 check (amount >= 0),
-  expense_date   date not null default current_date,
+  expense_date   date not null default public.local_today(),
   status         public.expense_status not null default 'pending',
   payment_method public.payment_method,
   paid_at        timestamptz,
@@ -1075,6 +1367,16 @@ begin
   end if;
   if new.status = 'pending' then
     new.paid_at := null;
+  end if;
+  -- T-16/D14: a paid expense is real money leaving the till - it needs a method
+  -- and an amount, otherwise it is an empty row that still lands in the P&L.
+  if new.status = 'paid' then
+    if new.payment_method is null then
+      raise exception 'EXPENSE_INVALID: chi phí đã thanh toán phải có hình thức thanh toán';
+    end if;
+    if coalesce(new.amount, 0) <= 0 then
+      raise exception 'EXPENSE_INVALID: chi phí đã thanh toán phải có số tiền > 0';
+    end if;
   end if;
   if tg_op = 'UPDATE' then
     new.updated_at := now();
@@ -1108,8 +1410,10 @@ create table if not exists public.orders (
 );
 
 create index if not exists idx_orders_date_status on public.orders (order_date, status);
+-- SEC-13: next_order_number() dung `order_number like 'ORD-yyyymmdd-%'` (xem ghi chu o PO).
+create index if not exists idx_orders_number_pattern on public.orders (order_number text_pattern_ops);
 
-create or replace function public.next_order_number(p_date date default current_date)
+create or replace function public.next_order_number(p_date date default public.local_today())
 returns text
 language plpgsql
 set search_path = public
@@ -1144,12 +1448,24 @@ begin
     if old.status = 'cancelled' and new.status = 'completed' then
       raise exception 'ORDER_CANCEL_IRREVERSIBLE: a cancelled order cannot be completed again';
     end if;
+    -- D9/T-11: order_date drives order_number and the date of the 'sale' ledger
+    -- rows, which are NOT rewritten - only a manager/owner may move it afterwards.
+    if new.order_date is distinct from old.order_date and not public.is_manager() then
+      raise exception 'ORDER_DATE_LOCKED: chỉ quản lý mới được đổi ngày của đơn đã tạo';
+    end if;
     new.updated_at := now();
   end if;
   new.subtotal     := round(coalesce(new.subtotal, 0), 2);
   new.discount     := round(coalesce(new.discount, 0), 2);
   new.total_amount := new.subtotal - new.discount;
   new.total_cogs   := round(coalesce(new.total_cogs, 0), 2);
+  -- D9/T-03: a discount may never exceed the subtotal (total_amount < 0). Checked
+  -- when the discount itself moves: while create_order is still inserting lines the
+  -- subtotal is intentionally partial (the RPC re-checks once every line is in).
+  if tg_op = 'UPDATE' and new.discount is distinct from old.discount
+     and new.discount > new.subtotal then
+    raise exception 'DISCOUNT_EXCEEDS_SUBTOTAL: giảm giá % > tạm tính %', new.discount, new.subtotal;
+  end if;
   return new;
 end $$;
 
@@ -1185,6 +1501,7 @@ declare
   v_status       public.order_status;
   v_order_number text;
   v_order_date   timestamptz;
+  v_is_combo     boolean;
   v_cogs         numeric(14,2) := 0;
   v_line_cost    numeric(14,2);
   r              record;
@@ -1194,26 +1511,63 @@ begin
   if not found then
     raise exception 'ORDER_NOT_FOUND: %', new.order_id;
   end if;
+  -- D9/T-11: a cancelled order is closed - appending lines would grow its
+  -- subtotal/total with no stock movement behind them.
+  if v_status = 'cancelled' then
+    raise exception 'ORDER_CANCELLED: đơn % đã hủy, không thể thêm món', coalesce(v_order_number, new.order_id::text);
+  end if;
 
   if v_status = 'completed' then
-    for r in
-      select rc.ingredient_id,
-             round(rc.quantity * (1 + coalesce(rc.waste_percent, 0) / 100) * new.quantity, 3) as qty_out
-        from public.recipes rc
-       where rc.menu_item_id = new.menu_item_id
-    loop
-      if r.qty_out <= 0 then
-        continue;
-      end if;
-      -- ledger row is dated at the order's business time (order_date), see docs
-      insert into public.inventory_transactions
-        (ingredient_id, txn_type, quantity, reference_type, reference_id, note, created_at)
-      values
-        (r.ingredient_id, 'sale', -r.qty_out, 'order_item', new.id, 'Bán ' || coalesce(v_order_number, '') || ' - ' || new.menu_item_name,
-         coalesce(v_order_date, now()))
-      returning total_cost into v_line_cost;
-      v_cogs := v_cogs + coalesce(v_line_cost, 0);
-    end loop;
+    select coalesce(is_combo, false) into v_is_combo from public.menu_items where id = new.menu_item_id;
+
+    if not v_is_combo then
+      -- Món đơn lẻ: trừ kho trực tiếp theo recipes của món
+      for r in
+        select rc.ingredient_id,
+               round(rc.quantity * (1 + coalesce(rc.waste_percent, 0) / 100) * new.quantity, 3) as qty_out
+          from public.recipes rc
+         where rc.menu_item_id = new.menu_item_id
+      loop
+        if r.qty_out <= 0 then
+          continue;
+        end if;
+        -- ledger row is dated at the order's business time (order_date), see docs
+        perform set_config('app.ledger_internal', 'on', true);
+        insert into public.inventory_transactions
+          (ingredient_id, txn_type, quantity, reference_type, reference_id, note, created_at)
+        values
+          (r.ingredient_id, 'sale', -r.qty_out, 'order_item', new.id, 'Bán ' || coalesce(v_order_number, '') || ' - ' || new.menu_item_name,
+           coalesce(v_order_date, now()))
+        returning total_cost into v_line_cost;
+        perform set_config('app.ledger_internal', 'off', true);
+        v_cogs := v_cogs + coalesce(v_line_cost, 0);
+      end loop;
+    else
+      -- Món dạng Combo: trừ kho các nguyên liệu của từng món con trong combo
+      for r in
+        select rc.ingredient_id,
+               round(rc.quantity * (1 + coalesce(rc.waste_percent, 0) / 100) * ci.quantity * new.quantity, 3) as qty_out,
+               child.name as child_name
+          from public.combo_items ci
+          join public.recipes rc on rc.menu_item_id = ci.menu_item_id
+          join public.menu_items child on child.id = ci.menu_item_id
+         where ci.combo_id = new.menu_item_id
+      loop
+        if r.qty_out <= 0 then
+          continue;
+        end if;
+        perform set_config('app.ledger_internal', 'on', true);
+        insert into public.inventory_transactions
+          (ingredient_id, txn_type, quantity, reference_type, reference_id, note, created_at)
+        values
+          (r.ingredient_id, 'sale', -r.qty_out, 'order_item', new.id,
+           'Bán ' || coalesce(v_order_number, '') || ' - ' || new.menu_item_name || ' (' || r.child_name || ')',
+           coalesce(v_order_date, now()))
+        returning total_cost into v_line_cost;
+        perform set_config('app.ledger_internal', 'off', true);
+        v_cogs := v_cogs + coalesce(v_line_cost, 0);
+      end loop;
+    end if;
 
     -- Set cogs on the row we just inserted (no UPDATE trigger recursion: the
     -- immutability guard below allows this via the transaction-local flag).
@@ -1242,7 +1596,7 @@ language plpgsql
 set search_path = public
 as $$
 begin
-  if coalesce(current_setting('app.order_items_unlock', true), '') = 'on' then
+  if public.internal_unlocked('app.order_items_unlock') then   -- SEC-11
     return case when tg_op = 'DELETE' then old else new end;
   end if;
   raise exception 'ORDER_ITEMS_IMMUTABLE: order lines cannot be updated or deleted; cancel the order instead';
@@ -1273,11 +1627,13 @@ begin
          and oi.order_id = new.id
        order by it.created_at, it.id
     loop
+      perform set_config('app.ledger_internal', 'on', true);
       insert into public.inventory_transactions
         (ingredient_id, txn_type, quantity, unit_cost, reference_type, reference_id, note)
       values
         (r.ingredient_id, 'sale_reversal', -r.quantity, r.unit_cost, 'order_item', r.reference_id,
          'Hủy đơn ' || coalesce(new.order_number, ''));
+      perform set_config('app.ledger_internal', 'off', true);
     end loop;
   end if;
   return null;
@@ -1314,39 +1670,106 @@ select
 from public.recipes r
 join public.ingredients i on i.id = r.ingredient_id;
 
--- Per menu item: ideal cost, contribution margin, food cost %.
+-- Detail view for combo items with child costs and selling prices
+create or replace view public.v_combo_items
+with (security_invoker = true) as
+select
+  ci.id,
+  ci.combo_id,
+  ci.menu_item_id,
+  m.code                                        as item_code,
+  m.name                                        as item_name,
+  m.category                                    as item_category,
+  m.selling_price                               as item_selling_price,
+  ci.quantity,
+  coalesce(c.ideal_cost, 0)                     as item_ideal_cost,
+  round(ci.quantity * coalesce(c.ideal_cost, 0), 2) as line_cost,
+  round(ci.quantity * m.selling_price, 2)       as line_selling_total,
+  coalesce(c.missing_recipe, true)              as item_missing_recipe,
+  ci.note,
+  ci.created_at,
+  ci.updated_at
+from public.combo_items ci
+join public.menu_items m on m.id = ci.menu_item_id
+left join (
+  select menu_item_id, sum(component_cost) as ideal_cost, (count(*) = 0) as missing_recipe
+    from public.v_recipe_costs
+   group by menu_item_id
+) c on c.menu_item_id = m.id;
+
+-- Per menu item: ideal cost, contribution margin, food cost % (supports single & combo).
 create or replace view public.v_menu_item_costs
 with (security_invoker = true) as
+with single_item_costs as (
+  select
+    m.id,
+    coalesce(rc.ideal_cost, 0) as ideal_cost,
+    coalesce(rc.ingredient_count, 0)::int as ingredient_count,
+    (coalesce(rc.ingredient_count, 0) = 0) as missing_recipe
+  from public.menu_items m
+  left join (
+    select menu_item_id, sum(component_cost) as ideal_cost, count(*) as ingredient_count
+      from public.v_recipe_costs
+     group by menu_item_id
+  ) rc on rc.menu_item_id = m.id
+  where not m.is_combo
+),
+combo_costs as (
+  select
+    ci.combo_id as id,
+    coalesce(sum(ci.quantity * sic.ideal_cost), 0) as ideal_cost,
+    coalesce(sum(ci.quantity * sic.ingredient_count), 0)::int as ingredient_count,
+    (bool_or(sic.missing_recipe) or count(ci.id) = 0) as missing_recipe
+  from public.combo_items ci
+  join single_item_costs sic on sic.id = ci.menu_item_id
+  group by ci.combo_id
+)
 select
   m.id,
   m.code,
   m.name,
   m.category,
   m.selling_price,
+  m.tax_percent,
   m.is_active,
+  m.is_combo,
   m.image_url,
-  coalesce(c.ideal_cost, 0)                                                   as ideal_cost,
-  m.selling_price - coalesce(c.ideal_cost, 0)                                 as contribution_margin,
+  case
+    when m.is_combo then coalesce(cc.ideal_cost, 0)
+    else coalesce(sc.ideal_cost, 0)
+  end as ideal_cost,
+  m.selling_price - case
+    when m.is_combo then coalesce(cc.ideal_cost, 0)
+    else coalesce(sc.ideal_cost, 0)
+  end as contribution_margin,
   case when m.selling_price > 0
-       then round(coalesce(c.ideal_cost, 0) / m.selling_price * 100, 2)
-       else null end                                                          as food_cost_pct,
-  coalesce(c.ingredient_count, 0)::int                                        as ingredient_count,
-  (coalesce(c.ingredient_count, 0) = 0)                                       as missing_recipe,
+       then round((case when m.is_combo then coalesce(cc.ideal_cost, 0) else coalesce(sc.ideal_cost, 0) end) / m.selling_price * 100, 2)
+       else null end as food_cost_pct,
+  case
+    when m.is_combo then coalesce(cc.ingredient_count, 0)::int
+    else coalesce(sc.ingredient_count, 0)::int
+  end as ingredient_count,
+  case
+    when m.is_combo then coalesce(cc.missing_recipe, true)
+    else coalesce(sc.missing_recipe, true)
+  end as missing_recipe,
   m.created_at,
-  m.updated_at
+  m.updated_at,
+  m.item_group
 from public.menu_items m
-left join (
-  select menu_item_id, sum(component_cost) as ideal_cost, count(*) as ingredient_count
-    from public.v_recipe_costs
-   group by menu_item_id
-) c on c.menu_item_id = m.id;
+left join single_item_costs sc on sc.id = m.id and not m.is_combo
+left join combo_costs cc on cc.id = m.id and m.is_combo;
 
 -- Menu engineering (Kasavana-Smith), last 30 days of completed orders.
 --   popularity_share = qty_sold / total qty sold
---   popular    : popularity_share >= 0.7 * (1 / N), N = number of active items with sales in the window
+--   popular    : popularity_share >= 0.7 * (1 / N), N = number of ACTIVE menu items
+--                (the whole menu being analysed - Kasavana-Smith - not only the items that sold: BL-09)
 --   profitable : avg_cm >= weighted average CM of all units sold
 --                (items with no sales use their current contribution margin)
---   class      : star (popular+profitable) / plowhorse (popular) / puzzle (profitable) / dog
+--   class      : star (popular+profitable) / plowhorse (popular) / puzzle (profitable) / dog,
+--                derived from the SAME two booleans that is_popular/is_profitable expose (BL-08)
+-- With no completed sales in the window there is no benchmark: benchmark_cm is null,
+-- nothing is profitable or popular and every item is classified 'dog' (no data, not a verdict).
 -- Includes every active menu item (zero-sales items become puzzle or dog).
 create or replace view public.v_menu_engineering
 with (security_invoker = true) as
@@ -1362,7 +1785,7 @@ with sales as (
    group by oi.menu_item_id
 ),
 base as (
-  select mc.id, mc.code, mc.name, mc.category, mc.selling_price, mc.ideal_cost, mc.contribution_margin, mc.food_cost_pct, mc.missing_recipe,
+  select mc.id, mc.code, mc.name, mc.category, mc.selling_price, mc.is_combo, mc.ideal_cost, mc.contribution_margin, mc.food_cost_pct, mc.missing_recipe,
          coalesce(s.qty_sold, 0)                                   as qty_sold,
          coalesce(s.revenue, 0)                                    as revenue,
          coalesce(s.gross_unit_revenue, 0) - coalesce(s.qty_sold, 0) * mc.ideal_cost as total_cm
@@ -1372,17 +1795,17 @@ base as (
 ),
 agg as (
   select sum(qty_sold)                                             as total_qty,
-         count(*) filter (where qty_sold > 0)                      as n_sold,
+         count(*)                                                  as n_menu,   -- BL-09: all active items
          case when sum(qty_sold) > 0 then sum(total_cm) / sum(qty_sold) else null end as avg_cm_all
     from base
 ),
 scored as (
   select b.*,
          a.total_qty,
-         a.n_sold,
+         a.n_menu,
          round(a.avg_cm_all, 2)                                    as benchmark_cm,
          case when a.total_qty > 0 then round(b.qty_sold / a.total_qty, 4) else 0 end as popularity_share,
-         case when a.n_sold > 0 then round(0.7 / a.n_sold, 4) else null end          as popularity_threshold,
+         case when a.n_menu > 0 then round(0.7 / a.n_menu, 4) else null end          as popularity_threshold,
          case when b.qty_sold > 0 then round(b.total_cm / b.qty_sold, 2) else b.contribution_margin end as avg_cm
     from base b cross join agg a
 )
@@ -1397,10 +1820,14 @@ select
   s.benchmark_cm,
   (s.qty_sold > 0 and s.popularity_threshold is not null and s.popularity_share >= s.popularity_threshold) as is_popular,
   (s.benchmark_cm is not null and s.avg_cm >= s.benchmark_cm)     as is_profitable,
+  -- BL-08: menu_class is a pure function of the two flags above - no coalesce may
+  -- turn "we have no benchmark" into "profitable".
   case
-    when (s.qty_sold > 0 and s.popularity_share >= coalesce(s.popularity_threshold, 1)) and (s.avg_cm >= coalesce(s.benchmark_cm, 0)) then 'star'::public.menu_class
-    when (s.qty_sold > 0 and s.popularity_share >= coalesce(s.popularity_threshold, 1))                                             then 'plowhorse'::public.menu_class
-    when (s.avg_cm >= coalesce(s.benchmark_cm, 0))                                                                                   then 'puzzle'::public.menu_class
+    when (s.qty_sold > 0 and s.popularity_threshold is not null and s.popularity_share >= s.popularity_threshold)
+         and (s.benchmark_cm is not null and s.avg_cm >= s.benchmark_cm)                        then 'star'::public.menu_class
+    when (s.qty_sold > 0 and s.popularity_threshold is not null and s.popularity_share >= s.popularity_threshold)
+                                                                                                then 'plowhorse'::public.menu_class
+    when (s.benchmark_cm is not null and s.avg_cm >= s.benchmark_cm)                            then 'puzzle'::public.menu_class
     else 'dog'::public.menu_class
   end                                                              as menu_class
 from scored s;
@@ -1436,8 +1863,8 @@ select
   count(po.id) filter (where po.debt_amount > 0)::int                              as unpaid_po_count,
   coalesce(sum(po.total_amount), 0)                                                as total_purchased,
   coalesce(sum(po.paid_amount), 0)                                                 as total_paid,
-  coalesce(sum(po.debt_amount) filter (where po.debt_amount > 0 and po.due_date < current_date), 0) as overdue_debt,
-  count(po.id) filter (where po.debt_amount > 0 and po.due_date < current_date)::int as overdue_po_count,
+  coalesce(sum(po.debt_amount) filter (where po.debt_amount > 0 and po.due_date < public.local_today()), 0) as overdue_debt,
+  count(po.id) filter (where po.debt_amount > 0 and po.due_date < public.local_today())::int as overdue_po_count,
   min(po.due_date) filter (where po.debt_amount > 0)                               as next_due_date,
   max(po.order_date)                                                               as last_order_date
 from public.suppliers s
@@ -1454,8 +1881,9 @@ select
   po.order_date, po.due_date, po.total_amount, po.paid_amount, po.debt_amount, po.payment_status,
   po.invoice_number, po.note, po.created_by, po.created_at, po.updated_at,
   (select count(*)::int from public.purchase_order_items i where i.purchase_order_id = po.id) as item_count,
-  (po.debt_amount > 0 and po.due_date < current_date)              as is_overdue,
-  case when po.debt_amount > 0 and po.due_date < current_date then (current_date - po.due_date) else 0 end as days_overdue
+  (po.debt_amount > 0 and po.due_date < public.local_today())              as is_overdue,
+  case when po.debt_amount > 0 and po.due_date < public.local_today() then (public.local_today() - po.due_date) else 0 end as days_overdue,
+  po.invoice_image_url
 from public.purchase_orders po
 join public.suppliers s on s.id = po.supplier_id;
 
@@ -1477,6 +1905,38 @@ from public.orders o
 where o.status = 'completed'
 group by public.to_local_date(o.order_date);
 
+-- Menu Categories summary view (with active item counts)
+create or replace view public.v_menu_categories
+with (security_invoker = true) as
+select
+  mc.id,
+  mc.name,
+  mc.description,
+  mc.display_order,
+  mc.is_active,
+  mc.created_at,
+  mc.updated_at,
+  count(mi.id)::int as item_count
+from public.menu_categories mc
+left join public.menu_items mi on mi.category = mc.name
+group by mc.id, mc.name, mc.description, mc.display_order, mc.is_active, mc.created_at, mc.updated_at;
+
+-- Ingredient Categories summary view (with active item counts)
+create or replace view public.v_ingredient_categories
+with (security_invoker = true) as
+select
+  ic.id,
+  ic.name,
+  ic.description,
+  ic.display_order,
+  ic.is_active,
+  ic.created_at,
+  ic.updated_at,
+  count(i.id)::int as item_count
+from public.ingredient_categories ic
+left join public.ingredients i on i.category = ic.name
+group by ic.id, ic.name, ic.description, ic.display_order, ic.is_active, ic.created_at, ic.updated_at;
+
 -- -----------------------------------------------------------------------------
 -- 16. RPC FUNCTIONS  (nghiệp vụ nhiều bước, atomic)
 -- -----------------------------------------------------------------------------
@@ -1484,14 +1944,15 @@ group by public.to_local_date(o.order_date);
 -- Create a purchase order with its lines (+ optional immediate payment).
 -- p_items: [{ingredient_id, quantity, unit_price, conversion_factor?, unit?}]
 create or replace function public.create_purchase_order(
-  p_supplier_id    uuid,
-  p_order_date     date,
-  p_due_date       date,
-  p_invoice_number text,
-  p_note           text,
-  p_items          jsonb,
-  p_paid_now       numeric default 0,
-  p_paid_method    public.payment_method default 'cash'
+  p_supplier_id       uuid,
+  p_order_date        date,
+  p_due_date          date,
+  p_invoice_number    text,
+  p_note              text,
+  p_items             jsonb,
+  p_paid_now          numeric default 0,
+  p_paid_method       public.payment_method default 'cash',
+  p_invoice_image_url text default null
 )
 returns uuid
 language plpgsql
@@ -1516,8 +1977,8 @@ begin
     raise exception 'INVALID_AMOUNT: p_paid_now cannot be negative';
   end if;
 
-  insert into public.purchase_orders (supplier_id, order_date, due_date, invoice_number, note)
-  values (p_supplier_id, coalesce(p_order_date, current_date), p_due_date, p_invoice_number, p_note)
+  insert into public.purchase_orders (supplier_id, order_date, due_date, invoice_number, note, invoice_image_url)
+  values (p_supplier_id, coalesce(p_order_date, public.local_today()), p_due_date, p_invoice_number, p_note, p_invoice_image_url)
   returning id into v_po_id;
 
   for v_item in select * from jsonb_array_elements(p_items) loop
@@ -1546,7 +2007,7 @@ begin
 
   if coalesce(p_paid_now, 0) > 0 then
     insert into public.supplier_payments (supplier_id, purchase_order_id, amount, payment_date, method, note)
-    values (p_supplier_id, v_po_id, round(p_paid_now, 2), coalesce(p_order_date, current_date), coalesce(p_paid_method, 'cash'), 'Trả ngay khi nhập hàng');
+    values (p_supplier_id, v_po_id, round(p_paid_now, 2), coalesce(p_order_date, public.local_today()), coalesce(p_paid_method, 'cash'), 'Trả ngay khi nhập hàng');
   end if;
 
   return v_po_id;
@@ -1573,7 +2034,7 @@ begin
     raise exception 'INVALID_AMOUNT: amount must be > 0';
   end if;
   insert into public.supplier_payments (supplier_id, purchase_order_id, amount, payment_date, method, reference, note)
-  values (p_supplier_id, p_purchase_order_id, round(p_amount, 2), coalesce(p_payment_date, current_date), coalesce(p_method, 'cash'), p_reference, p_note)
+  values (p_supplier_id, p_purchase_order_id, round(p_amount, 2), coalesce(p_payment_date, public.local_today()), coalesce(p_method, 'cash'), p_reference, p_note)
   returning id into v_id;
   return v_id;
 end $$;
@@ -1664,11 +2125,16 @@ end $$;
 --   adjustment: p_quantity = signed delta (<> 0)             -> ledger p_quantity
 --   stocktake : p_quantity = COUNTED stock (>= 0)            -> ledger (counted - current_stock)
 -- Returns the inventory_transactions id.
+-- BL-11: p_txn_at dates the ledger row at business time (waste found today but
+-- entered after month-end must land in the month it happened). It may not be in
+-- the future; stock_after is still the stock at write time (the ledger is a
+-- running balance, back-dating does not rewrite history).
 create or replace function public.record_stock_adjustment(
   p_ingredient_id uuid,
   p_txn_type      public.inventory_txn_type,
   p_quantity      numeric,
-  p_note          text default null
+  p_note          text default null,
+  p_txn_at        timestamptz default null
 )
 returns uuid
 language plpgsql
@@ -1678,7 +2144,11 @@ declare
   v_stock numeric(14,3);
   v_delta numeric(14,3);
   v_id    uuid;
+  v_at    timestamptz := coalesce(p_txn_at, now());
 begin
+  if v_at > now() then
+    raise exception 'INVALID_TXN_DATE: ngày ghi nhận không được ở tương lai (%)', v_at;
+  end if;
   if p_txn_type not in ('waste', 'adjustment', 'stocktake') then
     raise exception 'INVALID_TXN_TYPE: % (allowed: waste, adjustment, stocktake)', p_txn_type;
   end if;
@@ -1706,20 +2176,31 @@ begin
       raise exception 'INVALID_QUANTITY: counted stock must be >= 0';
     end if;
     v_delta := round(p_quantity, 3) - v_stock;
+    -- T-13/D14: a count that matches the book stock is not a stock movement -
+    -- a zero-quantity ledger row only pollutes the ledger and the waste report.
+    if v_delta = 0 then
+      return null;
+    end if;
   end if;
 
-  insert into public.inventory_transactions (ingredient_id, txn_type, quantity, reference_type, note)
+  insert into public.inventory_transactions (ingredient_id, txn_type, quantity, reference_type, note, created_at)
   values (p_ingredient_id, p_txn_type, v_delta, 'manual',
           case when p_txn_type = 'stocktake'
                then coalesce(p_note || ' | ', '') || 'Kiểm kê: đếm ' || round(p_quantity, 3) || ', sổ ' || v_stock
-               else p_note end)
+               else p_note end,
+          v_at)
   returning id into v_id;
   return v_id;
 end $$;
 
 -- (Re)build payroll items for a draft period. Manual bonus/tips/advance/penalty are preserved.
---   FT: base_pay = min(base_salary, base_salary / standard_days * total_days); allowance prorated the same way
---   PT: base_pay = hourly_rate * total_hours; allowance = 0
+--   D5 / BL-02: eligibility is the employment period overlapping the payroll period
+--   ((end_date is null or end_date >= period_start) and (start_date is null or start_date <= period_end));
+--   is_active is NOT used, so an employee who left mid-period is still paid for it.
+--   FT with timekeeping rows: base_pay = base_salary * least(total_days / standard_days, 1.0)
+--   FT with NO timekeeping row in the period: full base_salary (attendance is not tracked for them)
+--   PT: base_pay = hourly_rate * total_hours
+--   D5 / BL-14: allowance is paid to BOTH types - prorated like base pay for FT, full for PT
 --   total_days = count(distinct work_date), total_hours = sum(hours_worked) within the period
 create or replace function public.generate_payroll(p_period_id uuid)
 returns setof public.payroll_items
@@ -1734,6 +2215,7 @@ declare
   v_base   numeric(14,2);
   v_allow  numeric(14,2);
   v_std    int;
+  v_ratio  numeric(10,6);
 begin
   select * into v_period from public.payroll_periods where id = p_period_id for update;
   if not found then
@@ -1746,8 +2228,7 @@ begin
   for e in
     select *
       from public.employees
-     where is_active
-       and (start_date is null or start_date <= v_period.period_end)
+     where (start_date is null or start_date <= v_period.period_end)
        and (end_date is null or end_date >= v_period.period_start)
      order by code, full_name
   loop
@@ -1760,11 +2241,14 @@ begin
     v_std := coalesce(nullif(e.standard_days_per_month, 0), 26);
 
     if e.employment_type = 'full_time' then
-      v_base  := round(least(e.base_salary, e.base_salary / v_std * v_days), 2);
-      v_allow := round(least(e.allowance,   e.allowance   / v_std * v_days), 2);
+      -- No timekeeping row at all in the period => attendance is not tracked for
+      -- this employee, pay the full monthly package (D5 / T-10).
+      v_ratio := case when v_days = 0 then 1.0 else least(v_days / v_std, 1.0) end;
+      v_base  := round(e.base_salary * v_ratio, 2);
+      v_allow := round(e.allowance   * v_ratio, 2);
     else
       v_base  := round(e.hourly_rate * v_hours, 2);
-      v_allow := 0;
+      v_allow := round(e.allowance, 2);          -- BL-14: PT allowance is paid in full
     end if;
 
     insert into public.payroll_items (payroll_period_id, employee_id, employment_type, total_hours, total_days, base_pay, allowance)
@@ -1778,13 +2262,13 @@ begin
           updated_at      = now();
   end loop;
 
-  -- Drop rows of employees that are no longer eligible (inactive / outside dates).
+  -- Drop rows of employees whose employment does not overlap the period at all
+  -- (BL-02: is_active is deliberately not part of the predicate).
   delete from public.payroll_items pi
    where pi.payroll_period_id = p_period_id
      and not exists (
        select 1 from public.employees em
         where em.id = pi.employee_id
-          and em.is_active
           and (em.start_date is null or em.start_date <= v_period.period_end)
           and (em.end_date is null or em.end_date >= v_period.period_start));
 
@@ -1836,11 +2320,9 @@ begin
     raise exception 'PAYROLL_NOT_FINALIZED: finalize the period before paying it';
   end if;
 
-  perform set_config('app.payroll_unlock', 'on', true);
   update public.payroll_items
      set is_paid = true, paid_at = coalesce(p_paid_at, now())
    where payroll_period_id = p_period_id;
-  perform set_config('app.payroll_unlock', 'off', true);
 
   update public.payroll_periods
      set status = 'paid', paid_at = coalesce(p_paid_at, now()), payment_method = coalesce(p_method, 'bank_transfer')
@@ -1850,8 +2332,9 @@ end $$;
 -- P&L for a date range (inclusive, local dates).
 --   revenue     = sum(orders.total_amount) of completed orders
 --   cogs_sales  = sum(orders.total_cogs) of completed orders
---   cogs_waste  = ledger total_cost of 'waste' rows + stocktake shortages (quantity < 0)
---   labor_cost  = sum(payroll_items.net_pay) of periods with period_end in range and status in (finalized, paid)
+--   cogs_waste  = -sum(quantity * unit_cost) of 'waste' | 'adjustment' | 'stocktake' ledger rows (sign aware)
+--   labor_cost  = sum(payroll_items.gross_pay) of periods with period_end in range, ANY status
+--                 (draft = estimate; advance_deduction is cash timing, not cost - D6)
 --   opex        = expense_records.amount by expense_date (accrual, any status), split by category expense_type
 create or replace function public.get_pnl_report(p_start date, p_end date)
 returns table (
@@ -1891,17 +2374,23 @@ begin
      where o.status = 'completed' and o.order_date >= v_from and o.order_date < v_to
   ),
   w as (
-    select coalesce(sum(it.total_cost), 0)::numeric as cogs_waste
+    -- D7/T-08: sign-aware inventory loss. Every manual movement counts: a negative
+    -- quantity (waste, shortage, negative adjustment) is a cost, a positive one
+    -- (stocktake surplus, positive adjustment) credits it back, so the same physical
+    -- event costs the same whichever manual type the user picked.
+    select coalesce(round(-sum(it.quantity * coalesce(it.unit_cost, 0)), 2), 0)::numeric as cogs_waste
       from public.inventory_transactions it
      where it.created_at >= v_from and it.created_at < v_to
-       and (it.txn_type = 'waste' or (it.txn_type = 'stocktake' and it.quantity < 0))
+       and it.txn_type in ('waste', 'adjustment', 'stocktake')
   ),
   l as (
-    select coalesce(sum(pi.net_pay), 0)::numeric as labor_cost
+    -- D6/BL-03+BL-06: gross_pay (base+allowance+bonus+tips-penalty) is the labor COST;
+    -- advance_deduction is only cash timing. Periods of ANY status count - a draft
+    -- period is the month-to-date estimate, otherwise an open month shows zero labor.
+    select coalesce(sum(pi.gross_pay), 0)::numeric as labor_cost
       from public.payroll_items pi
       join public.payroll_periods pp on pp.id = pi.payroll_period_id
-     where pp.status in ('finalized', 'paid')
-       and pp.period_end between p_start and p_end
+     where pp.period_end between p_start and p_end
   ),
   x as (
     select coalesce(sum(er.amount) filter (where ec.expense_type = 'fixed'), 0)::numeric    as opex_fixed,
@@ -1991,7 +2480,7 @@ begin
   select coalesce(sum(current_debt), 0) into v_debt from public.suppliers;
 
   select coalesce(sum(debt_amount), 0) into v_overdue
-    from public.purchase_orders where debt_amount > 0 and due_date < current_date;
+    from public.purchase_orders where debt_amount > 0 and due_date < public.local_today();
 
   select coalesce(sum(amount), 0), count(*) into v_pending, v_pending_cnt
     from public.expense_records where status = 'pending';
@@ -2026,15 +2515,19 @@ declare
   t text;
 begin
   foreach t in array array[
-    'app_settings', 'suppliers', 'ingredients', 'inventory_transactions', 'menu_items', 'recipes',
+    'app_settings', 'suppliers', 'ingredients', 'inventory_transactions', 'menu_items', 'recipes', 'combo_items',
     'purchase_orders', 'purchase_order_items', 'supplier_payments', 'supplier_payment_allocations',
     'employees', 'timekeeping', 'payroll_periods', 'payroll_items',
-    'expense_categories', 'expense_records', 'orders', 'order_items'
+    'expense_categories', 'expense_records', 'orders', 'order_items',
+    'menu_categories', 'ingredient_categories'
   ] loop
     execute format('alter table public.%I enable row level security', t);
     execute format('drop policy if exists "authenticated full access" on public.%I', t);
+    -- SEC-14: `to authenticated` da loc role roi; lap lai auth.role() trong USING la
+    -- thua, bi danh gia tren tung dong (khong hoist thanh initplan) va auth.role()
+    -- da deprecated. Quyen ghi cot MAINTAINED van do column privileges (SEC-01) chan.
     execute format(
-      'create policy "authenticated full access" on public.%I for all to authenticated using (auth.role() = ''authenticated'') with check (auth.role() = ''authenticated'')', t);
+      'create policy "authenticated full access" on public.%I for all to authenticated using (true) with check (true)', t);
   end loop;
 end $$;
 
@@ -2042,7 +2535,7 @@ end $$;
 alter table public.profiles enable row level security;
 drop policy if exists "profiles select authenticated" on public.profiles;
 create policy "profiles select authenticated" on public.profiles
-  for select to authenticated using (auth.role() = 'authenticated');
+  for select to authenticated using (true);   -- SEC-14: `to authenticated` da la bo loc role
 drop policy if exists "profiles update own" on public.profiles;
 create policy "profiles update own" on public.profiles
   for update to authenticated using (auth.uid() = id) with check (auth.uid() = id);
@@ -2250,6 +2743,46 @@ begin
 end $$;
 
 -- -----------------------------------------------------------------------------
+-- 17b. SANITY CONSTRAINTS  (SEC-09)
+--      Cac CHECK "khong the sai" cho cot tien / so luong: chan cả UPDATE truc tiep
+--      (RPC da validate, nhung ALTER/UPDATE thang vao bang thi khong).
+--      Khong them `orders.discount <= subtotal` / `orders.total_amount >= 0` lam CHECK:
+--      create_order ghi subtotal tang dan theo tung dong (luc insert don subtotal = 0
+--      nhung discount da co) nen trang thai trung gian se vi pham -> viec do do
+--      trigger trg_orders_before lo (DISCOUNT_EXCEEDS_SUBTOTAL).
+--      Khong them `paid_amount <= total_amount`: xoa mot dong PO da thanh toan lam
+--      total_amount tut xuong (T-01/BL-01) -> se khoa mot luong hop le.
+-- -----------------------------------------------------------------------------
+do $$
+declare c record;
+begin
+  for c in
+    select * from (values
+      ('ingredients',            'ingredients_avg_cost_nonneg',   'avg_cost_price >= 0'),
+      ('ingredients',            'ingredients_min_alert_nonneg',  'min_alert_stock >= 0'),
+      ('inventory_transactions', 'inv_txn_quantity_nonzero',      'quantity <> 0'),
+      ('inventory_transactions', 'inv_txn_unit_cost_nonneg',      'unit_cost is null or unit_cost >= 0'),
+      ('purchase_orders',        'po_due_after_order',            'due_date is null or order_date is null or due_date >= order_date'),
+      ('purchase_orders',        'po_total_nonneg',               'total_amount >= 0'),
+      ('purchase_orders',        'po_paid_nonneg',                'paid_amount >= 0'),
+      ('employees',              'employees_end_after_start',     'end_date is null or start_date is null or end_date >= start_date'),
+      ('orders',                 'orders_subtotal_nonneg',        'subtotal >= 0'),
+      ('orders',                 'orders_total_cogs_nonneg',      'total_cogs >= 0'),
+      ('order_items',            'order_items_cogs_nonneg',       'cogs_amount >= 0')
+    ) as v(tbl, con, expr)
+  loop
+    if not exists (
+      select 1 from pg_constraint pc
+      join pg_class pcl on pcl.oid = pc.conrelid
+      join pg_namespace pn on pn.oid = pcl.relnamespace
+      where pn.nspname = 'public' and pcl.relname = c.tbl and pc.conname = c.con
+    ) then
+      execute format('alter table public.%I add constraint %I check (%s)', c.tbl, c.con, c.expr);
+    end if;
+  end loop;
+end $$;
+
+-- -----------------------------------------------------------------------------
 -- 18. GRANTS
 -- -----------------------------------------------------------------------------
 grant usage on schema public to anon, authenticated, service_role;
@@ -2300,7 +2833,7 @@ begin
 end $$;
 
 -- Functions: RPCs, reports and helpers for authenticated + service_role only.
--- Trigger functions (trg_*, handle_new_user) get no EXECUTE - they fire through triggers regardless.
+-- Trigger functions (trg_*, handle_new_user, set_updated_at) get no EXECUTE - they fire through triggers regardless.
 do $$
 declare
   f record;
@@ -2316,6 +2849,21 @@ begin
   loop
     execute format('grant execute on function %s to authenticated, service_role', f.sig);
   end loop;
+  -- The Supabase default privileges (alter default privileges ... grant all on functions to
+  -- authenticated) already handed EXECUTE to every function at creation time, so excluding the
+  -- trigger functions from the loop above is not enough - revoke it from them explicitly (DOC-09).
+  -- Trigger firing is unaffected: EXECUTE on a trigger function is checked when the trigger is
+  -- created, not when it fires.
+  for f in
+    select p.oid::regprocedure as sig
+      from pg_proc p
+      join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and not exists (select 1 from pg_depend d where d.objid = p.oid and d.deptype = 'e')
+       and (p.proname like 'trg\_%' or p.proname in ('handle_new_user', 'set_updated_at'))
+  loop
+    execute format('revoke all on function %s from authenticated, anon, public', f.sig);
+  end loop;
 end $$;
 
 -- -----------------------------------------------------------------------------
@@ -2328,6 +2876,10 @@ insert into public.app_settings (key, value) values
   ('timezone',             '"Asia/Ho_Chi_Minh"'::jsonb),
   ('currency',             '"VND"'::jsonb)
 on conflict (key) do nothing;
+
+-- -----------------------------------------------------------------------------
+-- 20. CATEGORIES (danh mục do người dùng tự định nghĩa)
+-- -----------------------------------------------------------------------------
 
 -- =============================================================================
 -- END OF MIGRATION

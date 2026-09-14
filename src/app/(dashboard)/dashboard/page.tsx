@@ -1,192 +1,269 @@
 import Link from "next/link";
 import {
-  AlertCircle,
   AlertTriangle,
   ArrowRight,
+  CalendarClock,
   CircleDollarSign,
+  PackageSearch,
   Receipt,
   TrendingUp,
   Truck,
+  Utensils,
   Wallet,
 } from "lucide-react";
 import { getDashboardData } from "@/lib/queries/dashboard.queries";
-import { PageHeader } from "@/components/shared/page-header";
-import { StatCard } from "@/components/shared/stat-card";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { DailySalesChart } from "@/components/reports/daily-sales-chart";
+import { EmptyState, PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
-import { formatDate, formatVND } from "@/lib/format";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { formatDate, formatNumber, formatPercent, formatVND } from "@/lib/format";
+import { MENU_CLASS_LABELS, menuClassTone } from "@/types/restaurant";
 
-export const metadata = { title: "Bảng điều khiển | Restaurant ERP" };
+export const metadata = { title: "Tổng quan | Restaurant ERP" };
 
 export default async function DashboardPage() {
-  const { stats, lowStock, recentOrders, overdueDebt } = await getDashboardData();
+  const { stats, dailySales, lowStock, overduePos, topItems } = await getDashboardData(30);
+
+  const monthMargin =
+    stats && stats.month_revenue > 0 ? (stats.month_net_profit / stats.month_revenue) * 100 : null;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Bảng điều khiển quản trị"
-        description="Tổng quan doanh thu, lợi nhuận, kho nguyên liệu và công nợ nhà cung cấp theo thời gian thực."
+        title="Tổng quan"
+        description={
+          stats
+            ? `Số liệu tính đến ${formatDate(stats.today)} · Kỳ tháng từ ${formatDate(stats.month_start)}`
+            : "Tổng quan doanh thu, lợi nhuận, tồn kho và công nợ."
+        }
         actions={
-          <div className="flex gap-2">
+          <>
             <Button asChild size="sm">
               <Link href="/orders/new">
-                <Receipt className="mr-1.5 size-4" />
+                <Receipt className="size-4" />
                 Tạo đơn bán
               </Link>
             </Button>
-            <Button asChild variant="outline" size="sm">
+            <Button asChild size="sm" variant="outline">
               <Link href="/purchases/new">
-                <Truck className="mr-1.5 size-4" />
-                Nhập kho
+                <Truck className="size-4" />
+                Nhập hàng
               </Link>
             </Button>
-          </div>
+          </>
         }
       />
 
-      {/* KPI Stats Grid */}
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard
           title="Doanh thu hôm nay"
           value={formatVND(stats?.today_revenue ?? 0)}
-          hint={`${stats?.today_orders ?? 0} đơn hoàn tất`}
+          hint={`${formatNumber(stats?.today_orders ?? 0, 0)} đơn hoàn tất · Giá vốn ${formatVND(stats?.today_cogs ?? 0)}`}
           icon={CircleDollarSign}
           tone="success"
         />
         <StatCard
-          title="Lãi gộp hôm nay"
-          value={formatVND(stats?.today_gross_profit ?? 0)}
-          hint={`Giá vốn (COGS): ${formatVND(stats?.today_cogs ?? 0)}`}
+          title="Doanh thu tháng này"
+          value={formatVND(stats?.month_revenue ?? 0)}
+          hint={`${formatNumber(stats?.month_order_count ?? 0, 0)} đơn · Lợi nhuận gộp ${formatVND(stats?.month_gross_profit ?? 0)}`}
           icon={TrendingUp}
           tone="info"
         />
         <StatCard
-          title="Doanh thu tháng này"
-          value={formatVND(stats?.month_revenue ?? 0)}
-          hint={`Lợi nhuận ròng: ${formatVND(stats?.month_net_profit ?? 0)}`}
+          title="Lợi nhuận ròng tháng này"
+          value={formatVND(stats?.month_net_profit ?? 0)}
+          hint={
+            monthMargin === null
+              ? "Chưa có doanh thu trong tháng"
+              : `Biên lợi nhuận ${formatPercent(monthMargin)} · Chi phí NV ${formatVND(stats?.month_labor_cost ?? 0)}`
+          }
           icon={Wallet}
-          tone="default"
+          tone={(stats?.month_net_profit ?? 0) >= 0 ? "success" : "danger"}
         />
-        <StatCard
-          title="Cảnh báo tồn kho"
-          value={`${stats?.low_stock_count ?? 0} mặt hàng`}
-          hint={`Công nợ NCC: ${formatVND(stats?.total_supplier_debt ?? 0)}`}
-          icon={AlertCircle}
-          tone={(stats?.low_stock_count ?? 0) > 0 ? "danger" : "success"}
-        />
+        <Link href="/inventory" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <StatCard
+            title="Nguyên liệu dưới định mức"
+            value={formatNumber(stats?.low_stock_count ?? 0, 0)}
+            hint="Xem danh sách tồn kho"
+            icon={PackageSearch}
+            tone={(stats?.low_stock_count ?? 0) > 0 ? "danger" : "success"}
+            className="h-full transition-colors hover:border-primary/40"
+          />
+        </Link>
+        <Link href="/payments" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <StatCard
+            title="Công nợ nhà cung cấp"
+            value={formatVND(stats?.total_supplier_debt ?? 0)}
+            hint={`Quá hạn: ${formatVND(stats?.overdue_debt ?? 0)}`}
+            icon={Truck}
+            tone={(stats?.overdue_debt ?? 0) > 0 ? "danger" : "default"}
+            className="h-full transition-colors hover:border-primary/40"
+          />
+        </Link>
+        <Link href="/expenses" className="rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <StatCard
+            title="Chi phí chờ duyệt"
+            value={formatVND(stats?.pending_expenses_amount ?? 0)}
+            hint={`${formatNumber(stats?.pending_expenses_count ?? 0, 0)} khoản chờ thanh toán`}
+            icon={CalendarClock}
+            tone={(stats?.pending_expenses_count ?? 0) > 0 ? "warning" : "default"}
+            className="h-full transition-colors hover:border-primary/40"
+          />
+        </Link>
       </div>
 
-      {/* Main Grid: Orders & Alerts */}
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Đơn hàng gần nhất */}
-        <Card className="lg:col-span-2">
-          <CardHeader className="flex flex-row items-center justify-between pb-3">
-            <div>
-              <CardTitle className="text-base font-semibold">Đơn bán hàng mới nhất</CardTitle>
-              <CardDescription>Các giao dịch phục vụ bàn và mang về</CardDescription>
+      <DailySalesChart data={dailySales} />
+
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-base font-semibold">Cảnh báo tồn kho</CardTitle>
+                <CardDescription>Nguyên liệu có tồn thấp hơn định mức tối thiểu</CardDescription>
+              </div>
+              <Button asChild size="sm" variant="ghost">
+                <Link href="/inventory">
+                  Tất cả
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
             </div>
-            <Button asChild variant="ghost" size="sm">
-              <Link href="/orders">
-                Xem tất cả <ArrowRight className="ml-1 size-3.5" />
-              </Link>
-            </Button>
           </CardHeader>
           <CardContent>
-            {recentOrders.length === 0 ? (
-              <p className="py-6 text-center text-sm text-muted-foreground">Chưa có đơn hàng nào hôm nay</p>
+            {lowStock.length === 0 ? (
+              <EmptyState
+                icon={PackageSearch}
+                title="Tồn kho an toàn"
+                description="Không có nguyên liệu nào dưới định mức tối thiểu."
+              />
             ) : (
-              <div className="divide-y rounded-lg border">
-                {recentOrders.map((order) => (
-                  <div key={order.id} className="flex items-center justify-between p-3 text-sm">
-                    <div>
-                      <p className="font-medium">{order.order_number}</p>
+              <ul className="divide-y">
+                {lowStock.map((row) => (
+                  <li key={row.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="min-w-0">
+                      <Link href={`/inventory/${row.id}`} className="truncate text-sm font-medium hover:underline">
+                        {row.name}
+                      </Link>
                       <p className="text-xs text-muted-foreground">
-                        {order.table_number || "Tại quầy"} · {formatDate(order.order_date, "HH:mm dd/MM")}
+                        {row.code} · {row.category ?? "Khác"}
+                        {row.default_supplier_name ? ` · ${row.default_supplier_name}` : ""}
                       </p>
                     </div>
-                    <div className="text-right">
-                      <p className="font-semibold">{formatVND(order.total_amount)}</p>
-                      <p className="text-xs text-muted-foreground">COGS: {formatVND(order.total_cogs)}</p>
+                    <div className="shrink-0 text-right">
+                      <StatusBadge tone="danger" dot>
+                        {formatNumber(row.current_stock ?? 0)} / {formatNumber(row.min_alert_stock ?? 0)} {row.base_unit}
+                      </StatusBadge>
+                      <p className="mt-1 text-xs text-muted-foreground">{formatVND(row.stock_value ?? 0)}</p>
                     </div>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             )}
           </CardContent>
         </Card>
 
-        {/* Cảnh báo kho & Công nợ */}
-        <div className="space-y-6">
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="flex items-center gap-1.5 text-base font-semibold text-destructive">
-                  <AlertTriangle className="size-4" /> Tồn kho dưới mức an toàn
-                </CardTitle>
-                <Button asChild variant="ghost" size="sm">
-                  <Link href="/inventory">Xem kho</Link>
-                </Button>
+        <Card>
+          <CardHeader className="pb-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <CardTitle className="text-base font-semibold">Top 5 món bán chạy</CardTitle>
+                <CardDescription>Theo số lượng bán trong 30 ngày gần nhất</CardDescription>
               </div>
-            </CardHeader>
-            <CardContent>
-              {lowStock.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Tất cả nguyên liệu đều ở mức an toàn.</p>
-              ) : (
-                <div className="space-y-2">
-                  {lowStock.map((ing) => (
-                    <div key={ing.id} className="flex items-center justify-between rounded-md border border-destructive/20 bg-destructive/5 p-2 text-xs">
-                      <div>
-                        <p className="font-medium text-foreground">{ing.name}</p>
-                        <p className="text-muted-foreground">Mã: {ing.code}</p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-destructive">
-                          {Number(ing.current_stock).toLocaleString("vi-VN")} {ing.base_unit}
-                        </p>
-                        <p className="text-muted-foreground">Min: {Number(ing.min_alert_stock).toLocaleString("vi-VN")}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader className="pb-3">
-              <div className="flex items-center justify-between">
-                <CardTitle className="text-base font-semibold">Công nợ PO đến hạn</CardTitle>
-                <Button asChild variant="ghost" size="sm">
-                  <Link href="/purchases">Xem PO</Link>
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {overdueDebt.length === 0 ? (
-                <p className="text-xs text-muted-foreground">Không có phiếu nhập nào quá hạn nợ.</p>
-              ) : (
-                <div className="space-y-2">
-                  {overdueDebt.map((po) => (
-                    <div key={po.id} className="flex items-center justify-between rounded-md border p-2 text-xs">
-                      <div>
-                        <p className="font-medium">{po.po_number}</p>
-                        <p className="text-muted-foreground">
-                          {(po.suppliers as { name?: string })?.name ?? "NCC"} · Hạn: {formatDate(po.due_date)}
-                        </p>
-                      </div>
-                      <div className="text-right">
-                        <p className="font-semibold text-amber-600 dark:text-amber-400">
-                          {formatVND(Number(po.total_amount) - Number(po.paid_amount))}
+              <Button asChild size="sm" variant="ghost">
+                <Link href="/menu/engineering">
+                  Menu Engineering
+                  <ArrowRight className="size-4" />
+                </Link>
+              </Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {topItems.length === 0 ? (
+              <EmptyState
+                icon={Utensils}
+                title="Chưa có dữ liệu bán hàng"
+                description="Chưa có đơn hoàn tất nào trong 30 ngày gần nhất."
+              />
+            ) : (
+              <ul className="divide-y">
+                {topItems.map((item, index) => (
+                  <li key={item.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <span className="flex size-6 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-medium text-muted-foreground">
+                        {index + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <Link href={`/menu/${item.id}`} className="truncate text-sm font-medium hover:underline">
+                          {item.name}
+                        </Link>
+                        <p className="text-xs text-muted-foreground">
+                          {formatNumber(item.qty_sold ?? 0)} phần · CM {formatVND(item.avg_cm ?? 0)}/phần
                         </p>
                       </div>
                     </div>
-                  ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                    <div className="shrink-0 text-right">
+                      <p className="text-sm font-medium tabular-nums">{formatVND(item.revenue ?? 0)}</p>
+                      {item.menu_class && (
+                        <StatusBadge tone={menuClassTone(item.menu_class)} className="mt-1">
+                          {MENU_CLASS_LABELS[item.menu_class]}
+                        </StatusBadge>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </CardContent>
+        </Card>
       </div>
+
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <CardTitle className="text-base font-semibold">Phiếu nhập quá hạn thanh toán</CardTitle>
+              <CardDescription>Công nợ đã qua ngày đến hạn — cần ưu tiên chi trả</CardDescription>
+            </div>
+            <Button asChild size="sm" variant="ghost">
+              <Link href="/payments">
+                Thanh toán
+                <ArrowRight className="size-4" />
+              </Link>
+            </Button>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {overduePos.length === 0 ? (
+            <EmptyState
+              icon={AlertTriangle}
+              title="Không có phiếu nhập quá hạn"
+              description="Toàn bộ công nợ nhà cung cấp đang trong hạn thanh toán."
+            />
+          ) : (
+            <ul className="divide-y">
+              {overduePos.map((po) => (
+                <li key={po.id} className="flex items-center justify-between gap-3 py-2.5">
+                  <div className="min-w-0">
+                    <Link href={`/purchases/${po.id}`} className="truncate text-sm font-medium hover:underline">
+                      {po.po_number}
+                    </Link>
+                    <p className="text-xs text-muted-foreground">
+                      {po.supplier_name ?? "—"} · Đến hạn {formatDate(po.due_date)}
+                    </p>
+                  </div>
+                  <div className="shrink-0 text-right">
+                    <p className="text-sm font-medium tabular-nums text-destructive">{formatVND(po.debt_amount ?? 0)}</p>
+                    <StatusBadge tone="danger" className="mt-1">
+                      Quá hạn {formatNumber(po.days_overdue ?? 0, 0)} ngày
+                    </StatusBadge>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </CardContent>
+      </Card>
     </div>
   );
 }

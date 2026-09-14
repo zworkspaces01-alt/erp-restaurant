@@ -17,6 +17,30 @@ begin;
 do $$ begin perform setseed(0.42); end $$;   -- deterministic random()
 
 -- -----------------------------------------------------------------------------
+-- 0. GUARD (SEC-16) - seed nay XOA TOAN BO du lieu public va tao lai tai khoan demo
+--    admin@restaurant.local / Admin@123. Chi cho chay khi:
+--      * phien co bat co `set app.allow_seed = 'on'` (scripts/db-test.sh bat san), HOAC
+--      * auth.users chua co nguoi dung that nao (ngoai chinh tai khoan demo).
+--    => copy/paste vao SQL editor cua mot project that hoac `supabase db reset --linked`
+--    se dung lai voi SEED_BLOCKED thay vi xoa sach du lieu san xuat.
+--    LUU Y: doi mat khau demo truoc khi deploy len bat ky moi truong dung chung nao.
+-- -----------------------------------------------------------------------------
+do $$
+declare v_other_users int := 0;
+begin
+  if coalesce(current_setting('app.allow_seed', true), '') = 'on' then
+    return;
+  end if;
+  if to_regclass('auth.users') is not null then
+    execute 'select count(*) from auth.users where email is distinct from ''admin@restaurant.local'''
+      into v_other_users;
+  end if;
+  if v_other_users > 0 then
+    raise exception 'SEED_BLOCKED: database co % tai khoan that - seed nay se xoa sach du lieu. Chay lai voi `set app.allow_seed = ''on'';` neu that su muon reset.', v_other_users;
+  end if;
+end $$;
+
+-- -----------------------------------------------------------------------------
 -- 0. RESET
 -- -----------------------------------------------------------------------------
 truncate table

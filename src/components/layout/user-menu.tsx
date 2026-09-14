@@ -12,11 +12,12 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { signOut } from "@/server-actions/auth.actions";
+import { USER_ROLE_LABELS, type UserRole } from "@/types/restaurant";
 
 interface UserMenuProps {
   email: string | null;
   fullName: string | null;
-  role: string | null;
+  role: UserRole | null;
 }
 
 function initials(name: string | null, email: string | null): string {
@@ -43,7 +44,7 @@ export function UserMenu({ email, fullName, role }: UserMenuProps) {
             {fullName ?? "Người dùng"}
           </span>
           <span className="truncate text-xs font-normal text-muted-foreground">{email}</span>
-          {role && <span className="text-xs font-normal text-muted-foreground">Vai trò: {role}</span>}
+          {role && <span className="text-xs font-normal text-muted-foreground">Vai trò: {USER_ROLE_LABELS[role]}</span>}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <form action={signOut}>

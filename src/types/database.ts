@@ -7,6 +7,31 @@ export type Json =
   | Json[]
 
 export type Database = {
+  graphql_public: {
+    Tables: {
+      [_ in never]: never
+    }
+    Views: {
+      [_ in never]: never
+    }
+    Functions: {
+      graphql: {
+        Args: {
+          extensions?: Json
+          operationName?: string
+          query?: string
+          variables?: Json
+        }
+        Returns: Json
+      }
+    }
+    Enums: {
+      [_ in never]: never
+    }
+    CompositeTypes: {
+      [_ in never]: never
+    }
+  }
   public: {
     Tables: {
       app_settings: {
@@ -26,6 +51,79 @@ export type Database = {
           value?: Json
         }
         Relationships: []
+      }
+      combo_items: {
+        Row: {
+          combo_id: string
+          created_at: string
+          id: string
+          menu_item_id: string
+          note: string | null
+          quantity: number
+          updated_at: string
+        }
+        Insert: {
+          combo_id: string
+          created_at?: string
+          id?: string
+          menu_item_id: string
+          note?: string | null
+          quantity: number
+          updated_at?: string
+        }
+        Update: {
+          combo_id?: string
+          created_at?: string
+          id?: string
+          menu_item_id?: string
+          note?: string | null
+          quantity?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_engineering"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_item_costs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_engineering"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_item_costs"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       employees: {
         Row: {
@@ -98,6 +196,7 @@ export type Database = {
           id: string
           is_active: boolean
           name: string
+          updated_at: string
         }
         Insert: {
           created_at?: string
@@ -106,6 +205,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           name: string
+          updated_at?: string
         }
         Update: {
           created_at?: string
@@ -114,6 +214,7 @@ export type Database = {
           id?: string
           is_active?: boolean
           name?: string
+          updated_at?: string
         }
         Relationships: []
       }
@@ -178,6 +279,36 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      ingredient_categories: {
+        Row: {
+          created_at: string
+          description: string | null
+          display_order: number
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          display_order?: number
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          display_order?: number
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       ingredients: {
         Row: {
@@ -308,6 +439,36 @@ export type Database = {
           },
         ]
       }
+      menu_categories: {
+        Row: {
+          created_at: string
+          description: string | null
+          display_order: number
+          id: string
+          is_active: boolean
+          name: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          display_order?: number
+          id?: string
+          is_active?: boolean
+          name: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          display_order?: number
+          id?: string
+          is_active?: boolean
+          name?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
       menu_items: {
         Row: {
           category: string | null
@@ -317,8 +478,11 @@ export type Database = {
           id: string
           image_url: string | null
           is_active: boolean
+          is_combo: boolean
+          item_group: string | null
           name: string
           selling_price: number
+          tax_percent: number
           updated_at: string
         }
         Insert: {
@@ -329,8 +493,11 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_active?: boolean
+          is_combo?: boolean
+          item_group?: string | null
           name: string
           selling_price?: number
+          tax_percent?: number
           updated_at?: string
         }
         Update: {
@@ -341,8 +508,11 @@ export type Database = {
           id?: string
           image_url?: string | null
           is_active?: boolean
+          is_combo?: boolean
+          item_group?: string | null
           name?: string
           selling_price?: number
+          tax_percent?: number
           updated_at?: string
         }
         Relationships: []
@@ -472,6 +642,7 @@ export type Database = {
           created_at: string
           employee_id: string
           employment_type: Database["public"]["Enums"]["employment_type"]
+          gross_pay: number | null
           id: string
           is_paid: boolean
           net_pay: number | null
@@ -492,6 +663,7 @@ export type Database = {
           created_at?: string
           employee_id: string
           employment_type: Database["public"]["Enums"]["employment_type"]
+          gross_pay?: number | null
           id?: string
           is_paid?: boolean
           net_pay?: number | null
@@ -512,6 +684,7 @@ export type Database = {
           created_at?: string
           employee_id?: string
           employment_type?: Database["public"]["Enums"]["employment_type"]
+          gross_pay?: number | null
           id?: string
           is_paid?: boolean
           net_pay?: number | null
@@ -686,6 +859,7 @@ export type Database = {
           due_date: string | null
           id: string
           invoice_number: string | null
+          invoice_image_url: string | null
           note: string | null
           order_date: string
           paid_amount: number
@@ -702,6 +876,7 @@ export type Database = {
           due_date?: string | null
           id?: string
           invoice_number?: string | null
+          invoice_image_url?: string | null
           note?: string | null
           order_date?: string
           paid_amount?: number
@@ -718,6 +893,7 @@ export type Database = {
           due_date?: string | null
           id?: string
           invoice_number?: string | null
+          invoice_image_url?: string | null
           note?: string | null
           order_date?: string
           paid_amount?: number
@@ -1003,7 +1179,7 @@ export type Database = {
           note?: string | null
           shift?: string | null
           updated_at?: string
-          work_date: string
+          work_date?: string
         }
         Update: {
           check_in?: string | null
@@ -1030,6 +1206,69 @@ export type Database = {
       }
     }
     Views: {
+      v_combo_items: {
+        Row: {
+          combo_id: string | null
+          created_at: string | null
+          id: string | null
+          item_category: string | null
+          item_code: string | null
+          item_ideal_cost: number | null
+          item_missing_recipe: boolean | null
+          item_name: string | null
+          item_selling_price: number | null
+          line_cost: number | null
+          line_selling_total: number | null
+          menu_item_id: string | null
+          note: string | null
+          quantity: number | null
+          updated_at: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_engineering"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_combo_id_fkey"
+            columns: ["combo_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_item_costs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "menu_items"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_engineering"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "combo_items_menu_item_id_fkey"
+            columns: ["menu_item_id"]
+            isOneToOne: false
+            referencedRelation: "v_menu_item_costs"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       v_daily_sales: {
         Row: {
           avg_order_value: number | null
@@ -1040,6 +1279,19 @@ export type Database = {
           order_count: number | null
           revenue: number | null
           sales_date: string | null
+        }
+        Relationships: []
+      }
+      v_ingredient_categories: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          display_order: number | null
+          id: string | null
+          is_active: boolean | null
+          item_count: number | null
+          name: string | null
+          updated_at: string | null
         }
         Relationships: []
       }
@@ -1083,6 +1335,19 @@ export type Database = {
           },
         ]
       }
+      v_menu_categories: {
+        Row: {
+          created_at: string | null
+          description: string | null
+          display_order: number | null
+          id: string | null
+          is_active: boolean | null
+          item_count: number | null
+          name: string | null
+          updated_at: string | null
+        }
+        Relationships: []
+      }
       v_menu_engineering: {
         Row: {
           avg_cm: number | null
@@ -1119,9 +1384,12 @@ export type Database = {
           image_url: string | null
           ingredient_count: number | null
           is_active: boolean | null
+          is_combo: boolean | null
+          item_group: string | null
           missing_recipe: boolean | null
           name: string | null
           selling_price: number | null
+          tax_percent: number | null
           updated_at: string | null
         }
         Relationships: []
@@ -1149,6 +1417,7 @@ export type Database = {
           supplier_name: string | null
           total_amount: number | null
           updated_at: string | null
+          invoice_image_url: string | null
         }
         Relationships: [
           {
@@ -1265,6 +1534,7 @@ export type Database = {
       create_purchase_order: {
         Args: {
           p_due_date: string
+          p_invoice_image_url?: string | null
           p_invoice_number: string
           p_items: Json
           p_note: string
@@ -1290,6 +1560,7 @@ export type Database = {
           created_at: string
           employee_id: string
           employment_type: Database["public"]["Enums"]["employment_type"]
+          gross_pay: number | null
           id: string
           is_paid: boolean
           net_pay: number | null
@@ -1342,8 +1613,10 @@ export type Database = {
           revenue: number
         }[]
       }
+      internal_unlocked: { Args: { p_flag: string }; Returns: boolean }
       is_manager: { Args: never; Returns: boolean }
       local_day_start: { Args: { p_date: string }; Returns: string }
+      local_today: { Args: never; Returns: string }
       next_order_number: { Args: { p_date?: string }; Returns: string }
       next_po_number: { Args: { p_date?: string }; Returns: string }
       pay_payroll: {
@@ -1359,6 +1632,7 @@ export type Database = {
           p_ingredient_id: string
           p_note?: string
           p_quantity: number
+          p_txn_at?: string
           p_txn_type: Database["public"]["Enums"]["inventory_txn_type"]
         }
         Returns: string
@@ -1520,6 +1794,9 @@ export type CompositeTypes<
     : never
 
 export const Constants = {
+  graphql_public: {
+    Enums: {},
+  },
   public: {
     Enums: {
       employment_type: ["full_time", "part_time"],

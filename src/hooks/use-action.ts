@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState, useTransition } from "react";
+import { useCallback, useRef, useState, useTransition } from "react";
 import { toast } from "sonner";
 import type { ActionResult } from "@/types/actions";
 
@@ -26,6 +26,10 @@ export function useAction<TInput, TOutput>(
   const [error, setError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[]> | undefined>(undefined);
 
+  // Call sites pass an inline object literal; giữ options trong ref để `execute` ổn định.
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+
   const execute = useCallback(
     (input: TInput): Promise<ActionResult<TOutput>> =>
       new Promise((resolve) => {
@@ -40,22 +44,23 @@ export function useAction<TInput, TOutput>(
             result = { success: false, error: message };
           }
           if (result.success) {
+            const opts = optionsRef.current;
             const msg =
-              typeof options.successMessage === "function"
-                ? options.successMessage(result.data)
-                : options.successMessage;
+              typeof opts.successMessage === "function"
+                ? opts.successMessage(result.data)
+                : opts.successMessage;
             if (msg) toast.success(msg);
-            await options.onSuccess?.(result.data);
+            await opts.onSuccess?.(result.data);
           } else {
             setError(result.error);
             setFieldErrors(result.fieldErrors);
-            toast.error(options.errorMessage ?? result.error);
-            options.onError?.(result.error, result.fieldErrors);
+            toast.error(optionsRef.current.errorMessage ?? result.error);
+            optionsRef.current.onError?.(result.error, result.fieldErrors);
           }
           resolve(result);
         });
       }),
-    [action, options]
+    [action]
   );
 
   return { execute, pending, error, fieldErrors };

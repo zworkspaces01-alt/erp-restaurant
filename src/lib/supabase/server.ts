@@ -1,6 +1,7 @@
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
 import type { Database } from "@/types/database";
+import { fetchWithJwtClockSkewRetry } from "./fetch";
 
 /**
  * Supabase client for Server Components, Server Actions and Route Handlers.
@@ -8,10 +9,15 @@ import type { Database } from "@/types/database";
  */
 export async function createClient() {
   const cookieStore = await cookies();
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
+  const supabaseKey =
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ||
+    process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
+    "";
 
   return createServerClient<Database>(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+    supabaseUrl,
+    supabaseKey,
     {
       cookies: {
         getAll() {
@@ -27,6 +33,9 @@ export async function createClient() {
             // The middleware refreshes the session, so this can be ignored.
           }
         },
+      },
+      global: {
+        fetch: fetchWithJwtClockSkewRetry,
       },
     }
   );

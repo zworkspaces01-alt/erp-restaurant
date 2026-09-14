@@ -96,6 +96,69 @@ begin
   perform pg_temp.chk_num('auth_profiles_update_own', 1, v_n);
 end $$;
 
+reset role;   -- back to the owner: 3b must hold for the MOST privileged caller too
+
+-- 3b. SEC-09 sanity CHECKs + SEC-11 unforgeable unlock flags (run as postgres/owner:
+--     these must hold even for the most privileged caller, they are not privilege based)
+do $$
+declare v_n int;
+begin
+  select count(*) into v_n from pg_constraint pc
+    join pg_class pcl on pcl.oid = pc.conrelid
+    join pg_namespace pn on pn.oid = pcl.relnamespace
+   where pn.nspname = 'public' and pc.contype = 'c'
+     and pc.conname in ('ingredients_avg_cost_nonneg', 'ingredients_min_alert_nonneg',
+                        'inv_txn_quantity_nonzero', 'inv_txn_unit_cost_nonneg',
+                        'po_due_after_order', 'po_total_nonneg', 'po_paid_nonneg',
+                        'employees_end_after_start', 'orders_subtotal_nonneg',
+                        'orders_total_cogs_nonneg', 'order_items_cogs_nonneg');
+  perform pg_temp.chk_num('sec09_sanity_checks_present', 11, v_n);
+
+  begin
+    insert into employees (code, full_name, employment_type, start_date, end_date)
+      values ('T05-BAD', 'Bad dates', 'part_time', '2025-05-01', '2025-04-01');
+    raise exception 'FAIL sec09_employee_end_before_start: expected check violation';
+  exception when check_violation then raise notice 'PASS sec09_employee_end_before_start';
+  end;
+
+  begin
+    insert into inventory_transactions (ingredient_id, txn_type, quantity)
+      values ((select u from t05 where k = 'ingredients'), 'waste', 0);
+    raise exception 'FAIL sec09_ledger_zero_quantity: expected check violation';
+  exception when check_violation then raise notice 'PASS sec09_ledger_zero_quantity';
+  end;
+
+  -- SEC-11: setting the transaction-local unlock GUC by hand must NOT open the guards
+  -- (they also require pg_trigger_depth() > 1, i.e. a write nested in a trigger).
+  perform set_config('app.ledger_internal', 'on', true);
+  begin
+    insert into inventory_transactions (ingredient_id, txn_type, quantity)
+      values ((select u from t05 where k = 'ingredients'), 'purchase', 5);
+    raise exception 'FAIL sec11_guc_cannot_unlock_ledger: manual purchase row was accepted';
+  exception when others then
+    if sqlerrm like 'LEDGER_MANUAL_FORBIDDEN%' then raise notice 'PASS sec11_guc_cannot_unlock_ledger'; else raise; end if;
+  end;
+  perform set_config('app.ledger_internal', 'off', true);
+
+  perform set_config('app.order_items_unlock', 'on', true);
+  begin
+    update order_items set cogs_amount = 0 where id = (select id from order_items limit 1);
+    raise exception 'FAIL sec11_guc_cannot_unlock_order_items: order line update was accepted';
+  exception when others then
+    if sqlerrm like 'ORDER_ITEMS_IMMUTABLE%' then raise notice 'PASS sec11_guc_cannot_unlock_order_items'; else raise; end if;
+  end;
+  perform set_config('app.order_items_unlock', 'off', true);
+
+  -- SEC-11: a finalized/paid period only accepts the is_paid/paid_at stamp
+  begin
+    update payroll_items set bonus = bonus + 1
+     where payroll_period_id = (select id from payroll_periods where status <> 'draft' limit 1);
+    raise exception 'FAIL sec11_paid_period_items_locked: bonus edit was accepted';
+  exception when others then
+    if sqlerrm like 'PAYROLL_PERIOD_LOCKED%' then raise notice 'PASS sec11_paid_period_items_locked'; else raise; end if;
+  end;
+end $$;
+
 -- 4. anon and mutating RPCs: the call must fail, AND anon must not hold EXECUTE (D2)
 set local role anon;
 -- Both claim shapes: real Supabase reads request.jwt.claims, the bare supabase/postgres

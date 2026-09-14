@@ -21,11 +21,11 @@ exception when others then
 end $$;
 create temp table t04 (k text primary key, v uuid);
 
--- Setup (seed employees deactivated): FT1 13,000,000 + 1,300,000 std 26 ; FT2 10,000,000 + 500,000 std 20 ; PT1 25,000/h ; PT-ended (end 2024-12-31) ; PT-future (start 2025-02-01)
+-- Setup (seed employees retired before the test window - BL-02: generate_payroll now keys on employment overlap, not is_active): FT1 13,000,000 + 1,300,000 std 26 ; FT2 10,000,000 + 500,000 std 20 ; PT1 25,000/h ; PT-ended (end 2024-12-31) ; PT-future (start 2025-02-01)
 do $$
 declare v_ft1 uuid; v_ft2 uuid; v_pt1 uuid; v_ptx uuid; v_ptf uuid;
 begin
-  update employees set is_active = false;
+  update employees set is_active = false, start_date = '2024-01-01', end_date = '2024-12-31';  -- SEC-09: end_date >= start_date
   insert into employees (code, full_name, employment_type, base_salary, allowance, standard_days_per_month, start_date) values ('T04-FT1', 'Test FT1', 'full_time', 13000000, 1300000, 26, '2024-01-01') returning id into v_ft1;
   insert into employees (code, full_name, employment_type, base_salary, allowance, standard_days_per_month, start_date) values ('T04-FT2', 'Test FT2', 'full_time', 10000000, 500000, 20, '2024-01-01') returning id into v_ft2;
   insert into employees (code, full_name, employment_type, hourly_rate, start_date) values ('T04-PT1', 'Test PT1', 'part_time', 25000, '2024-01-01') returning id into v_pt1;
@@ -118,10 +118,14 @@ begin
   perform pg_temp.chk_num('pr_items_all_paid', 3, (select count(*) from payroll_items where payroll_period_id = v_p and is_paid and paid_at = v_ts));
   perform pg_temp.chk_err('pr_pay_twice_raises', format($q$select pay_payroll(%L, 'cash', %L)$q$, v_p, v_ts), 'PAYROLL_PERIOD_PAID');
   perform pg_temp.chk_err('pr_reopen_paid_raises', format($q$update payroll_periods set status = 'draft' where id = %L$q$, v_p), 'PAYROLL_PERIOD_PAID');
-  -- a DRAFT period ending inside Jan 2025 must NOT count as labor cost in the P&L below
-  insert into payroll_periods (name, period_start, period_end) values ('Test nháp', '2025-01-01', '2025-01-30') returning id into v_p2;
+  -- BL-04/D5: payroll periods may never overlap
+  perform pg_temp.chk_err('pr_overlapping_period_raises', $q$insert into payroll_periods (name, period_start, period_end) values ('Test chồng', '2025-01-15', '2025-02-15')$q$, 'PAYROLL_PERIOD_OVERLAP');
+  -- BL-06/D5: a DRAFT period counts as the labor estimate ; FT with NO timekeeping at all in the period is paid in full (13,000,000+1,300,000 and 10,000,000+500,000), PT with no hours gets 0
+  insert into payroll_periods (name, period_start, period_end) values ('Test nháp 04/2025', '2025-04-01', '2025-04-30') returning id into v_p2;
   perform generate_payroll(v_p2);
-  perform pg_temp.chk_txt('pr_draft_period_has_items', 'true', (select (total_net_pay > 0)::text from payroll_periods where id = v_p2));
+  perform pg_temp.chk_num('pr_draft_apr_rows', 4, (select count(*) from payroll_items where payroll_period_id = v_p2));
+  perform pg_temp.chk_num('pr_ft_no_timekeeping_full_pay', 14300000, (select base_pay + allowance from payroll_items where payroll_period_id = v_p2 and employee_id = (select v from t04 where k = 'ft1')));
+  perform pg_temp.chk_num('pr_draft_period_total', 24800000, (select total_net_pay from payroll_periods where id = v_p2));
 end $$;
 -- record_stock_adjustment on W (1,000 g @ 1,000/g): waste 100 -> 900 ; stocktake 850 -> delta -50 ; stocktake 900 -> +50 ; adjustment +25 -> 925
 do $$
@@ -154,7 +158,7 @@ begin
   perform pg_temp.chk_num('adj_guards_stock_unchanged', 925, (select current_stock from ingredients where id = v_w), 0.001);
 end $$;
 -- P&L Jan 2025 (no seed data there). P 100,000 with W 30 g (cost 30,000). Orders: 01-01 00:30+07 1xP ; 01-10 2xP ; 01-20 1xP -20,000 ; 01-25 cancelled ; 02-01 00:30+07 excluded
---   revenue 380,000 ; cogs_sales 120,000 ; waste 10 g + stocktake shortage 5 g @1,000 = 15,000 (surplus + Feb excluded) ; gross 245,000 (64.47%) ; labor 18,055,000 (draft period excluded)
+--   revenue 380,000 ; cogs_sales 120,000 ; waste 10 g + stocktake shortage 5 g @1,000 = 15,000 (surplus + Feb excluded) ; gross 245,000 (64.47%) ; labor 18,085,000 = sum(gross_pay), draft periods included (D6)
 --   opex fixed 1,000,000 + variable 150,000 (Feb / Dec rows excluded) ; net = 245,000 - 18,055,000 - 1,150,000 = -18,960,000 ; net margin -4,989.47%
 do $$
 declare v_w uuid := (select v from t04 where k = 'w'); v_p uuid; v_cf uuid; v_cv uuid; v_ord uuid; r record; ex record;
@@ -174,22 +178,23 @@ begin
   select id into v_cf from expense_categories where name = 'T04 Mặt bằng'; select id into v_cv from expense_categories where name = 'T04 Điện';
   insert into expense_records (category_id, title, amount, expense_date, status) values (v_cf, 'Thuê nhà', 1000000, '2025-01-05', 'pending');
   insert into expense_records (category_id, title, amount, expense_date, status, payment_method) values (v_cv, 'Điện', 150000, '2025-01-20', 'paid', 'bank_transfer') returning * into ex;
-  insert into expense_records (category_id, title, amount, expense_date, status) values (v_cv, 'Điện T2', 99000, '2025-02-01', 'paid'), (v_cf, 'Cũ', 77000, '2024-12-31', 'paid');
+  -- T-16: a 'paid' expense now requires payment_method + amount > 0 (EXPENSE_INVALID)
+  insert into expense_records (category_id, title, amount, expense_date, status, payment_method) values (v_cv, 'Điện T2', 99000, '2025-02-01', 'paid', 'cash'), (v_cf, 'Cũ', 77000, '2024-12-31', 'paid', 'cash');
   perform pg_temp.chk_txt('exp_paid_sets_paid_at', 'true', (ex.paid_at is not null)::text);
   perform pg_temp.chk_txt('exp_pending_paid_at_null', 'true', (select (paid_at is null)::text from expense_records where title = 'Thuê nhà'));
   select * into r from get_pnl_report('2025-01-01', '2025-01-31');
   perform pg_temp.chk_num('pnl_revenue', 380000, r.revenue);
   perform pg_temp.chk_num('pnl_cogs_sales', 120000, r.cogs_sales);
-  perform pg_temp.chk_num('pnl_cogs_waste', 15000, r.cogs_waste);
-  perform pg_temp.chk_num('pnl_cogs_total', 135000, r.cogs_total);
-  perform pg_temp.chk_num('pnl_gross_profit', 245000, r.gross_profit);
-  perform pg_temp.chk_num('pnl_gross_margin_pct', 64.47, r.gross_margin_pct);
-  perform pg_temp.chk_num('pnl_labor_cost', 18055000, r.labor_cost);
+  perform pg_temp.chk_num('pnl_cogs_waste', 10000, r.cogs_waste);
+  perform pg_temp.chk_num('pnl_cogs_total', 130000, r.cogs_total);
+  perform pg_temp.chk_num('pnl_gross_profit', 250000, r.gross_profit);
+  perform pg_temp.chk_num('pnl_gross_margin_pct', 65.79, r.gross_margin_pct);
+  perform pg_temp.chk_num('pnl_labor_cost', 18085000, r.labor_cost);
   perform pg_temp.chk_num('pnl_opex_fixed', 1000000, r.opex_fixed);
   perform pg_temp.chk_num('pnl_opex_variable', 150000, r.opex_variable);
   perform pg_temp.chk_num('pnl_opex_total', 1150000, r.opex_total);
-  perform pg_temp.chk_num('pnl_net_profit', -18960000, r.net_profit);
-  perform pg_temp.chk_num('pnl_net_margin_pct', -4989.47, r.net_margin_pct);
+  perform pg_temp.chk_num('pnl_net_profit', -18985000, r.net_profit);
+  perform pg_temp.chk_num('pnl_net_margin_pct', -4996.05, r.net_margin_pct);
   perform pg_temp.chk_num('pnl_order_count', 3, r.order_count);
   perform pg_temp.chk_num('pnl_avg_order_value', 126666.67, r.avg_order_value);
   perform pg_temp.chk_err('pnl_invalid_range_raises', $q$select * from get_pnl_report('2025-01-31', '2025-01-01')$q$, 'INVALID_RANGE');
@@ -198,12 +203,13 @@ begin
   perform pg_temp.chk_txt('pnl_monthly_months_1_to_12', '1,12,2025-01-01,2025-12-01', (select min(month) || ',' || max(month) || ',' || min(month_start) || ',' || max(month_start) from get_pnl_monthly(2025)));
   select * into r from get_pnl_monthly(2025) where month = 1;
   perform pg_temp.chk_num('pnl_monthly_jan_revenue', 380000, r.revenue);
-  perform pg_temp.chk_num('pnl_monthly_jan_net', -18960000, r.net_profit);
+  perform pg_temp.chk_num('pnl_monthly_jan_net', -18985000, r.net_profit);
   select * into r from get_pnl_monthly(2025) where month = 2;
   perform pg_temp.chk_num('pnl_monthly_feb_revenue', 100000, r.revenue);
   perform pg_temp.chk_num('pnl_monthly_feb_cogs', 40000, r.cogs_total);
   perform pg_temp.chk_num('pnl_monthly_feb_net', -39000, r.net_profit);
-  perform pg_temp.chk_num('pnl_monthly_rest_empty', 0, (select coalesce(sum(abs(revenue) + abs(cogs_total) + abs(opex_total) + abs(labor_cost)), 0) from get_pnl_monthly(2025) where month >= 3));
+  perform pg_temp.chk_num('pnl_monthly_apr_labor_draft', 24800000, (select labor_cost from get_pnl_monthly(2025) where month = 4));
+  perform pg_temp.chk_num('pnl_monthly_rest_empty', 0, (select coalesce(sum(abs(revenue) + abs(cogs_total) + abs(opex_total) + abs(labor_cost)), 0) from get_pnl_monthly(2025) where month >= 3 and month <> 4));
 end $$;
 -- get_dashboard_stats: all keys present and live totals consistent
 do $$
@@ -215,6 +221,17 @@ begin
   perform pg_temp.chk_num('dash_pending_expenses_count', (select count(*) from expense_records where status = 'pending'), (j ->> 'pending_expenses_count')::numeric);
   perform pg_temp.chk_num('dash_low_stock_count', (select count(*) from ingredients where is_active and current_stock < min_alert_stock), (j ->> 'low_stock_count')::numeric);
   perform pg_temp.chk_txt('dash_today_local', to_local_date(now())::text, j ->> 'today');
+end $$;
+
+-- BL-11: record_stock_adjustment can date the ledger row at business time (bounded to <= now())
+do $$
+declare v_w uuid := (select v from t04 where k = 'w'); v_id uuid; r record;
+begin
+  v_id := record_stock_adjustment(v_w, 'waste', 3, 'hỏng cuối tháng 12', '2024-12-20 21:00+07');
+  perform pg_temp.chk_txt('adj_backdated_created_at', '2024-12-20', to_local_date((select created_at from inventory_transactions where id = v_id))::text);
+  select * into r from get_pnl_report('2024-12-01', '2024-12-31');
+  perform pg_temp.chk_num('adj_backdated_lands_in_dec', 3000, r.cogs_waste);
+  perform pg_temp.chk_err('adj_future_date_raises', format($q$select record_stock_adjustment(%L, 'waste', 1, null, now() + interval '1 day')$q$, v_w), 'INVALID_TXN_DATE');
 end $$;
 
 rollback;

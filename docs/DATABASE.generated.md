@@ -34,6 +34,36 @@ Triggers:
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
 
+### `combo_items`
+| column | type | null | default | note |
+|---|---|---|---|---|
+| `id` | uuid | no | gen_random_uuid() |  |
+| `combo_id` | uuid | no |  |  |
+| `menu_item_id` | uuid | no |  |  |
+| `quantity` | numeric(10,2) | no |  |  |
+| `note` | text | yes |  |  |
+| `created_at` | timestamp with time zone | no | now() |  |
+| `updated_at` | timestamp with time zone | no | now() |  |
+
+Constraints:
+- combo_items_quantity_check: CHECK ((quantity > (0)::numeric))
+- combo_items_combo_id_fkey: FOREIGN KEY (combo_id) REFERENCES menu_items(id) ON DELETE CASCADE
+- combo_items_menu_item_id_fkey: FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
+- combo_items_pkey: PRIMARY KEY (id)
+- combo_items_combo_id_menu_item_id_key: UNIQUE (combo_id, menu_item_id)
+
+Indexes:
+- CREATE UNIQUE INDEX combo_items_combo_id_menu_item_id_key ON public.combo_items USING btree (combo_id, menu_item_id)
+- CREATE INDEX idx_combo_items_combo ON public.combo_items USING btree (combo_id)
+- CREATE INDEX idx_combo_items_menu_item ON public.combo_items USING btree (menu_item_id)
+
+Triggers:
+- trg_combo_items_updated_at: CREATE TRIGGER trg_combo_items_updated_at BEFORE UPDATE ON public.combo_items FOR EACH ROW EXECUTE FUNCTION set_updated_at()
+- trg_combo_items_validate: CREATE TRIGGER trg_combo_items_validate BEFORE INSERT OR UPDATE ON public.combo_items FOR EACH ROW EXECUTE FUNCTION trg_combo_items_validate()
+
+RLS enabled: t
+- authenticated full access (ALL, roles=authenticated)
+
 ### `employees`
 | column | type | null | default | note |
 |---|---|---|---|---|
@@ -59,6 +89,7 @@ RLS enabled: t
 Constraints:
 - employees_allowance_check: CHECK ((allowance >= (0)::numeric))
 - employees_base_salary_check: CHECK ((base_salary >= (0)::numeric))
+- employees_end_after_start: CHECK (((end_date IS NULL) OR (start_date IS NULL) OR (end_date >= start_date)))
 - employees_hourly_rate_check: CHECK ((hourly_rate >= (0)::numeric))
 - employees_standard_days_per_month_check: CHECK ((standard_days_per_month > 0))
 - employees_pkey: PRIMARY KEY (id)
@@ -83,6 +114,7 @@ RLS enabled: t
 | `description` | text | yes |  |  |
 | `is_active` | boolean | no | true |  |
 | `created_at` | timestamp with time zone | no | now() |  |
+| `updated_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
 - expense_categories_pkey: PRIMARY KEY (id)
@@ -90,6 +122,9 @@ Constraints:
 
 Indexes:
 - CREATE UNIQUE INDEX expense_categories_name_key ON public.expense_categories USING btree (name)
+
+Triggers:
+- trg_expense_categories_updated_at: CREATE TRIGGER trg_expense_categories_updated_at BEFORE UPDATE ON public.expense_categories FOR EACH ROW EXECUTE FUNCTION set_updated_at()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -101,7 +136,7 @@ RLS enabled: t
 | `category_id` | uuid | no |  |  |
 | `title` | text | no |  |  |
 | `amount` | numeric(14,2) | no | 0 |  |
-| `expense_date` | date | no | CURRENT_DATE |  |
+| `expense_date` | date | no | local_today() |  |
 | `status` | expense_status | no | 'pending'::expense_status |  |
 | `payment_method` | payment_method | yes |  |  |
 | `paid_at` | timestamp with time zone | yes |  |  |
@@ -150,7 +185,9 @@ RLS enabled: t
 | `updated_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
+- ingredients_avg_cost_nonneg: CHECK ((avg_cost_price >= (0)::numeric))
 - ingredients_conversion_factor_check: CHECK ((conversion_factor > (0)::numeric))
+- ingredients_min_alert_nonneg: CHECK ((min_alert_stock >= (0)::numeric))
 - ingredients_default_supplier_id_fkey: FOREIGN KEY (default_supplier_id) REFERENCES suppliers(id) ON DELETE SET NULL
 - ingredients_pkey: PRIMARY KEY (id)
 - ingredients_code_key: UNIQUE (code)
@@ -183,6 +220,8 @@ RLS enabled: t
 | `created_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
+- inv_txn_quantity_nonzero: CHECK ((quantity <> (0)::numeric))
+- inv_txn_unit_cost_nonneg: CHECK (((unit_cost IS NULL) OR (unit_cost >= (0)::numeric)))
 - inventory_transactions_ingredient_id_fkey: FOREIGN KEY (ingredient_id) REFERENCES ingredients(id)
 - inventory_transactions_pkey: PRIMARY KEY (id)
 
@@ -208,6 +247,7 @@ RLS enabled: t
 | `category` | text | yes |  |  |
 | `selling_price` | numeric(14,2) | no | 0 |  |
 | `is_active` | boolean | no | true |  |
+| `is_combo` | boolean | no | false |  |
 | `description` | text | yes |  |  |
 | `image_url` | text | yes |  |  |
 | `created_at` | timestamp with time zone | no | now() |  |
@@ -220,6 +260,7 @@ Constraints:
 
 Indexes:
 - CREATE INDEX idx_menu_items_category ON public.menu_items USING btree (category)
+- CREATE INDEX idx_menu_items_is_combo ON public.menu_items USING btree (is_combo)
 - CREATE UNIQUE INDEX menu_items_code_key ON public.menu_items USING btree (code)
 
 Triggers:
@@ -242,6 +283,7 @@ RLS enabled: t
 | `created_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
+- order_items_cogs_nonneg: CHECK ((cogs_amount >= (0)::numeric))
 - order_items_quantity_check: CHECK ((quantity > (0)::numeric))
 - order_items_unit_price_check: CHECK ((unit_price >= (0)::numeric))
 - order_items_menu_item_id_fkey: FOREIGN KEY (menu_item_id) REFERENCES menu_items(id)
@@ -279,11 +321,14 @@ RLS enabled: t
 
 Constraints:
 - orders_discount_check: CHECK ((discount >= (0)::numeric))
+- orders_subtotal_nonneg: CHECK ((subtotal >= (0)::numeric))
+- orders_total_cogs_nonneg: CHECK ((total_cogs >= (0)::numeric))
 - orders_pkey: PRIMARY KEY (id)
 - orders_order_number_key: UNIQUE (order_number)
 
 Indexes:
 - CREATE INDEX idx_orders_date_status ON public.orders USING btree (order_date, status)
+- CREATE INDEX idx_orders_number_pattern ON public.orders USING btree (order_number text_pattern_ops)
 - CREATE UNIQUE INDEX orders_order_number_key ON public.orders USING btree (order_number)
 
 Triggers:
@@ -310,6 +355,7 @@ RLS enabled: t
 | `advance_deduction` | numeric(14,2) | no | 0 |  |
 | `penalty` | numeric(14,2) | no | 0 |  |
 | `net_pay` | numeric(14,2) | yes |  | GENERATED: (((((base_pay + allowance) + bonus) + tips) - advance_deduction) - penalty)  |
+| `gross_pay` | numeric(14,2) | yes |  | GENERATED: ((((base_pay + allowance) + bonus) + tips) - penalty)  |
 | `is_paid` | boolean | no | false |  |
 | `paid_at` | timestamp with time zone | yes |  |  |
 | `note` | text | yes |  |  |
@@ -317,6 +363,14 @@ RLS enabled: t
 | `updated_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
+- payroll_items_advance_deduction_check: CHECK ((advance_deduction >= (0)::numeric))
+- payroll_items_allowance_check: CHECK ((allowance >= (0)::numeric))
+- payroll_items_base_pay_check: CHECK ((base_pay >= (0)::numeric))
+- payroll_items_bonus_check: CHECK ((bonus >= (0)::numeric))
+- payroll_items_penalty_check: CHECK ((penalty >= (0)::numeric))
+- payroll_items_tips_check: CHECK ((tips >= (0)::numeric))
+- payroll_items_total_days_check: CHECK ((total_days >= (0)::numeric))
+- payroll_items_total_hours_check: CHECK ((total_hours >= (0)::numeric))
 - payroll_items_employee_id_fkey: FOREIGN KEY (employee_id) REFERENCES employees(id)
 - payroll_items_payroll_period_id_fkey: FOREIGN KEY (payroll_period_id) REFERENCES payroll_periods(id) ON DELETE CASCADE
 - payroll_items_pkey: PRIMARY KEY (id)
@@ -357,11 +411,13 @@ Constraints:
 
 Indexes:
 - CREATE INDEX idx_payroll_periods_dates ON public.payroll_periods USING btree (period_start, period_end)
+- CREATE INDEX payroll_periods_daterange_excl ON public.payroll_periods USING gist (daterange(period_start, period_end, '[]'::text))
 - CREATE UNIQUE INDEX payroll_periods_period_start_period_end_key ON public.payroll_periods USING btree (period_start, period_end)
 
 Triggers:
 - trg_payroll_periods_before_delete: CREATE TRIGGER trg_payroll_periods_before_delete BEFORE DELETE ON public.payroll_periods FOR EACH ROW EXECUTE FUNCTION trg_payroll_periods_before_delete()
 - trg_payroll_periods_before_update: CREATE TRIGGER trg_payroll_periods_before_update BEFORE UPDATE ON public.payroll_periods FOR EACH ROW EXECUTE FUNCTION trg_payroll_periods_before_update()
+- trg_payroll_periods_no_overlap: CREATE TRIGGER trg_payroll_periods_no_overlap BEFORE INSERT OR UPDATE OF period_start, period_end ON public.payroll_periods FOR EACH ROW EXECUTE FUNCTION trg_payroll_periods_no_overlap()
 
 RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
@@ -427,7 +483,7 @@ RLS enabled: t
 | `id` | uuid | no | gen_random_uuid() |  |
 | `po_number` | text | yes |  |  |
 | `supplier_id` | uuid | no |  |  |
-| `order_date` | date | no | CURRENT_DATE |  |
+| `order_date` | date | no | local_today() |  |
 | `due_date` | date | yes |  |  |
 | `total_amount` | numeric(14,2) | no | 0 |  |
 | `paid_amount` | numeric(14,2) | no | 0 |  |
@@ -440,12 +496,16 @@ RLS enabled: t
 | `updated_at` | timestamp with time zone | no | now() |  |
 
 Constraints:
+- po_due_after_order: CHECK (((due_date IS NULL) OR (order_date IS NULL) OR (due_date >= order_date)))
+- po_paid_nonneg: CHECK ((paid_amount >= (0)::numeric))
+- po_total_nonneg: CHECK ((total_amount >= (0)::numeric))
 - purchase_orders_supplier_id_fkey: FOREIGN KEY (supplier_id) REFERENCES suppliers(id)
 - purchase_orders_pkey: PRIMARY KEY (id)
 - purchase_orders_po_number_key: UNIQUE (po_number)
 
 Indexes:
 - CREATE INDEX idx_purchase_orders_order_date ON public.purchase_orders USING btree (order_date)
+- CREATE INDEX idx_purchase_orders_po_number_pattern ON public.purchase_orders USING btree (po_number text_pattern_ops)
 - CREATE INDEX idx_purchase_orders_supplier_due ON public.purchase_orders USING btree (supplier_id, due_date)
 - CREATE UNIQUE INDEX purchase_orders_po_number_key ON public.purchase_orders USING btree (po_number)
 
@@ -521,7 +581,7 @@ RLS enabled: t
 | `supplier_id` | uuid | no |  |  |
 | `purchase_order_id` | uuid | yes |  |  |
 | `amount` | numeric(14,2) | no |  |  |
-| `payment_date` | date | no | CURRENT_DATE |  |
+| `payment_date` | date | no | local_today() |  |
 | `method` | payment_method | no | 'cash'::payment_method |  |
 | `reference` | text | yes |  |  |
 | `note` | text | yes |  |  |
@@ -584,7 +644,7 @@ RLS enabled: t
 |---|---|---|---|---|
 | `id` | uuid | no | gen_random_uuid() |  |
 | `employee_id` | uuid | no |  |  |
-| `work_date` | date | no |  |  |
+| `work_date` | date | no | local_today() |  |
 | `shift` | text | yes |  |  |
 | `check_in` | time without time zone | yes |  |  |
 | `check_out` | time without time zone | yes |  |  |
@@ -613,6 +673,25 @@ RLS enabled: t
 - authenticated full access (ALL, roles=authenticated)
 
 ## Views
+
+### `v_combo_items`
+| column | type |
+|---|---|
+| `id` | uuid |
+| `combo_id` | uuid |
+| `menu_item_id` | uuid |
+| `item_code` | text |
+| `item_name` | text |
+| `item_category` | text |
+| `item_selling_price` | numeric |
+| `quantity` | numeric |
+| `item_ideal_cost` | numeric |
+| `line_cost` | numeric |
+| `line_selling_total` | numeric |
+| `item_missing_recipe` | boolean |
+| `note` | text |
+| `created_at` | timestamp with time zone |
+| `updated_at` | timestamp with time zone |
 
 ### `v_daily_sales`
 | column | type |
@@ -682,6 +761,7 @@ RLS enabled: t
 | `category` | text |
 | `selling_price` | numeric |
 | `is_active` | boolean |
+| `is_combo` | boolean |
 | `image_url` | text |
 | `ideal_cost` | numeric |
 | `contribution_margin` | numeric |
@@ -766,17 +846,20 @@ RLS enabled: t
 - `get_pnl_monthly(p_year integer)` → `TABLE(month integer, month_start date, revenue numeric, cogs_total numeric, gross_profit numeric, labor_cost numeric, opex_total numeric, net_profit numeric)`
 - `get_pnl_report(p_start date, p_end date)` → `TABLE(revenue numeric, cogs_sales numeric, cogs_waste numeric, cogs_total numeric, gross_profit numeric, gross_margin_pct numeric, labor_cost numeric, opex_fixed numeric, opex_variable numeric, opex_total numeric, net_profit numeric, net_margin_pct numeric, order_count integer, avg_order_value numeric)`
 - `handle_new_user()` → `trigger` SECURITY DEFINER
+- `internal_unlocked(p_flag text)` → `boolean`
 - `is_manager()` → `boolean` SECURITY DEFINER
 - `local_day_start(p_date date)` → `timestamp with time zone`
-- `next_order_number(p_date date DEFAULT CURRENT_DATE)` → `text` SECURITY DEFINER
-- `next_po_number(p_date date DEFAULT CURRENT_DATE)` → `text` SECURITY DEFINER
+- `local_today()` → `date`
+- `next_order_number(p_date date DEFAULT local_today())` → `text` SECURITY DEFINER
+- `next_po_number(p_date date DEFAULT local_today())` → `text` SECURITY DEFINER
 - `pay_payroll(p_period_id uuid, p_method payment_method DEFAULT 'bank_transfer'::payment_method, p_paid_at timestamp with time zone DEFAULT now())` → `void` SECURITY DEFINER
-- `record_stock_adjustment(p_ingredient_id uuid, p_txn_type inventory_txn_type, p_quantity numeric, p_note text DEFAULT NULL::text)` → `uuid` SECURITY DEFINER
+- `record_stock_adjustment(p_ingredient_id uuid, p_txn_type inventory_txn_type, p_quantity numeric, p_note text DEFAULT NULL::text, p_txn_at timestamp with time zone DEFAULT NULL::timestamp with time zone)` → `uuid` SECURITY DEFINER
 - `record_supplier_payment(p_supplier_id uuid, p_amount numeric, p_payment_date date, p_method payment_method, p_purchase_order_id uuid DEFAULT NULL::uuid, p_reference text DEFAULT NULL::text, p_note text DEFAULT NULL::text)` → `uuid` SECURITY DEFINER
 - `reopen_payroll(p_period_id uuid)` → `void` SECURITY DEFINER
 - `set_updated_at()` → `trigger`
 - `to_local_date(p_ts timestamp with time zone)` → `date`
 - `trg_app_settings_validate()` → `trigger` SECURITY DEFINER
+- `trg_combo_items_validate()` → `trigger` SECURITY DEFINER
 - `trg_employees_before_delete()` → `trigger` SECURITY DEFINER
 - `trg_expense_records_before()` → `trigger` SECURITY DEFINER
 - `trg_inventory_txn_before_insert()` → `trigger` SECURITY DEFINER
@@ -789,6 +872,7 @@ RLS enabled: t
 - `trg_payroll_items_sync_total()` → `trigger` SECURITY DEFINER
 - `trg_payroll_periods_before_delete()` → `trigger` SECURITY DEFINER
 - `trg_payroll_periods_before_update()` → `trigger` SECURITY DEFINER
+- `trg_payroll_periods_no_overlap()` → `trigger` SECURITY DEFINER
 - `trg_po_items_after_delete()` → `trigger` SECURITY DEFINER
 - `trg_po_items_after_insert()` → `trigger` SECURITY DEFINER
 - `trg_po_items_before_insert()` → `trigger` SECURITY DEFINER
@@ -816,14 +900,16 @@ RLS enabled: t
 - `get_dashboard_stats`: anon=false, authenticated=true
 - `get_pnl_monthly`: anon=false, authenticated=true
 - `get_pnl_report`: anon=false, authenticated=true
-- `handle_new_user`: anon=false, authenticated=true
+- `handle_new_user`: anon=false, authenticated=false
+- `internal_unlocked`: anon=false, authenticated=true
 - `is_manager`: anon=false, authenticated=true
 - `local_day_start`: anon=false, authenticated=true
+- `local_today`: anon=false, authenticated=true
 - `next_order_number`: anon=false, authenticated=true
 - `next_po_number`: anon=false, authenticated=true
 - `pay_payroll`: anon=false, authenticated=true
 - `record_stock_adjustment`: anon=false, authenticated=true
 - `record_supplier_payment`: anon=false, authenticated=true
 - `reopen_payroll`: anon=false, authenticated=true
-- `set_updated_at`: anon=false, authenticated=true
+- `set_updated_at`: anon=false, authenticated=false
 - `to_local_date`: anon=false, authenticated=true

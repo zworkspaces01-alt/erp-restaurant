@@ -1,11 +1,12 @@
 import { MobileNav } from "@/components/layout/mobile-nav";
 import { ThemeToggle } from "@/components/layout/theme-toggle";
 import { UserMenu } from "@/components/layout/user-menu";
+import type { UserRole } from "@/types/restaurant";
 
 interface HeaderProps {
   email: string | null;
   fullName: string | null;
-  role: string | null;
+  role: UserRole | null;
 }
 
 export function Header({ email, fullName, role }: HeaderProps) {

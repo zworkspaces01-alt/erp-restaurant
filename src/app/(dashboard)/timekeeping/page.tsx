@@ -1,69 +1,88 @@
-import Link from "next/link";
-import { Wallet } from "lucide-react";
+import { CalendarDays, Clock, Users } from "lucide-react";
 import { getTimekeeping } from "@/lib/queries/hr.queries";
-import { PageHeader } from "@/components/shared/page-header";
+import { formatDate, formatNumber, todayISO } from "@/lib/format";
+import { PageHeader, StatCard } from "@/components/shared";
+import { TimekeepingDialog } from "@/components/hr/timekeeping-dialog";
+import { TimekeepingFilters, type TimekeepingView } from "@/components/hr/timekeeping-filters";
 import { TimekeepingTable } from "@/components/hr/timekeeping-table";
-import { todayISO } from "@/lib/format";
-import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 
-export const metadata = { title: "Chấm công nhân viên | Restaurant ERP" };
+export const metadata = { title: "Chấm công | Restaurant ERP" };
+
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const MONTH_RE = /^\d{4}-\d{2}$/;
+
+function lastDayOfMonth(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  const end = new Date(Date.UTC(y, m, 0));
+  return end.toISOString().slice(0, 10);
+}
 
 export default async function TimekeepingPage({
   searchParams,
 }: {
-  searchParams: Promise<{ date?: string }>;
+  searchParams: Promise<{ view?: string; date?: string }>;
 }) {
-  const { date } = await searchParams;
-  const targetDate = date ?? todayISO();
-  const { employees, timekeeping } = await getTimekeeping(targetDate);
+  const sp = await searchParams;
+  const view: TimekeepingView = sp.view === "month" ? "month" : "day";
+  const today = todayISO();
 
-  const formattedEmployees = employees.map((e) => ({
-    id: e.id,
-    code: e.code,
-    full_name: e.full_name,
-    role: e.role,
-    employment_type: e.employment_type,
-  }));
+  const raw = sp.date ?? (view === "month" ? today.slice(0, 7) : today);
+  const value =
+    view === "month"
+      ? MONTH_RE.test(raw)
+        ? raw
+        : today.slice(0, 7)
+      : DAY_RE.test(raw)
+        ? raw
+        : today;
 
-  const formattedTimekeeping = timekeeping.map((t) => ({
-    employee_id: t.employee_id,
-    shift: t.shift,
-    hours_worked: Number(t.hours_worked),
-    status: t.status,
-    notes: t.notes,
-  }));
+  const from = view === "month" ? `${value}-01` : value;
+  const to = view === "month" ? lastDayOfMonth(value) : value;
+
+  const { rows, employees, totalHours } = await getTimekeeping(from, to);
+
+  const shiftOptions = Array.from(
+    new Set(rows.map((r) => r.shift).filter((s): s is string => Boolean(s)))
+  ).sort((a, b) => a.localeCompare(b, "vi"));
+  const uniqueEmployees = new Set(rows.map((r) => r.employee_id)).size;
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Chấm công hàng ngày"
-        description="Điểm danh ca làm, ghi nhận số giờ làm việc thực tế của nhân sự Full-time và Part-time để tự động tính bảng lương."
-        breadcrumbs={[
-          { label: "Nhân sự", href: "/employees" },
-          { label: "Chấm công" },
-        ]}
+        title="Chấm công"
+        description="Ghi nhận giờ công theo ngày và ca làm; số giờ được hệ thống tự tính từ giờ vào/ra."
         actions={
-          <div className="flex items-center gap-2">
-            <Button asChild variant="outline" size="sm">
-              <Link href="/payroll">
-                <Wallet className="mr-1.5 size-4" />
-                Kỳ tính lương
-              </Link>
-            </Button>
+          <div className="flex flex-wrap items-center gap-2">
+            <TimekeepingFilters view={view} value={value} />
+            <TimekeepingDialog employees={employees} defaultDate={from} />
           </div>
         }
       />
 
-      <Card>
-        <CardContent className="p-0">
-          <TimekeepingTable
-            targetDate={targetDate}
-            employees={formattedEmployees}
-            timekeeping={formattedTimekeeping}
-          />
-        </CardContent>
-      </Card>
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+        <StatCard
+          title={view === "month" ? "Khoảng thời gian" : "Ngày chấm công"}
+          value={view === "month" ? `${formatDate(from)} – ${formatDate(to)}` : formatDate(from)}
+          hint={`${formatNumber(rows.length)} lượt chấm công`}
+          icon={CalendarDays}
+        />
+        <StatCard
+          title="Tổng giờ công"
+          value={`${formatNumber(totalHours, 1)} giờ`}
+          hint="Tổng số giờ đã ghi nhận trong khoảng thời gian"
+          icon={Clock}
+          tone="info"
+        />
+        <StatCard
+          title="Nhân viên có công"
+          value={formatNumber(uniqueEmployees)}
+          hint={`${formatNumber(employees.length)} nhân viên đang làm việc`}
+          icon={Users}
+          tone="success"
+        />
+      </div>
+
+      <TimekeepingTable rows={rows} shiftOptions={shiftOptions} />
     </div>
   );
 }

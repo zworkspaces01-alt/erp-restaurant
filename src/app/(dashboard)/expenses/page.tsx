@@ -1,113 +1,86 @@
 import Link from "next/link";
-import { FolderTree } from "lucide-react";
-import { getExpenseCategories, getExpenses } from "@/lib/queries/expenses.queries";
-import { PageHeader } from "@/components/shared/page-header";
-import { AddExpenseDialog } from "@/components/expenses/add-expense-dialog";
-import { formatDate, formatVND } from "@/lib/format";
-import { Badge } from "@/components/ui/badge";
+import { CircleDollarSign, Clock, FolderTree, Wallet } from "lucide-react";
+import {
+  getExpenseCategories,
+  getExpenses,
+  normalizeMonth,
+  summarizeExpenses,
+} from "@/lib/queries/expenses.queries";
+import { formatMonth, formatVND } from "@/lib/format";
+import { PageHeader, StatCard } from "@/components/shared";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { ExpensesTable } from "@/components/expenses/expenses-table";
+import { MonthFilter } from "@/components/expenses/month-filter";
+import type { ExpenseStatus } from "@/types/restaurant";
 
 export const metadata = { title: "Chi phí vận hành | Restaurant ERP" };
 
-export default async function ExpensesPage() {
-  const [expenses, categories] = await Promise.all([
-    getExpenses(),
+interface PageProps {
+  searchParams: Promise<{ month?: string; status?: string; category?: string }>;
+}
+
+export default async function ExpensesPage({ searchParams }: PageProps) {
+  const params = await searchParams;
+  const month = normalizeMonth(params.month);
+  const status: ExpenseStatus | undefined =
+    params.status === "paid" || params.status === "pending" ? params.status : undefined;
+
+  const [rows, categories] = await Promise.all([
+    getExpenses({ month, status, categoryId: params.category }),
     getExpenseCategories(),
   ]);
 
-  const totalOpex = expenses
-    .filter((e) => e.status === "paid")
-    .reduce((sum, e) => sum + Number(e.amount), 0);
+  const totals = summarizeExpenses(rows);
 
   return (
     <div className="space-y-6">
       <PageHeader
-        title="Chi phí cố định & Vận hành (OPEX)"
-        description="Quản lý chi phí mặt bằng, điện nước gas, marketing và bảo dưỡng thiết bị phục vụ tính toán lãi lỗ P&L."
+        title="Chi phí vận hành"
+        description="Theo dõi chi phí mặt bằng, điện nước, marketing, bảo trì… phục vụ báo cáo lãi lỗ P&L."
         actions={
-          <div className="flex gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <MonthFilter month={month} />
             <Button asChild variant="outline" size="sm">
               <Link href="/expenses/categories">
-                <FolderTree className="mr-1.5 size-4" />
-                Danh mục chi phí
+                <FolderTree className="size-4" />
+                Nhóm chi phí
               </Link>
             </Button>
-            <AddExpenseDialog categories={categories} />
           </div>
         }
       />
 
-      <Card className="p-4">
-        <p className="text-xs font-medium text-muted-foreground">Tổng chi phí vận hành đã chi</p>
-        <p className="mt-1 text-2xl font-semibold text-rose-600 dark:text-rose-400">
-          {formatVND(totalOpex)}
-        </p>
-      </Card>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <StatCard
+          title={`Chờ thanh toán · ${formatMonth(`${month}-01`)}`}
+          value={formatVND(totals.pending_amount)}
+          hint={`${totals.pending_count} khoản chưa chi`}
+          icon={Clock}
+          tone="warning"
+        />
+        <StatCard
+          title="Đã thanh toán"
+          value={formatVND(totals.paid_amount)}
+          hint={`${totals.paid_count} khoản đã chi`}
+          icon={Wallet}
+          tone="success"
+        />
+        <StatCard
+          title="Tổng chi phí trong kỳ"
+          value={formatVND(totals.total_amount)}
+          hint="Ghi nhận theo ngày chi (dồn tích)"
+          icon={CircleDollarSign}
+        />
+        <StatCard
+          title="Cố định / Biến đổi"
+          value={formatVND(totals.fixed_amount)}
+          hint={`Biến đổi: ${formatVND(totals.variable_amount)}`}
+          icon={CircleDollarSign}
+          tone="info"
+        />
+      </div>
 
-      <Card>
-        <CardContent className="p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead className="border-b bg-muted/40 text-xs text-muted-foreground">
-                <tr>
-                  <th className="px-4 py-3 font-medium">Ngày chi</th>
-                  <th className="px-4 py-3 font-medium">Danh mục</th>
-                  <th className="px-4 py-3 font-medium">Nội dung chi phí</th>
-                  <th className="px-4 py-3 font-medium">Hình thức</th>
-                  <th className="px-4 py-3 font-medium text-right">Số tiền</th>
-                  <th className="px-4 py-3 font-medium text-center">Trạng thái</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {expenses.length === 0 ? (
-                  <tr>
-                    <td colSpan={6} className="py-8 text-center text-muted-foreground">
-                      Chưa có hóa đơn chi phí nào.
-                    </td>
-                  </tr>
-                ) : (
-                  expenses.map((e) => {
-                    const cat = e.expense_categories as { name?: string; code?: string } | null;
-
-                    return (
-                      <tr key={e.id} className="hover:bg-muted/30">
-                        <td className="whitespace-nowrap px-4 py-3 text-xs text-muted-foreground">
-                          {formatDate(e.expense_date)}
-                        </td>
-                        <td className="px-4 py-3 font-medium text-foreground">
-                          {cat?.name ?? "—"}
-                        </td>
-                        <td className="px-4 py-3 text-foreground">
-                          {e.description}
-                        </td>
-                        <td className="px-4 py-3 text-xs capitalize text-muted-foreground">
-                          {e.payment_method === "bank_transfer" ? "Chuyển khoản" : "Tiền mặt"}
-                        </td>
-                        <td className="px-4 py-3 text-right font-bold text-foreground">
-                          {formatVND(e.amount)}
-                        </td>
-                        <td className="px-4 py-3 text-center">
-                          <Badge
-                            variant={e.status === "paid" ? "outline" : "secondary"}
-                            className={
-                              e.status === "paid"
-                                ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
-                                : ""
-                            }
-                          >
-                            {e.status === "paid" ? "Đã chi" : "Chờ chi"}
-                          </Badge>
-                        </td>
-                      </tr>
-                    );
-                  })
-                )}
-              </tbody>
-            </table>
-          </div>
-        </CardContent>
-      </Card>
+      <ExpensesTable rows={rows} categories={categories} />
     </div>
   );
 }
