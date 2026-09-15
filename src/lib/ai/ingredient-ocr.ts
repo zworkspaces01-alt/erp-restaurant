@@ -29,36 +29,42 @@ export interface IngredientOcrRequestOptions {
 }
 
 const INGREDIENT_OCR_PROMPT = `
-Bạn là chuyên gia quản lý kho và danh mục nguyên vật liệu nhà hàng tại Việt Nam.
-Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn, bảng kê danh mục sản phẩm, hoặc nhãn bao bì sản phẩm) và trích xuất:
-1. Thông tin Nhà cung cấp / Đơn vị bán hàng (nếu có trên ảnh).
-2. Danh sách các Nguyên liệu vào định dạng JSON thuần túy.
+Bạn là chuyên gia OCR và quản lý kho nguyên vật liệu nhà hàng F&B tại Việt Nam.
+Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn nhập hàng, danh mục sản phẩm, danh sách viết tay hoặc bảng in) và trích xuất TOÀN BỘ các nguyên liệu cùng thông tin Nhà cung cấp vào định dạng JSON.
 
-Quy tắc trích xuất:
-1. "supplier": Thông tin nhà cung cấp / đại lý / công ty bán hàng xuất bảng giá hoặc hóa đơn (nếu có tên công ty/cửa hàng/đại lý trên ảnh, hoặc null nếu không có):
-   - "name": Tên nhà cung cấp / công ty / cửa hàng / đại lý (vd: "Công ty Thực Phẩm Tân Nhất Hương", "Đại lý Trứng Gia Cầm Ba Huân").
-   - "tax_code": Mã số thuế nếu có (chuỗi số).
-   - "phone": Số điện thoại liên hệ / hotline nếu có.
-   - "address": Địa chỉ nhà cung cấp nếu có.
-   - "contact_name": Người liên hệ / đại diện bán hàng nếu có.
-2. "source_title": Tiêu đề bảng giá hoặc tên nhà cung cấp nếu có.
-3. "items": Mảng danh sách các mặt hàng nguyên liệu:
-   - "name": Tên nguyên liệu chuẩn tiếng Việt (vd: "Thịt bò thăn", "Bột mì đa dụng Meizan", "Sữa tươi Vinamilk không đường", "Dầu hào Lee Kum Kee").
-   - "code": Mã nguyên liệu gợi ý (viết hoa không dấu, bắt đầu bằng NL-, vd: "NL-THITBO", "NL-BOTMI", "NL-SUATUOI").
-   - "category": Danh mục gợi ý chuẩn F&B (vd: "Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
-   - "base_unit": Đơn vị cơ sở dùng để định lượng và xuất kho (bắt buộc, vd: "kg", "g", "lít", "ml", "quả", "hộp", "lon", "chai", "gói", "cái").
-   - "import_unit": Đơn vị mua/nhập từ nhà cung cấp (bắt buộc, vd: "thùng", "bao", "kg", "két", "hộp", "lốc", "bịch").
+QUY TẮC BẮT BUỘC VỀ ĐỘ ĐẦY ĐỦ (QUÉT 100% NGUYÊN LIỆU, KHÔNG BỎ SÓT):
+1. QUÉT HẾT TẤT CẢ MẶT HÀNG TRÊN ẢNH:
+   - Ảnh có thể chứa danh sách rất dài (10, 20, 50, 100 dòng nguyên liệu trở lên).
+   - Bạn PHẢI quét và trích xuất TOÀN BỘ từ dòng đầu tiên đến dòng cuối cùng của bảng/ảnh.
+   - TUYỆT ĐỐI KHÔNG bỏ qua bất kỳ dòng nào, TUYỆT ĐỐI KHÔNG tóm tắt hay dùng dấu ba chấm (...), TUYỆT ĐỐI KHÔNG dừng lại giữa chừng.
+2. BẢNG NHIỀU CỘT HOẶC NHIỀU NHÓM DANH MỤC:
+   - Nếu ảnh có bảng chia thành 2 hoặc nhiều cột song song, hoặc chia theo nhóm/tiêu đề danh mục (Thịt, Hải sản, Rau củ quả, Gia vị, Đồ khô, Bơ sữa trứng, Đồ uống, Bao bì, v.v.):
+   - Bạn phải đọc tuần tự từng cột, từng nhóm và đưa TẤT CẢ từng mặt hàng vào mảng "items".
+3. THÔNG TIN NHÀ CUNG CẤP ("supplier"):
+   - Tìm thông tin công ty, cửa hàng, đại lý xuất bảng giá/hóa đơn ở đầu hoặc cuối ảnh:
+     "name": Tên nhà cung cấp / đại lý / cửa hàng.
+     "tax_code": Mã số thuế (nếu có).
+     "phone": Số điện thoại liên hệ / hotline (nếu có).
+     "address": Địa chỉ nhà cung cấp (nếu có).
+     "contact_name": Người liên hệ / đại diện bán hàng (nếu có).
+   - Nếu không có thông tin nhà cung cấp trên ảnh, đặt "supplier": null.
+4. CHI TIẾT TỪNG NGUYÊN LIỆU TRONG MẢNG "items":
+   - "name": Tên nguyên liệu chuẩn tiếng Việt (vd: "Thịt bò thăn", "Bột mì đa dụng Meizan", "Hành tây Đà Lạt", "Dầu hào Maggi").
+   - "code": Mã nguyên liệu viết hoa không dấu bắt đầu bằng NL- (vd: "NL-THITBO", "NL-BOTMI", "NL-HANHTAY").
+   - "category": Nhóm danh mục F&B phù hợp (vd: "Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
+   - "base_unit": Đơn vị cơ sở dùng để định lượng và xuất kho (bắt buộc, vd: "kg", "g", "lít", "ml", "quả", "hộp", "lon", "chai", "gói", "cái", "củ", "bó").
+   - "import_unit": Đơn vị mua/nhập từ NCC (vd: "thùng", "bao", "kg", "két", "hộp", "lốc", "bịch", "túi", "chai").
    - "conversion_factor": Hệ số quy đổi (1 Đơn vị nhập = bao nhiêu Đơn vị cơ sở, số thực >= 1).
-      Ví dụ:
-      - Mua thùng 24 lon: import_unit = "thùng", base_unit = "lon", conversion_factor = 24.
-      - Mua bao 25 kg: import_unit = "bao", base_unit = "kg", conversion_factor = 25.
-      - Mua theo kg dùng theo kg: import_unit = "kg", base_unit = "kg", conversion_factor = 1.
-      - Mua chai 1 lít dùng theo ml: import_unit = "chai", base_unit = "ml", conversion_factor = 1000.
-   - "default_price": Đơn giá nhập ngầm định (cho 1 đơn vị nhập, dạng số nguyên VNĐ, bỏ dấu phẩy/chấm). Nếu không có giá trên ảnh, điền 0.
-   - "min_alert_stock": Mức cảnh báo tồn tối thiểu đề xuất (dạng số, vd: 5 hoặc 10, mặc định 0).
-   - "note": Ghi chú quy cách hoặc xuất xứ nếu có (vd: "Thùng 24 lon x 330ml", "Quy cách bao 25kg").
+     Ví dụ:
+     - Mua thùng 24 lon: import_unit="thùng", base_unit="lon", conversion_factor=24.
+     - Mua bao 25 kg: import_unit="bao", base_unit="kg", conversion_factor=25.
+     - Mua theo kg dùng theo kg: import_unit="kg", base_unit="kg", conversion_factor=1.
+     - Mua chai 1 lít dùng theo ml: import_unit="chai", base_unit="ml", conversion_factor=1000.
+   - "default_price": Đơn giá nhập dự kiến cho 1 đơn vị nhập (số nguyên VNĐ). Nếu không có giá ghi 0.
+   - "min_alert_stock": Cảnh báo tồn tối thiểu đề xuất (số, mặc định 0).
+   - "note": Quy cách hoặc ghi chú thêm nếu có.
 
-Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick:
+Cấu trúc JSON đầu ra:
 {
   "source_title": "Bảng báo giá tháng 09/2026",
   "supplier": {
@@ -90,16 +96,32 @@ function parseJsonSafe(text: string): {
   supplier?: SupplierParsedInfo | null;
   items: IngredientParsedItem[];
 } {
-  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
   try {
     return JSON.parse(cleaned);
   } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      return JSON.parse(match[0]);
+    const firstBrace = cleaned.indexOf("{");
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (firstBrace !== -1 && lastBrace > firstBrace) {
+      const candidate = cleaned.slice(firstBrace, lastBrace + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        // Cố gắng phục hồi nếu JSON bị cắt ngắn đuôi do vượt giới hạn token
+        const lastItemEnd = candidate.lastIndexOf("}");
+        if (lastItemEnd !== -1) {
+          const repaired = candidate.slice(0, lastItemEnd + 1) + "]}";
+          try {
+            return JSON.parse(repaired);
+          } catch {
+            // bỏ qua
+          }
+        }
+      }
     }
-    throw new Error("Không thể chuyển đổi phản hồi từ AI thành JSON danh sách nguyên liệu hợp lệ.");
+    throw new Error("Không thể chuyển đổi dữ liệu AI thành danh sách nguyên liệu JSON hợp lệ.");
   }
 }
 
@@ -127,7 +149,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kho nguyên liệu nhà hàng tại Việt Nam. BẮT BUỘC trả về duy nhất chuỗi JSON hợp lệ theo đúng cấu trúc yêu cầu. Không thêm bất kỳ văn bản chào hỏi hay giải thích nào.",
+            "Bạn là chuyên gia OCR và kho nguyên liệu nhà hàng tại Việt Nam. BẮT BUỘC phân tích và trích xuất TOÀN BỘ 100% tất cả các nguyên liệu trên ảnh vào JSON, không được bỏ sót bất kỳ dòng nào. Trả về DUY NHẤT một chuỗi JSON hợp lệ.",
         },
         {
           role: "user",
@@ -137,8 +159,9 @@ async function extractWithGroq(
           ],
         },
       ],
+      response_format: { type: "json_object" },
       temperature: 0.1,
-      max_tokens: 3500,
+      max_tokens: 14000,
     };
 
     return fetch(url, {
@@ -194,8 +217,12 @@ export async function parseIngredientsFromImage(
     process.env.NEXT_PUBLIC_GROQ_API_KEY ||
     "";
 
-  if (!apiKey || options.isDemo) {
+  if (options.isDemo) {
     return getMockIngredientResult();
+  }
+
+  if (!apiKey) {
+    throw new Error("Chưa cấu hình GROQ_API_KEY để sử dụng tính năng quét AI.");
   }
 
   try {
@@ -230,9 +257,8 @@ export async function parseIngredientsFromImage(
         : `data:${options.mimeType || "image/jpeg"};base64,${options.base64Data}`,
     };
   } catch (error) {
-    // Nếu lỗi Groq API mà đang thử nghiệm thì fallback mock data
-    console.warn("Groq Ingredient OCR thất bại, sử dụng dữ liệu mẫu:", error);
-    return getMockIngredientResult();
+    console.error("Lỗi trích xuất nguyên liệu bằng Groq:", error);
+    throw error;
   }
 }
 
