@@ -240,8 +240,8 @@ export function IngredientOcrDialog({
       <DialogContent
         className={
           ocrResult
-            ? "max-w-6xl w-[96vw] max-h-[92vh] p-0 overflow-hidden flex flex-col"
-            : "max-w-xl"
+            ? "sm:max-w-[95vw] lg:max-w-[92vw] xl:max-w-[1360px] w-full max-h-[92vh] p-0 overflow-hidden flex flex-col shadow-2xl rounded-2xl border"
+            : "sm:max-w-2xl w-full p-0 overflow-hidden rounded-2xl"
         }
       >
         {!ocrResult ? (

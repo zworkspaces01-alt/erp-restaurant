@@ -139,7 +139,7 @@ export function InvoiceOcrDialog({
       <DialogContent
         className={
           reviewResult
-            ? "max-w-[96vw] xl:max-w-[1400px] p-0 overflow-hidden"
+            ? "sm:max-w-[96vw] xl:max-w-[1440px] w-full max-h-[94vh] p-0 overflow-hidden shadow-2xl rounded-2xl border"
             : "sm:max-w-xl"
         }
       >

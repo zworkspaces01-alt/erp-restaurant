@@ -185,7 +185,7 @@ export function IngredientFormDialog({
           </Button>
         </DialogTrigger>
       ) : null}
-      <DialogContent className="sm:max-w-[560px]">
+      <DialogContent className="sm:max-w-[700px] w-full max-h-[92vh] overflow-y-auto p-6 rounded-2xl">
         <form onSubmit={handleSubmit((values) => void execute(values))} className="space-y-4">
           <DialogHeader>
             <div className="flex items-center justify-between pr-6">
@@ -269,21 +269,34 @@ export function IngredientFormDialog({
             <FormError message={errors.name?.message} />
           </div>
 
-          <div className="grid grid-cols-3 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="import_unit">Đơn vị nhập *</Label>
-              <Input id="import_unit" placeholder="kg" {...register("import_unit")} />
-              <FormError message={errors.import_unit?.message} />
+          {/* Quy cách & Đơn vị tính */}
+          <div className="p-3.5 rounded-xl bg-muted/40 border space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold text-foreground uppercase tracking-wider">
+                Quy cách & Đơn vị tính
+              </span>
+              {importUnit && baseUnit && (
+                <span className="text-[11px] text-muted-foreground font-medium">
+                  1 {importUnit} = {convFactor || 1} {baseUnit}
+                </span>
+              )}
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="base_unit">Đơn vị cơ sở *</Label>
-              <Input id="base_unit" placeholder="g" {...register("base_unit")} />
-              <FormError message={errors.base_unit?.message} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="conversion_factor">Hệ số quy đổi *</Label>
-              <Input id="conversion_factor" type="number" step="any" {...register("conversion_factor")} />
-              <FormError message={errors.conversion_factor?.message} />
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="import_unit">Đơn vị nhập *</Label>
+                <Input id="import_unit" placeholder="kg, thùng, hộp..." {...register("import_unit")} />
+                <FormError message={errors.import_unit?.message} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="base_unit">Đơn vị cơ sở *</Label>
+                <Input id="base_unit" placeholder="g, ml, lon..." {...register("base_unit")} />
+                <FormError message={errors.base_unit?.message} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="conversion_factor">Hệ số quy đổi *</Label>
+                <Input id="conversion_factor" type="number" step="any" {...register("conversion_factor")} />
+                <FormError message={errors.conversion_factor?.message} />
+              </div>
             </div>
           </div>
 
