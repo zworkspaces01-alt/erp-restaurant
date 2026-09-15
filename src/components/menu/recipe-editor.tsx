@@ -21,18 +21,15 @@ import {
   type RecipeCostingInput,
   type RecipeCostingLineInput,
 } from "@/types/restaurant";
-import { formatNumber, formatPercent, formatVND } from "@/lib/format";
+import { formatPercent, formatVND } from "@/lib/format";
 import { exportDishCostingExcel } from "@/lib/excel";
 import {
   ConfirmDialog,
   EmptyState,
   FormServerError,
-  StatusBadge,
   SubmitButton,
-  foodCostTone,
 } from "@/components/shared";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Command,
   CommandEmpty,
