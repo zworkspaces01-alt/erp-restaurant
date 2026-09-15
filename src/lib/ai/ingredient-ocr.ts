@@ -34,67 +34,179 @@ export interface IngredientOcrRequestOptions {
 }
 
 const INGREDIENT_OCR_PROMPT = `
-Bạn là chuyên gia OCR và quản lý kho nguyên vật liệu nhà hàng F&B tại Việt Nam.
-Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn nhập hàng, danh mục sản phẩm, danh sách viết tay hoặc bảng in) và trích xuất TOÀN BỘ các nguyên liệu cùng thông tin Nhà cung cấp vào định dạng JSON.
+Bạn là chuyên gia OCR và quản lý kho F&B tại Việt Nam.
+Nhiệm vụ: Trích xuất thông tin Nhà cung cấp và TOÀN BỘ các mặt hàng nguyên liệu trên phiếu nhập kho / hóa đơn / bảng giá.
 
-QUY TẮC ĐẶC BIỆT CHO HÌNH ẢNH PHỨC TẠP & BẢNG BIỂU DÀY ĐẶC (COMPLEX / DENSE TABLES):
-1. QUÉT HẾT TẤT CẢ CÁC DÒNG - TUYỆT ĐỐI KHÔNG BỎ CUỘC:
-   - Dù bảng có 30, 40 hay 60+ dòng mặt hàng, bạn BẮT BUỘC phải duyệt qua từng dòng từ trên xuống dưới.
-   - TUYỆT ĐỐI KHÔNG dừng lại giữa chừng, không tóm tắt, không dùng dấu ba chấm (...).
-2. BẢNG NHIỀU CỘT HOẶC NHIỀU NHÓM DANH MỤC:
-   - Nếu ảnh có bảng chia thành 2 hoặc nhiều cột song song, hoặc chia theo nhóm danh mục (Thịt, Hải sản, Rau củ quả, Gia vị...):
-   - Hãy đọc tuần tự cột bên trái từ trên xuống dưới, sau đó đọc tiếp cột bên phải từ trên xuống dưới.
-3. HÌNH ẢNH CHỤP NGHIÊNG, MỜ, CHỮ IN KIM (DOT MATRIX) HOẶC HÓA ĐƠN NHIỆT:
-   - Chú ý quan sát kỹ các ký tự mờ, ngắt quãng. Phân biệt cẩn thận các con số dễ nhầm lẫn (0, 6, 8, 9; 1 và 7; 3 và 8).
-4. QUY TẮC XỬ LÝ NÉT GẠCH TAY / GẠCH BỎ / SỬA TAY:
-   - DÒNG BỊ GẠCH TAY (bút bi, bút mực gạch ngang hoặc dấu X qua tên/dòng) = ĐÃ HỦY / HẾT HÀNG -> BẮT BUỘC BỎ QUA KHỎI "items", đưa tên vào "excluded_items".
-   - CON SỐ BỊ GẠCH SỬA TAY (số lượng/đơn giá cũ bị gạch và viết con số mới) -> LẤY CON SỐ VIẾT TAY MỚI.
-   - DÒNG VIẾT TAY THÊM VÀO (bổ sung hàng) và không bị gạch -> Vẫn quét và đưa vào "items".
-5. TỪ VIẾT TẮT NGUYÊN LIỆU F&B:
-   - Chuẩn hóa tên nguyên liệu theo thực tế nhà hàng Việt Nam (vd: "th bò" -> "Thịt bò", "cá basa" -> "Cá ba sa", "ba rọi" -> "Thịt ba chỉ", "h.tây" -> "Hành tây", "x.lách" -> "Xà lách", "d.hào" -> "Dầu hào").
-
-CHI TIẾT TRƯỜNG DỮ LIỆU:
-- "source_title": Tiêu đề chứng từ (vd: "Phiếu giao hàng", "Bảng báo giá", "Hóa đơn bán hàng").
-- "supplier": Thông tin Nhà cung cấp gồm "name", "tax_code", "phone", "address", "contact_name". Nếu không có trên ảnh đặt null.
-- "items": Danh sách từng nguyên liệu hợp lệ:
-  * "name": Tên nguyên liệu chuẩn tiếng Việt.
-  * "code": Mã gợi ý viết hoa không dấu tiền tố NL- (vd: "NL-THITBO", "NL-BOTMI").
-  * "category": Nhóm danh mục ("Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
-  * "base_unit": Đơn vị cơ sở dùng xuất kho (kg, g, lít, ml, quả, hộp, lon, chai, gói, cái, củ, bó).
-  * "import_unit": Đơn vị mua/nhập (thùng, bao, kg, két, hộp, lốc, bịch, túi, chai).
-  * "conversion_factor": Hệ số quy đổi (số thực >= 1).
-  * "default_price": Đơn giá nhập dự kiến cho 1 đơn vị nhập (số nguyên VNĐ).
-  * "min_alert_stock": Tồn kho tối thiểu đề xuất (số, mặc định 0).
-  * "note": Quy cách hoặc ghi chú.
-- "excluded_items": Mảng tên các mặt hàng bị gạch tay loại bỏ.
-
-Cấu trúc JSON bắt buộc:
+QUY TẮC BẮT BUỘC:
+1. XỬ LÝ NÉT GẠCH TAY BỎ (CANCELLED): Dòng nào bị bút gạch ngang hoặc gạch chéo X (ví dụ dòng Hạt bạch quả, Vỏ tắc...): BẮT BUỘC BỎ QUA KHỎI items, đưa tên vào "excluded".
+2. SỐ LƯỢNG SỬA TAY (OVERRIDES): Dòng nào có số lượng in bị gạch/sửa tay bằng bút: LẤY THEO CON SỐ VIẾT TAY MỚI (đây là số lượng thực nhận).
+3. QUÉT ĐỦ TẤT CẢ CÁC MẶT HÀNG HỢP LỆ TRÊN PHIẾU: Không bỏ sót bất kỳ dòng nào từ đầu đến cuối bảng.
+4. ĐỂ TỐI ƯU TỐC ĐỘ VÀ KHÔNG BỊ TRÀN TOKEN, HÃY TRẢ VỀ JSON SIÊU TINH GỌN THEO DẠNG MẢNG:
 {
-  "source_title": "Phiếu giao hàng",
-  "supplier": {
-    "name": "Công ty TNHH Thực Phẩm Sạch GreenFarm",
-    "tax_code": "0312345678",
-    "phone": "0901234567",
-    "address": "123 Nguyễn Văn Cừ, Quận 5, TP.HCM",
-    "contact_name": "Nguyễn Văn A"
-  },
+  "supplier": "Tên đầy đủ nhà cung cấp",
+  "phone": "Số điện thoại nếu có",
+  "address": "Địa chỉ nếu có",
+  "tax_code": "Mã số thuế nếu có",
   "items": [
-    {
-      "name": "Bột mì đa dụng Meizan",
-      "code": "NL-BOTMI-MEIZAN",
-      "category": "Bột - Ngũ cốc",
-      "base_unit": "kg",
-      "import_unit": "bao",
-      "conversion_factor": 25,
-      "default_price": 450000,
-      "min_alert_stock": 2,
-      "is_active": true,
-      "note": "Bao 25kg"
-    }
+    ["Tên nguyên liệu đầy đủ", "ĐVT", 1, 84000, "Mã hàng nếu có"]
   ],
-  "excluded_items": ["Mặt hàng bị gạch tay 1"]
+  "excluded": ["Tên các mặt hàng bị gạch bỏ"]
 }
 `;
+
+function inferCategory(name: string): string {
+  const n = name.toLowerCase();
+  if (
+    n.includes("thịt") ||
+    n.includes("bò") ||
+    n.includes("heo") ||
+    n.includes("gà") ||
+    n.includes("cá") ||
+    n.includes("tôm") ||
+    n.includes("mực") ||
+    n.includes("hải sản") ||
+    n.includes("tobiko") ||
+    n.includes("trứng cá") ||
+    n.includes("wasabi") ||
+    n.includes("vây cá")
+  ) {
+    return "Thịt - Hải sản";
+  }
+  if (n.includes("trứng")) return "Bơ - Sữa - Trứng";
+  if (
+    n.includes("rau") ||
+    n.includes("củ") ||
+    n.includes("quả") ||
+    n.includes("hành") ||
+    n.includes("tỏi") ||
+    n.includes("nấm") ||
+    n.includes("gừng") ||
+    n.includes("đậu") ||
+    n.includes("edamame") ||
+    n.includes("rong biển")
+  ) {
+    return "Rau - Củ - Quả";
+  }
+  if (n.includes("mì") || n.includes("gạo") || n.includes("bột") || n.includes("bánh")) {
+    return "Bột - Ngũ cốc";
+  }
+  if (
+    n.includes("tương") ||
+    n.includes("sốt") ||
+    n.includes("xốt") ||
+    n.includes("dầu") ||
+    n.includes("mắm") ||
+    n.includes("muối") ||
+    n.includes("đường") ||
+    n.includes("tiêu") ||
+    n.includes("gia vị") ||
+    n.includes("shoyu") ||
+    n.includes("sauce")
+  ) {
+    return "Gia vị - Nước sốt";
+  }
+  if (n.includes("bia") || n.includes("rượu") || n.includes("nước") || n.includes("trà") || n.includes("cà phê")) {
+    return "Đồ uống - Pha chế";
+  }
+  if (n.includes("hộp") || n.includes("túi") || n.includes("ly") || n.includes("màng") || n.includes("khay")) {
+    return "Bao bì - Đồ dùng";
+  }
+  return "Gia vị - Thực phẩm khác";
+}
+
+function normalizeParsedData(rawObj: Record<string, unknown>): {
+  source_title?: string;
+  supplier?: SupplierParsedInfo | null;
+  items: IngredientParsedItem[];
+  excluded_items?: string[];
+} {
+  // 1. Chuẩn hóa Nhà cung cấp
+  let supplier: SupplierParsedInfo | null = null;
+  const rawSup = rawObj.supplier || rawObj.sup;
+  if (typeof rawSup === "string" && rawSup.trim()) {
+    supplier = {
+      name: rawSup.trim(),
+      phone: (typeof rawObj.phone === "string" ? rawObj.phone : null) || null,
+      address: (typeof rawObj.address === "string" ? rawObj.address : null) || null,
+      tax_code: (typeof rawObj.tax_code === "string" ? rawObj.tax_code : null) || null,
+    };
+  } else if (rawSup && typeof rawSup === "object") {
+    const sObj = rawSup as Record<string, unknown>;
+    supplier = {
+      name: (typeof sObj.name === "string" ? sObj.name : null) || null,
+      tax_code: (typeof sObj.tax_code === "string" ? sObj.tax_code : null) || null,
+      phone: (typeof sObj.phone === "string" ? sObj.phone : null) || null,
+      address: (typeof sObj.address === "string" ? sObj.address : null) || null,
+      contact_name: (typeof sObj.contact_name === "string" ? sObj.contact_name : null) || null,
+    };
+  }
+
+  // 2. Chuẩn hóa danh sách mặt hàng bị gạch tay
+  const rawExcluded = rawObj.excluded || rawObj.excluded_items || rawObj.del;
+  const excluded_items: string[] = Array.isArray(rawExcluded)
+    ? rawExcluded.filter((e): e is string => typeof e === "string")
+    : [];
+
+  // 3. Chuẩn hóa items (hỗ trợ cả dạng mảng con [tên, đvt, sl, giá, mã] lẫn dạng object)
+  const items: IngredientParsedItem[] = [];
+  const rawItems = rawObj.items;
+
+  if (Array.isArray(rawItems)) {
+    for (const item of rawItems) {
+      if (Array.isArray(item)) {
+        // Dạng mảng tinh gọn: [name, unit, qty, price, code]
+        const name = (typeof item[0] === "string" ? item[0] : "").trim();
+        if (!name) continue;
+        const unit = (typeof item[1] === "string" ? item[1] : "kg").trim() || "kg";
+        const price = Number(item[3]) || 0;
+        const code = (typeof item[4] === "string" ? item[4] : "").trim() || null;
+
+        items.push({
+          name,
+          code,
+          category: inferCategory(name),
+          base_unit: unit,
+          import_unit: unit,
+          conversion_factor: 1,
+          default_price: price,
+          min_alert_stock: 0,
+          default_supplier_id: null,
+          is_active: true,
+          note: null,
+        });
+      } else if (item && typeof item === "object") {
+        // Dạng object truyền thống
+        const it = item as Record<string, unknown>;
+        const name = (typeof it.name === "string" ? it.name : "").trim();
+        if (!name) continue;
+        const unit = (typeof it.base_unit === "string" ? it.base_unit : typeof it.unit === "string" ? it.unit : "kg").trim() || "kg";
+        const price = Number(it.default_price || it.price || it.unit_price) || 0;
+        const code = (typeof it.code === "string" ? it.code : "").trim() || null;
+
+        items.push({
+          name,
+          code,
+          category: (typeof it.category === "string" ? it.category : null) || inferCategory(name),
+          base_unit: unit,
+          import_unit: (typeof it.import_unit === "string" ? it.import_unit : unit) || unit,
+          conversion_factor: Number(it.conversion_factor) || 1,
+          default_price: price,
+          min_alert_stock: Number(it.min_alert_stock) || 0,
+          default_supplier_id: null,
+          is_active: true,
+          note: (typeof it.note === "string" ? it.note : null) || null,
+        });
+      }
+    }
+  }
+
+  return {
+    source_title: typeof rawObj.source_title === "string" ? rawObj.source_title : "Phiếu giao hàng / Bảng giá",
+    supplier,
+    items,
+    excluded_items,
+  };
+}
 
 function parseJsonSafe(text: string): {
   source_title?: string;
@@ -109,15 +221,10 @@ function parseJsonSafe(text: string): {
   try {
     const parsed = JSON.parse(cleaned);
     if (parsed && typeof parsed === "object") {
-      return {
-        source_title: parsed.source_title,
-        supplier: parsed.supplier || null,
-        items: Array.isArray(parsed.items) ? parsed.items : [],
-        excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
-      };
+      return normalizeParsedData(parsed as Record<string, unknown>);
     }
   } catch {
-    // bỏ qua, tiếp tục cứu hộ bên dưới
+    // tiếp tục cứu hộ bên dưới
   }
 
   // 2. Tìm khối JSON { ... }
@@ -128,33 +235,23 @@ function parseJsonSafe(text: string): {
     try {
       const parsed = JSON.parse(candidate);
       if (parsed && typeof parsed === "object") {
-        return {
-          source_title: parsed.source_title,
-          supplier: parsed.supplier || null,
-          items: Array.isArray(parsed.items) ? parsed.items : [],
-          excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
-        };
+        return normalizeParsedData(parsed as Record<string, unknown>);
       }
     } catch {
-      // 3. Phục hồi JSON bị cắt ngắn đuôi do vượt giới hạn token
-      const lastItemEnd = candidate.lastIndexOf("}");
+      // 3. Phục hồi JSON bị cắt ngắn đuôi
+      const lastItemEnd = candidate.lastIndexOf("]");
       if (lastItemEnd > 0) {
         const truncatedSlice = candidate.slice(0, lastItemEnd + 1);
         const recoveryPatterns = [
+          truncatedSlice + "}",
           truncatedSlice + "]}",
           truncatedSlice + "}]}",
-          truncatedSlice + "}",
         ];
         for (const pattern of recoveryPatterns) {
           try {
             const recovered = JSON.parse(pattern);
-            if (recovered && Array.isArray(recovered.items)) {
-              return {
-                source_title: recovered.source_title,
-                supplier: recovered.supplier || null,
-                items: recovered.items,
-                excluded_items: Array.isArray(recovered.excluded_items) ? recovered.excluded_items : [],
-              };
+            if (recovered && (Array.isArray(recovered.items) || Array.isArray(recovered.del))) {
+              return normalizeParsedData(recovered as Record<string, unknown>);
             }
           } catch {
             // thử tiếp mẫu tiếp theo
@@ -164,47 +261,72 @@ function parseJsonSafe(text: string): {
     }
   }
 
-  // 4. Cứu hộ khẩn cấp bằng Regex: trích xuất từng object mặt hàng nếu cấu trúc JSON tổng thể bị hỏng
+  // 4. Cứu hộ khẩn cấp bằng Regex nếu mảng items bị cắt
   const extractedItems: IngredientParsedItem[] = [];
-  const itemMatches = cleaned.match(/\{[^{}]*"name"[^{}]*\}/g);
-  if (itemMatches && itemMatches.length > 0) {
-    for (const m of itemMatches) {
+  // Tìm mảng con ["...", "...", number, ...]
+  const arrayMatches = cleaned.match(/\[\s*"[^"]+"\s*,\s*"[^"]*"\s*,\s*[\d.]+\s*,\s*[\d.]+/g);
+  if (arrayMatches && arrayMatches.length > 0) {
+    for (const m of arrayMatches) {
       try {
-        const itemObj = JSON.parse(m);
-        if (itemObj.name && typeof itemObj.name === "string") {
+        const row = JSON.parse(m + "]");
+        if (row[0]) {
           extractedItems.push({
-            name: itemObj.name,
-            code: itemObj.code || null,
-            category: itemObj.category || null,
-            base_unit: itemObj.base_unit || "kg",
-            import_unit: itemObj.import_unit || itemObj.base_unit || "kg",
-            conversion_factor: Number(itemObj.conversion_factor) || 1,
-            default_price: Number(itemObj.default_price) || 0,
-            min_alert_stock: Number(itemObj.min_alert_stock) || 0,
+            name: String(row[0]),
+            code: row[4] ? String(row[4]) : null,
+            category: inferCategory(String(row[0])),
+            base_unit: String(row[1] || "kg"),
+            import_unit: String(row[1] || "kg"),
+            conversion_factor: 1,
+            default_price: Number(row[3]) || 0,
+            min_alert_stock: 0,
             default_supplier_id: null,
             is_active: true,
-            note: itemObj.note || null,
+            note: null,
           });
         }
       } catch {
-        // bỏ qua dòng lỗi cục bộ
+        // bỏ qua dòng lỗi
       }
     }
-    if (extractedItems.length > 0) {
-      return {
-        source_title: "Phiếu đã phục hồi một phần",
-        supplier: null,
-        items: extractedItems,
-        excluded_items: [],
-      };
+  }
+
+  // Cứu hộ supplier từ văn bản
+  let rescuedSupplier: SupplierParsedInfo | null = null;
+  const supMatch = cleaned.match(/"(?:supplier|sup|supplier_name)"\s*:\s*(?:\{[^}]*"name"\s*:\s*"([^"]+)"|"([^"]+)")/);
+  if (supMatch) {
+    const sName = (supMatch[1] || supMatch[2] || "").trim();
+    if (sName) {
+      rescuedSupplier = { name: sName };
     }
+  }
+
+  // Cứu hộ excluded_items từ văn bản
+  const rescuedExcluded: string[] = [];
+  const delBlockMatch = cleaned.match(/"(?:del|excluded|excluded_items)"\s*:\s*\[([\s\S]*?)(\]|$)/);
+  if (delBlockMatch && delBlockMatch[1]) {
+    const names = delBlockMatch[1].match(/"([^"]+)"/g);
+    if (names) {
+      names.forEach((n) => {
+        const val = n.replace(/"/g, "").trim();
+        if (val && !rescuedExcluded.includes(val)) rescuedExcluded.push(val);
+      });
+    }
+  }
+
+  if (extractedItems.length > 0) {
+    return {
+      source_title: "Phiếu giao hàng / Bảng giá",
+      supplier: rescuedSupplier,
+      items: extractedItems,
+      excluded_items: rescuedExcluded,
+    };
   }
 
   throw new Error("Không thể chuyển đổi dữ liệu AI thành danh sách nguyên liệu JSON hợp lệ. Hãy thử chụp ảnh rõ nét và đủ sáng hơn.");
 }
 
 /**
- * Trích xuất danh sách nguyên liệu từ ảnh bằng Groq Vision API với cơ chế dự phòng đa mô hình.
+ * Trích xuất danh sách nguyên liệu từ ảnh bằng Groq Vision API với cơ chế tự động chờ Retry khi chạm Rate Limit.
  */
 async function extractWithGroq(
   base64Data: string,
@@ -228,8 +350,7 @@ async function extractWithGroq(
       messages: [
         {
           role: "system",
-          content:
-            "Bạn là chuyên gia OCR và kiểm kho nguyên vật liệu nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Đối với bảng biểu nhiều dòng hoặc nhiều cột, quét đầy đủ tất cả các mặt hàng hợp lệ. Trả về DUY NHẤT chuỗi JSON hợp lệ.",
+          content: "Bạn là chuyên gia OCR và kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Bỏ qua các dòng bị GẠCH TAY, đưa vào excluded. 2) Số lượng sửa tay lấy theo số viết tay mới. 3) Trả về JSON theo đúng định dạng được hướng dẫn.",
         },
         {
           role: "user",
@@ -239,9 +360,8 @@ async function extractWithGroq(
           ],
         },
       ],
-      response_format: { type: "json_object" },
       temperature: 0.1,
-      max_tokens: 14000,
+      max_tokens: 800, // Đặt 800 để luôn nằm an toàn trong trần 1000 OTPM của Groq Free Tier
     };
 
     return fetch(url, {
@@ -259,32 +379,48 @@ async function extractWithGroq(
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
-    try {
-      const response = await sendRequest(model);
-      if (!response.ok) {
-        const errText = await response.text();
-        throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
-      }
+    // Tự động thử lại tối đa 3 lần nếu gặp lỗi Rate Limit (429)
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      try {
+        const response = await sendRequest(model);
 
-      const json = await response.json();
-      const text = json.choices?.[0]?.message?.content;
-      if (!text) {
-        throw new Error(`Mô hình ${model} không trả về nội dung.`);
-      }
+        if (response.status === 429) {
+          const errBody = await response.json().catch(() => ({}));
+          const errMsg = errBody.error?.message || "";
+          const matchWait = errMsg.match(/try again in ([\d.]+)s/);
+          const waitSeconds = matchWait ? Math.ceil(parseFloat(matchWait[1])) + 1 : 6;
+          console.warn(`Groq 429 Rate Limit trên model ${model}. Tự động chờ ${waitSeconds}s trước lần thử ${attempt + 1}...`);
+          await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
+          continue;
+        }
 
-      const parsed = parseJsonSafe(text);
-      if (parsed.items && parsed.items.length > 0) {
-        return {
-          ...parsed,
-          model_used: model,
-        };
-      }
+        if (!response.ok) {
+          const errText = await response.text();
+          throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
+        }
 
-      // Nếu model không trích xuất được mặt hàng nào, ghi nhớ lỗi và thử model tiếp theo
-      lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
-    } catch (err) {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      console.warn(`Thử model OCR ${model} thất bại:`, lastError.message);
+        const json = await response.json();
+        const text = json.choices?.[0]?.message?.content;
+        if (!text) {
+          throw new Error(`Mô hình ${model} không trả về nội dung.`);
+        }
+
+        const parsed = parseJsonSafe(text);
+        if (parsed.items && parsed.items.length > 0) {
+          return {
+            ...parsed,
+            model_used: model,
+          };
+        }
+
+        lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
+        break; // Nếu parse được nhưng không có item, chuyển sang model tiếp theo
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(`Thử model OCR ${model} (lần ${attempt}) thất bại:`, lastError.message);
+        if (attempt === 3) break;
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+      }
     }
   }
 

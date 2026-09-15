@@ -34,6 +34,8 @@ export interface RecipeLineCost {
   ingredient_name: string;
   ingredient_category: string | null;
   base_unit: string;
+  import_unit?: string;
+  conversion_factor?: number;
   avg_cost_price: number;
   quantity: number;
   waste_percent: number;
@@ -77,6 +79,8 @@ export interface IngredientOption {
   name: string;
   category: string | null;
   base_unit: string;
+  import_unit: string;
+  conversion_factor: number;
   avg_cost_price: number;
 }
 
@@ -172,26 +176,36 @@ export async function getMenuItem(id: string): Promise<MenuItem | null> {
 /** `/menu/[id]` — các dòng định lượng đã lưu kèm chi phí thành phần. */
 export async function getRecipeLines(menuItemId: string): Promise<RecipeLineCost[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("v_recipe_costs")
-    .select("*")
-    .eq("menu_item_id", menuItemId)
-    .order("ingredient_name", { ascending: true });
+  const [{ data, error }, { data: ingData }] = await Promise.all([
+    supabase
+      .from("v_recipe_costs")
+      .select("*")
+      .eq("menu_item_id", menuItemId)
+      .order("ingredient_name", { ascending: true }),
+    supabase.from("ingredients").select("id, import_unit, conversion_factor"),
+  ]);
 
   if (error) throw new Error(error.message);
-  return ((data ?? []) as RecipeCostRow[]).map((row) => ({
-    ingredient_id: row.ingredient_id ?? "",
-    ingredient_code: row.ingredient_code,
-    ingredient_name: row.ingredient_name ?? "",
-    ingredient_category: row.ingredient_category,
-    base_unit: row.base_unit ?? "",
-    avg_cost_price: n(row.avg_cost_price),
-    quantity: n(row.quantity),
-    waste_percent: n(row.waste_percent),
-    effective_quantity: n(row.effective_quantity),
-    component_cost: n(row.component_cost),
-    note: row.note,
-  }));
+  const ingMap = new Map((ingData ?? []).map((i) => [i.id, i]));
+
+  return ((data ?? []) as RecipeCostRow[]).map((row) => {
+    const extra = row.ingredient_id ? ingMap.get(row.ingredient_id) : undefined;
+    return {
+      ingredient_id: row.ingredient_id ?? "",
+      ingredient_code: row.ingredient_code,
+      ingredient_name: row.ingredient_name ?? "",
+      ingredient_category: row.ingredient_category,
+      base_unit: row.base_unit ?? "",
+      import_unit: extra?.import_unit ?? row.base_unit ?? "",
+      conversion_factor: n(extra?.conversion_factor || 1),
+      avg_cost_price: n(row.avg_cost_price),
+      quantity: n(row.quantity),
+      waste_percent: n(row.waste_percent),
+      effective_quantity: n(row.effective_quantity),
+      component_cost: n(row.component_cost),
+      note: row.note,
+    };
+  });
 }
 
 /** Nguyên liệu đang hoạt động cho picker định lượng. */
@@ -199,7 +213,7 @@ export async function getIngredientOptions(): Promise<IngredientOption[]> {
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("ingredients")
-    .select("id, code, name, category, base_unit, avg_cost_price")
+    .select("id, code, name, category, base_unit, import_unit, conversion_factor, avg_cost_price")
     .eq("is_active", true)
     .order("name", { ascending: true });
 
@@ -210,6 +224,8 @@ export async function getIngredientOptions(): Promise<IngredientOption[]> {
     name: row.name,
     category: row.category,
     base_unit: row.base_unit,
+    import_unit: row.import_unit ?? row.base_unit,
+    conversion_factor: n(row.conversion_factor || 1),
     avg_cost_price: n(row.avg_cost_price),
   }));
 }

@@ -464,6 +464,31 @@ export const recipeImportRowSchema = z.object({
 export type RecipeImportRowInput = z.infer<typeof recipeImportRowSchema>;
 
 /** Full BOM of one menu item (`/menu/[id]`): replaces `recipes` rows + updates the price. */
+export const recipeCostingLineSchema = z.object({
+  ingredient_id: optionalUuid("Nguyên liệu không hợp lệ"),
+  ingredient_name: requiredText("Tên nguyên liệu là bắt buộc", 1),
+  ingredient_code: optionalText,
+  portion_quantity: positiveNumber("Định lượng dùng phải lớn hơn 0"),
+  portion_unit: requiredText("ĐVT dùng là bắt buộc", 1),
+  package_quantity: positiveNumber("Quy cách mua phải lớn hơn 0").default(1),
+  package_unit: requiredText("ĐVT mua là bắt buộc", 1),
+  package_price: money("Đơn giá mua phải lớn hơn hoặc bằng 0").default(0),
+  waste_percent: z.coerce
+    .number({ invalid_type_error: "Tỷ lệ hao hụt không hợp lệ" })
+    .min(0, "Tỷ lệ hao hụt phải từ 0 đến 100")
+    .max(100, "Tỷ lệ hao hụt phải từ 0 đến 100")
+    .default(0),
+  note: optionalText,
+});
+export type RecipeCostingLineInput = z.infer<typeof recipeCostingLineSchema>;
+
+export const recipeCostingSchema = z.object({
+  menu_item_id: uuid("Món ăn không hợp lệ"),
+  selling_price: money("Giá bán phải lớn hơn hoặc bằng 0"),
+  lines: z.array(recipeCostingLineSchema),
+});
+export type RecipeCostingInput = z.infer<typeof recipeCostingSchema>;
+
 export const recipeSchema = z
   .object({
     menu_item_id: uuid("Món ăn không hợp lệ"),
@@ -895,6 +920,26 @@ export function calcComponentCost(
   avgCost: number | string | null | undefined
 ): number {
   return roundTo(num(qty) * (1 + num(wastePct) / 100) * num(avgCost), 2);
+}
+
+/**
+ * Tính chi phí từ Đơn giá mua gói và Quy cách mua:
+ * Đơn giá cơ sở = Đơn giá mua / Quy cách mua
+ * Thành tiền = Định lượng dùng × (1 + Hao hụt% / 100) × Đơn giá cơ sở
+ */
+export function calcCostingLineAmount(
+  portionQty: number | string | null | undefined,
+  pkgQty: number | string | null | undefined,
+  pkgPrice: number | string | null | undefined,
+  wastePct: number | string | null | undefined = 0
+): { unitCost: number; lineTotal: number } {
+  const pQty = num(portionQty);
+  const kQty = num(pkgQty) > 0 ? num(pkgQty) : 1;
+  const kPrice = num(pkgPrice);
+  const wPct = num(wastePct);
+  const unitCost = kPrice / kQty;
+  const lineTotal = roundTo(pQty * (1 + wPct / 100) * unitCost, 2);
+  return { unitCost, lineTotal };
 }
 
 export interface RecipeTotals {

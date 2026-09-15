@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import {
   PG_ERROR_MESSAGES,
@@ -9,10 +10,13 @@ import {
   menuItemSchema,
   parseDbError,
   recipeSchema,
+  recipeCostingSchema,
   type ComboInput,
   type MenuItemInput,
   type RecipeInput,
+  type RecipeCostingInput,
 } from "@/types/restaurant";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 
 interface DbError {
   message: string;
@@ -167,6 +171,155 @@ export async function saveRecipe(input: RecipeInput): Promise<ActionResult<{ id:
     revalidatePath("/inventory");
     return fail(dbMessage(priceError));
   }
+
+  revalidateMenu(menu_item_id);
+  revalidatePath("/inventory");
+  return ok({ id: menu_item_id });
+}
+
+function generateIngredientCode(name: string): string {
+  const norm = normalizeVietnamese(name)
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, "");
+  const suffix = Math.random().toString(36).substring(2, 6).toUpperCase();
+  const base = norm.slice(0, 10) || "NL";
+  return `NL-${base}-${suffix}`;
+}
+
+/**
+ * `/menu/[id]` — Lưu bảng tính Cost món ăn (Recipe Costing Sheet):
+ * - Tự động tạo nguyên liệu mới vào kho nếu chưa có (với ĐVT dùng, ĐVT mua, Quy cách, Giá vốn cơ sở).
+ * - Cập nhật lại giá vốn cơ sở (`avg_cost_price`) và quy cách mua (`conversion_factor`) cho nguyên liệu đã có.
+ * - Lưu định lượng vào bảng `recipes`.
+ * - Cập nhật giá bán niêm yết vào `menu_items`.
+ */
+export async function saveRecipeCosting(
+  input: RecipeCostingInput
+): Promise<ActionResult<{ id: string }>> {
+  const parsed = recipeCostingSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+  }
+  const { menu_item_id, selling_price, lines } = parsed.data;
+
+  const supabase = await createClient();
+  const db = process.env.SUPABASE_SERVICE_ROLE_KEY ? createAdminClient() : supabase;
+
+  // 1. Lấy danh sách nguyên liệu hiện có để đối soát
+  const { data: allIngs, error: fetchErr } = await db
+    .from("ingredients")
+    .select("id, code, name, base_unit, import_unit, conversion_factor, avg_cost_price");
+
+  if (fetchErr) return fail(dbMessage(fetchErr));
+  const existingList = allIngs ?? [];
+
+  const finalRecipeLines: Array<{
+    ingredient_id: string;
+    quantity: number;
+    waste_percent: number;
+    note: string | null;
+  }> = [];
+
+  for (const line of lines) {
+    let ingId = line.ingredient_id;
+    let matched = existingList.find((i) => i.id === ingId);
+
+    if (!matched) {
+      const normName = normalizeVietnamese(line.ingredient_name);
+      matched = existingList.find((i) => normalizeVietnamese(i.name) === normName);
+      if (matched) ingId = matched.id;
+    }
+
+    const conversionFactor = line.package_quantity > 0 ? line.package_quantity : 1;
+    const unitCost =
+      line.package_price > 0
+        ? line.package_price / conversionFactor
+        : (matched?.avg_cost_price ?? 0);
+
+    if (!matched) {
+      // Tự động tạo nguyên liệu mới vào danh mục kho
+      const code = line.ingredient_code?.trim() || generateIngredientCode(line.ingredient_name);
+      const { data: newIng, error: createErr } = await db
+        .from("ingredients")
+        .insert({
+          code,
+          name: line.ingredient_name.trim(),
+          base_unit: line.portion_unit.trim() || "Gram",
+          import_unit: line.package_unit.trim() || line.portion_unit.trim() || "Gram",
+          conversion_factor: conversionFactor,
+          avg_cost_price: unitCost,
+          is_active: true,
+          min_alert_stock: 0,
+        })
+        .select("id, code, name, base_unit, import_unit, conversion_factor, avg_cost_price")
+        .single();
+
+      if (createErr || !newIng) {
+        return fail(
+          `Không thể tạo nguyên liệu "${line.ingredient_name}": ${
+            createErr ? dbMessage(createErr) : "Lỗi không xác định"
+          }`
+        );
+      }
+      matched = newIng;
+      ingId = newIng.id;
+      existingList.push(newIng);
+    } else {
+      // Cập nhật quy cách mua và giá vốn cơ sở nếu có giá mua mới
+      const updates: {
+        import_unit?: string;
+        conversion_factor?: number;
+        avg_cost_price?: number;
+      } = {
+        import_unit: line.package_unit.trim() || matched.import_unit,
+        conversion_factor: conversionFactor,
+      };
+      if (line.package_price > 0) {
+        updates.avg_cost_price = unitCost;
+      }
+      await db.from("ingredients").update(updates).eq("id", matched.id);
+    }
+
+    if (ingId) {
+      finalRecipeLines.push({
+        ingredient_id: ingId,
+        quantity: line.portion_quantity,
+        waste_percent: line.waste_percent,
+        note: line.note ?? null,
+      });
+    }
+  }
+
+  // 2. Xóa các dòng định lượng không còn giữ
+  const keptIds = finalRecipeLines.map((l) => l.ingredient_id);
+  let deleteQuery = supabase.from("recipes").delete().eq("menu_item_id", menu_item_id);
+  if (keptIds.length > 0) {
+    deleteQuery = deleteQuery.not("ingredient_id", "in", `(${keptIds.join(",")})`);
+  }
+  const { error: delErr } = await deleteQuery;
+  if (delErr) return fail(dbMessage(delErr));
+
+  // 3. Upsert các dòng định lượng
+  if (finalRecipeLines.length > 0) {
+    const { error: upsertErr } = await supabase.from("recipes").upsert(
+      finalRecipeLines.map((l) => ({
+        menu_item_id,
+        ingredient_id: l.ingredient_id,
+        quantity: l.quantity,
+        waste_percent: l.waste_percent,
+        note: l.note,
+      })),
+      { onConflict: "menu_item_id,ingredient_id" }
+    );
+    if (upsertErr) return fail(dbMessage(upsertErr));
+  }
+
+  // 4. Cập nhật giá bán món ăn
+  const { error: priceErr } = await supabase
+    .from("menu_items")
+    .update({ selling_price })
+    .eq("id", menu_item_id);
+  if (priceErr) return fail(dbMessage(priceErr));
 
   revalidateMenu(menu_item_id);
   revalidatePath("/inventory");

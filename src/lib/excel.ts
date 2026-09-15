@@ -335,6 +335,84 @@ export async function parseRecipeExcelFile(file: File): Promise<ParsedExcelRow<R
   if (!sheetName) return [];
 
   const ws = wb.Sheets[sheetName];
+  const sheetRows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, defval: "" });
+
+  // 1. Kiểm tra trường hợp file mẫu đơn món dạng Costing Sheet (như ảnh SET CÁ NGỪ 3 LOẠI)
+  // Dòng đầu tiên là tiêu đề tên món, các dòng tiếp theo là: Tên NL | Định lượng | ĐVT dùng | Quy cách | ĐVT mua | Đơn giá mua | Thành tiền
+  if (sheetRows.length >= 2) {
+    const firstRow = sheetRows[0] || [];
+    const possibleDishTitle = cellToString(firstRow[0]);
+    const isSingleDishHeader =
+      possibleDishTitle &&
+      !normalizeHeader(possibleDishTitle).includes("mamon") &&
+      !normalizeHeader(possibleDishTitle).includes("tenmon") &&
+      !normalizeHeader(possibleDishTitle).includes("manguyenlieu");
+
+    if (isSingleDishHeader) {
+      const dishTitle = possibleDishTitle;
+      const parsedRows: ParsedExcelRow<RecipeImportRowInput>[] = [];
+
+      for (let i = 1; i < sheetRows.length; i++) {
+        const row = sheetRows[i] || [];
+        const col0 = cellToString(row[0]);
+        const norm0 = normalizeHeader(col0);
+
+        // Bỏ qua dòng tiêu đề phụ hoặc dòng tổng kết Cost / Sale / F%
+        if (
+          !col0 ||
+          norm0.includes("cost") ||
+          norm0.includes("sale") ||
+          norm0 === "f" ||
+          norm0.includes("tong") ||
+          norm0.includes("tennguyenlieu")
+        ) {
+          continue;
+        }
+
+        const ingredient_name = col0;
+        const quantity = cellToNumber(row[1], 0);
+        const unit = cellToString(row[2]) || null;
+        const note = cellToString(row[7] ?? row[6] ?? "");
+
+        const candidate: RecipeImportRowInput = {
+          menu_item_code: null,
+          menu_item_name: dishTitle,
+          ingredient_code: null,
+          ingredient_name,
+          quantity,
+          unit,
+          waste_percent: 0,
+          note: note ? note : null,
+        };
+
+        const parsed = recipeImportRowSchema.safeParse(candidate);
+        const errors: Record<string, string> = {};
+
+        if (!parsed.success) {
+          const flattened = parsed.error.flatten().fieldErrors;
+          for (const [field, msgs] of Object.entries(flattened)) {
+            if (msgs && msgs.length > 0) {
+              errors[field] = msgs[0];
+            }
+          }
+        }
+
+        parsedRows.push({
+          rowIndex: i + 1,
+          data: candidate,
+          isValid: parsed.success && quantity > 0,
+          errors,
+          raw: { row },
+        });
+      }
+
+      if (parsedRows.length > 0) {
+        return parsedRows;
+      }
+    }
+  }
+
+  // 2. Chế độ bảng chuẩn nhiều món (có Header cột)
   const rawRows: Record<string, unknown>[] = XLSX.utils.sheet_to_json(ws, { defval: "" });
 
   return rawRows.map((row, idx) => {
@@ -400,6 +478,68 @@ export async function parseRecipeExcelFile(file: File): Promise<ParsedExcelRow<R
       raw: row,
     };
   });
+}
+
+/** Xuất bảng tính Cost món ăn (Recipe Costing Sheet) ra file Excel theo chuẩn F&B */
+export function exportDishCostingExcel(
+  dishName: string,
+  lines: Array<{
+    ingredient_name: string;
+    portion_quantity: number;
+    portion_unit: string;
+    package_quantity: number;
+    package_unit: string;
+    package_price: number;
+    line_total: number;
+  }>,
+  totals: {
+    idealCost: number;
+    sellingPrice: number;
+    foodCostPct: number | null;
+  }
+) {
+  const wsData: (string | number)[][] = [
+    [dishName, "", "", "", "", "", ""],
+    ["Tên nguyên liệu", "Định lượng", "ĐVT dùng", "Quy cách mua", "ĐVT mua", "Đơn giá mua (VND)", "Thành tiền (VND)"],
+  ];
+
+  for (const l of lines) {
+    wsData.push([
+      l.ingredient_name,
+      l.portion_quantity,
+      l.portion_unit,
+      l.package_quantity,
+      l.package_unit,
+      l.package_price,
+      l.line_total,
+    ]);
+  }
+
+  wsData.push(["", "", "", "", "", "Cost", totals.idealCost]);
+  wsData.push(["", "", "", "", "", "Sale", totals.sellingPrice]);
+  const pctStr = totals.foodCostPct !== null ? `${totals.foodCostPct.toFixed(2).replace(".", ",")}%` : "—";
+  wsData.push(["", "", "", "", "", "F%", pctStr]);
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  ws["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: 6 } }, // Title row
+  ];
+
+  ws["!cols"] = [
+    { wch: 28 }, // Tên nguyên liệu
+    { wch: 14 }, // Định lượng
+    { wch: 12 }, // ĐVT dùng
+    { wch: 14 }, // Quy cách mua
+    { wch: 12 }, // ĐVT mua
+    { wch: 20 }, // Đơn giá mua
+    { wch: 20 }, // Thành tiền
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Costing");
+  const safeName = dishName.replace(/[^a-zA-Z0-9_\u00C0-\u1EF9\s]/g, "").trim().replace(/\s+/g, "_");
+  XLSX.writeFile(wb, `Costing_${safeName || "Mon_an"}.xlsx`);
 }
 
 /** Xuất báo cáo tiêu hao nguyên liệu và lỗ lãi theo ngày ra file Excel */
