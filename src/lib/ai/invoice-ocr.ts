@@ -8,25 +8,41 @@ export interface OcrRequestOptions {
 }
 
 const INVOICE_OCR_PROMPT = `
-Bạn là chuyên gia OCR và kế toán nhà hàng tại Việt Nam.
-Trích xuất thông tin hóa đơn / phiếu xuất kho / chứng từ mua hàng sang định dạng JSON.
+Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam.
+Nhiệm vụ: Trích xuất chính xác thông tin biên bản giao nhận / hóa đơn nhập kho.
 
-QUY TẮC BẮT BUỘC:
-1. DÒNG BỊ GẠCH TAY LÀ BỎ (CANCELLED): Dòng nào bị bút gạch ngang hoặc gạch chéo X -> BẮT BUỘC BỎ QUA KHỎI items, đưa tên vào "excluded_items".
-2. SỐ LƯỢNG / ĐƠN GIÁ SỬA TAY (OVERRIDES): Dòng nào có số in bị gạch/sửa tay bằng bút -> LẤY CON SỐ VIẾT TAY MỚI (số lượng thực nhận).
-3. ĐỂ TỐI ƯU TỐC ĐỘ VÀ TRÁNH QUÁ TẢI TOKEN, TRẢ VỀ JSON TINH GỌN THEO ĐÚNG CẤU TRÚC SAU:
+CỰC KỲ QUAN TRỌNG:
+1. MÓN GẠCH BỎ (CANCELLED / STRIKETHROUGH):
+   - CHỈ coi một dòng là bị gạch bỏ nếu THỰC SỰ CÓ NÉT BÚT MỰC VIẾT TAY GẠCH ĐÈ LÊN TÊN/DÒNG ĐÓ TRONG BẢNG.
+   - Nếu trong bảng KHÔNG CÓ NÉT BÚT VIẾT TAY GẠCH XÓA DÒNG HÀNG thì đặt "excluded_items": []. TUYỆT ĐỐI KHÔNG TỰ BỊA RA MÓN GẠCH!
+   - Dấu tích chữ V, chữ ký người nhận hoặc hình vẽ ở góc phiếu KHÔNG PHẢI là gạch bỏ mặt hàng.
+
+2. PHÂN BIỆT "SL ĐẶT" VÀ "SL GIAO" (HÀNG THỰC GIAO):
+   - Cột "SL giao" (Fulfilled qty) là số lượng THỰC TẾ GIAO ĐỢT NÀY -> BẮT BUỘC LẤY SỐ LƯỢNG THEO CỘT "SL GIAO".
+   - Dòng nào có SL giao = 0.00 (như Măng tây cồ: SL đặt 0.5, SL giao 0.00; Lá mè Nhật: SL đặt 1.0, SL giao 0.00):
+     -> SL giao là 0, Thành tiền là 0.
+
+3. PHÂN BIỆT RÕ "ĐƠN GIÁ" (UNIT PRICE) VÀ "THÀNH TIỀN" (LINE TOTAL):
+   - "Đơn giá" (Giá trước thuế / Unit price): giá của 1 đơn vị tính (vd: Gừng là 30,000 đ/kg; Hẹ lá là 55,000 đ/kg; Ngò rí là 59,000 đ/kg).
+   - "Thành tiền" (Line total): = SL giao * Đơn giá (vd: 0.5kg Gừng * 30,000 = 15,000đ; 0.1kg Ngò rí * 59,000 = 5,900đ; Măng tây cồ: 0 * 139,000 = 0).
+   - TUYỆT ĐỐI KHÔNG lấy Thành tiền làm Đơn giá!
+
+4. TỔNG TIỀN ĐỢT GIAO THỰC TẾ:
+   - "total_amount": Bằng tổng các dòng thành tiền THỰC GIAO trên phiếu này (ví dụ: các dòng cộng lại = 227,100đ).
+
+Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
 {
   "supplier_name": "Tên nhà cung cấp / công ty",
   "supplier_tax_code": "Mã số thuế nếu có",
   "supplier_phone": "Số điện thoại",
   "supplier_address": "Địa chỉ",
-  "invoice_number": "Số hóa đơn / phiếu",
+  "invoice_number": "Mã phiếu / Số hóa đơn",
   "order_date": "YYYY-MM-DD",
   "items": [
-    ["Tên hàng thực nhận", 10, "ĐVT", 45000, 450000]
+    ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thành_tiền]
   ],
-  "excluded_items": ["Mặt hàng bị gạch bỏ 1"],
-  "total_amount": 450000
+  "excluded_items": [],
+  "total_amount": 227100
 }
 `;
 
@@ -43,11 +59,10 @@ function parseJsonSafe(text: string): InvoiceParsedData {
         if (Array.isArray(it)) {
           // Dạng mảng tinh gọn: [name, qty, unit, price, total]
           const name = (typeof it[0] === "string" ? it[0] : "").trim();
-          if (!name) continue;
-          const qty = Number(it[1]) || 1;
+          const qty = typeof it[1] === "number" ? it[1] : (!isNaN(Number(it[1])) && it[1] !== "" && it[1] !== null) ? Number(it[1]) : 0;
           const unit = (typeof it[2] === "string" ? it[2] : "kg").trim() || "kg";
-          const price = Number(it[3]) || 0;
-          const total = Number(it[4]) || qty * price;
+          const price = typeof it[3] === "number" ? it[3] : (!isNaN(Number(it[3])) && it[3] !== "" && it[3] !== null) ? Number(it[3]) : 0;
+          const total = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : qty * price;
 
           items.push({
             raw_name: name,
@@ -211,7 +226,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY là dòng ĐÃ BỎ/HỦY -> đưa tên vào excluded_items. 2) Số lượng bị gạch sửa tay -> lấy số viết tay mới. 3) Trả về JSON theo đúng định dạng được hướng dẫn.",
+            "Bạn là chuyên gia OCR và kế toán kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) CHỈ đưa vào excluded_items nếu THỰC SỰ CÓ NÉT BÚT MỰC GẠCH ĐÈ LÊN DÒNG HÀNG TRONG BẢNG; nếu không có gạch tay thì để mảng rỗng []. 3) Lấy số lượng theo cột SL GIAO (thực giao), lấy đơn giá 1 ĐVT (không nhầm với thành tiền). 4) total_amount là tổng thành tiền thực giao của các dòng trên phiếu.",
         },
         {
           role: "user",

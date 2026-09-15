@@ -34,23 +34,32 @@ export interface IngredientOcrRequestOptions {
 }
 
 const INGREDIENT_OCR_PROMPT = `
-Bạn là chuyên gia OCR và quản lý kho F&B tại Việt Nam.
-Nhiệm vụ: Trích xuất thông tin Nhà cung cấp và TOÀN BỘ các mặt hàng nguyên liệu trên phiếu nhập kho / hóa đơn / bảng giá.
+Bạn là chuyên gia OCR và kế toán quản lý kho F&B tại Việt Nam.
+Nhiệm vụ: Trích xuất thông tin Nhà cung cấp và TOÀN BỘ các mặt hàng nguyên liệu trên phiếu giao hàng / hóa đơn / bảng giá.
 
-QUY TẮC BẮT BUỘC:
-1. XỬ LÝ NÉT GẠCH TAY BỎ (CANCELLED): Dòng nào bị bút gạch ngang hoặc gạch chéo X (ví dụ dòng Hạt bạch quả, Vỏ tắc...): BẮT BUỘC BỎ QUA KHỎI items, đưa tên vào "excluded".
-2. SỐ LƯỢNG SỬA TAY (OVERRIDES): Dòng nào có số lượng in bị gạch/sửa tay bằng bút: LẤY THEO CON SỐ VIẾT TAY MỚI (đây là số lượng thực nhận).
-3. QUÉT ĐỦ TẤT CẢ CÁC MẶT HÀNG HỢP LỆ TRÊN PHIẾU: Không bỏ sót bất kỳ dòng nào từ đầu đến cuối bảng.
-4. ĐỂ TỐI ƯU TỐC ĐỘ VÀ KHÔNG BỊ TRÀN TOKEN, HÃY TRẢ VỀ JSON SIÊU TINH GỌN THEO DẠNG MẢNG:
+QUY TẮC CỰC KỲ QUAN TRỌNG:
+1. MÓN GẠCH BỎ (CANCELLED / STRIKETHROUGH):
+   - CHỈ coi một dòng là bị gạch bỏ nếu THỰC SỰ CÓ NÉT BÚT MỰC VIẾT TAY GẠCH ĐÈ LÊN TÊN MẶT HÀNG TRONG BẢNG.
+   - Nếu trong bảng KHÔNG CÓ NÉT BÚT VIẾT TAY GẠCH XÓA DÒNG HÀNG thì đặt "excluded": []. TUYỆT ĐỐI KHÔNG TỰ BỊA RA MÓN GẠCH!
+   - Dấu tích chữ V, chữ ký người nhận hoặc hình vẽ ở góc phiếu KHÔNG PHẢI là gạch bỏ mặt hàng.
+
+2. ĐƠN GIÁ NGUYÊN LIỆU (BẮT BUỘC LÀ ĐƠN GIÁ 1 ĐƠN VỊ TÍNH, KHÔNG PHẢI THÀNH TIỀN):
+   - BẮT BUỘC lấy "Đơn giá" (Giá trước thuế / Unit price) cho 1 ĐVT của mặt hàng.
+   - TUYỆT ĐỐI KHÔNG LẤY CỘT "Thành tiền" (Total)!
+   - Ví dụ: Gừng mua 0.5kg, đơn giá 30,000 đ/kg, thành tiền 15,000đ -> Giá nguyên liệu BẮT BUỘC là 30000 (đơn giá 1kg), KHÔNG ĐƯỢC lấy 15000.
+   - Ví dụ: Ngò rí mua 0.1kg, đơn giá 59,000 đ/kg, thành tiền 5,900đ -> Giá nguyên liệu BẮT BUỘC là 59000, KHÔNG ĐƯỢC lấy 5900.
+   - Dòng nào có SL giao = 0 (như Măng tây cồ, Lá mè Nhật) nhưng có in đơn giá thì VẪN LẤY ĐƠN GIÁ (vd Măng tây cồ: 139000, Lá mè: 75000) vì đây là giá nhập của nguyên liệu.
+
+3. ĐỂ TỐI ƯU TỐC ĐỘ VÀ TRÁNH QUÁ TẢI TOKEN, BẮT BUỘC TRẢ VỀ DUY NHẤT MỘT CHUỖI JSON THEO CẤU TRÚC:
 {
   "supplier": "Tên đầy đủ nhà cung cấp",
-  "phone": "Số điện thoại nếu có",
-  "address": "Địa chỉ nếu có",
+  "phone": "Số điện thoại",
+  "address": "Địa chỉ",
   "tax_code": "Mã số thuế nếu có",
   "items": [
-    ["Tên nguyên liệu đầy đủ", "ĐVT", 1, 84000, "Mã hàng nếu có"]
+    ["Tên nguyên liệu", "ĐVT", Đơn_giá_1_đơn_vị, "Mã_SKU"]
   ],
-  "excluded": ["Tên các mặt hàng bị gạch bỏ"]
+  "excluded": []
 }
 `;
 
@@ -83,7 +92,13 @@ function inferCategory(name: string): string {
     n.includes("gừng") ||
     n.includes("đậu") ||
     n.includes("edamame") ||
-    n.includes("rong biển")
+    n.includes("rong biển") ||
+    n.includes("cà chua") ||
+    n.includes("hẹ") ||
+    n.includes("măng") ||
+    n.includes("giá đỗ") ||
+    n.includes("lá mè") ||
+    n.includes("ngò")
   ) {
     return "Rau - Củ - Quả";
   }
@@ -105,10 +120,10 @@ function inferCategory(name: string): string {
   ) {
     return "Gia vị - Nước sốt";
   }
-  if (n.includes("bia") || n.includes("rượu") || n.includes("nước") || n.includes("trà") || n.includes("cà phê")) {
+  if (n.includes("bia") || n.includes("rượu") || n.includes("nước") || n.includes("trà") || n.includes("cà phê") || n.includes("dừa")) {
     return "Đồ uống - Pha chế";
   }
-  if (n.includes("hộp") || n.includes("túi") || n.includes("ly") || n.includes("màng") || n.includes("khay")) {
+  if (n.includes("hộp") || n.includes("túi") || n.includes("ly") || n.includes("màng") || n.includes("khay") || n.includes("hoa")) {
     return "Bao bì - Đồ dùng";
   }
   return "Gia vị - Thực phẩm khác";
@@ -122,7 +137,7 @@ function normalizeParsedData(rawObj: Record<string, unknown>): {
 } {
   // 1. Chuẩn hóa Nhà cung cấp
   let supplier: SupplierParsedInfo | null = null;
-  const rawSup = rawObj.supplier || rawObj.sup;
+  const rawSup = rawObj.supplier || rawObj.sup || rawObj.supplier_name || rawObj.company_name;
   if (typeof rawSup === "string" && rawSup.trim()) {
     supplier = {
       name: rawSup.trim(),
@@ -144,22 +159,40 @@ function normalizeParsedData(rawObj: Record<string, unknown>): {
   // 2. Chuẩn hóa danh sách mặt hàng bị gạch tay
   const rawExcluded = rawObj.excluded || rawObj.excluded_items || rawObj.del;
   const excluded_items: string[] = Array.isArray(rawExcluded)
-    ? rawExcluded.filter((e): e is string => typeof e === "string")
+    ? rawExcluded.filter((e): e is string => typeof e === "string" && e.trim().length > 0)
     : [];
 
-  // 3. Chuẩn hóa items (hỗ trợ cả dạng mảng con [tên, đvt, sl, giá, mã] lẫn dạng object)
+  // 3. Chuẩn hóa items (hỗ trợ cả dạng mảng con lẫn dạng object)
   const items: IngredientParsedItem[] = [];
   const rawItems = rawObj.items;
 
   if (Array.isArray(rawItems)) {
     for (const item of rawItems) {
       if (Array.isArray(item)) {
-        // Dạng mảng tinh gọn: [name, unit, qty, price, code]
+        // Hỗ trợ [name, unit, price, code] HOẶC [name, unit, qty, price, code] HOẶC [name, qty, unit, price, total, code]
         const name = (typeof item[0] === "string" ? item[0] : "").trim();
         if (!name) continue;
-        const unit = (typeof item[1] === "string" ? item[1] : "kg").trim() || "kg";
-        const price = Number(item[3]) || 0;
-        const code = (typeof item[4] === "string" ? item[4] : "").trim() || null;
+
+        let unit = "kg";
+        let price = 0;
+        let code: string | null = null;
+
+        if (typeof item[1] === "string" && isNaN(Number(item[1]))) {
+          unit = item[1].trim() || "kg";
+          if (typeof item[2] === "number" && (item.length === 3 || typeof item[3] === "string")) {
+            price = Number(item[2]) || 0;
+            code = (typeof item[3] === "string" ? item[3] : "").trim() || null;
+          } else {
+            // [name, unit, qty, price, code]
+            price = Number(item[3]) || Number(item[2]) || 0;
+            code = (typeof item[4] === "string" ? item[4] : typeof item[3] === "string" ? item[3] : "").trim() || null;
+          }
+        } else if (typeof item[2] === "string") {
+          // [name, qty, unit, price, total, code]
+          unit = item[2].trim() || "kg";
+          price = Number(item[3]) || 0;
+          code = (typeof item[5] === "string" ? item[5] : typeof item[1] === "string" ? item[1] : "").trim() || null;
+        }
 
         items.push({
           name,
@@ -180,7 +213,7 @@ function normalizeParsedData(rawObj: Record<string, unknown>): {
         const name = (typeof it.name === "string" ? it.name : "").trim();
         if (!name) continue;
         const unit = (typeof it.base_unit === "string" ? it.base_unit : typeof it.unit === "string" ? it.unit : "kg").trim() || "kg";
-        const price = Number(it.default_price || it.price || it.unit_price) || 0;
+        const price = Number(it.default_price || it.unit_price || it.price) || 0;
         const code = (typeof it.code === "string" ? it.code : "").trim() || null;
 
         items.push({
@@ -350,7 +383,8 @@ async function extractWithGroq(
       messages: [
         {
           role: "system",
-          content: "Bạn là chuyên gia OCR và kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Bỏ qua các dòng bị GẠCH TAY, đưa vào excluded. 2) Số lượng sửa tay lấy theo số viết tay mới. 3) Trả về JSON theo đúng định dạng được hướng dẫn.",
+          content:
+            "Bạn là chuyên gia OCR và kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) CHỈ đưa vào excluded nếu THỰC SỰ CÓ NÉT BÚT MỰC GẠCH ĐÈ LÊN DÒNG HÀNG TRONG BẢNG; nếu không có gạch tay thì để mảng rỗng []. 3) Giá nguyên liệu BẮT BUỘC là ĐƠN GIÁ 1 ĐƠN VỊ TÍNH (Giá trước thuế / Unit price), TUYỆT ĐỐI KHÔNG LẤY THÀNH TIỀN.",
         },
         {
           role: "user",
