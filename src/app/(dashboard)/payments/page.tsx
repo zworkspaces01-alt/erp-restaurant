@@ -1,5 +1,5 @@
 import { Banknote, CalendarClock, Receipt, Wallet } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { PaymentsTable } from "@/components/payments/payments-table";
 import { RecordPaymentButton } from "@/components/payments/record-payment-button";
 import {
@@ -8,10 +8,16 @@ import {
   getSupplierPayments,
 } from "@/lib/queries/purchases.queries";
 import { formatDate, formatVND, todayISO } from "@/lib/format";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Thanh toán nhà cung cấp" };
 
 export default async function PaymentsPage() {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const [payments, suppliers, outstandingOrders] = await Promise.all([
     getSupplierPayments(),
     getSupplierOptions(),

@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { assertRole } from "@/lib/auth";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import {
   employeeSchema,
@@ -51,6 +52,12 @@ function revalidateHr(periodId?: string, employeeId?: string) {
 // --- Employees ----------------------------------------------------------------
 
 export async function createEmployee(input: EmployeeInput): Promise<ActionResult<{ id: string }>> {
+  try {
+    await assertRole(["owner", "manager"]);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Bạn không có quyền thực hiện thao tác này");
+  }
+
   const parsed = employeeSchema.safeParse(input);
   if (!parsed.success) return fail(INVALID, parsed.error.flatten().fieldErrors);
 
@@ -164,6 +171,12 @@ export async function deleteTimekeeping(id: string): Promise<ActionResult<{ id: 
 export async function createPayrollPeriod(
   input: PayrollPeriodInput
 ): Promise<ActionResult<{ id: string }>> {
+  try {
+    await assertRole(["owner", "manager"]);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Bạn không có quyền thực hiện thao tác này");
+  }
+
   const parsed = payrollPeriodSchema.safeParse(input);
   if (!parsed.success) return fail(INVALID, parsed.error.flatten().fieldErrors);
 
@@ -217,6 +230,12 @@ export async function generatePayroll(periodId: string): Promise<ActionResult<{ 
 }
 
 export async function finalizePayroll(periodId: string): Promise<ActionResult<{ id: string }>> {
+  try {
+    await assertRole(["owner", "manager"]);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Bạn không có quyền thực hiện thao tác này");
+  }
+
   const supabase = await createClient();
   const { error } = await supabase.rpc("finalize_payroll", { p_period_id: periodId });
   if (error) return fail(parseDbError(error));
@@ -227,6 +246,12 @@ export async function finalizePayroll(periodId: string): Promise<ActionResult<{ 
 
 /** `finalized → draft` (chỉ Chủ/Quản lý). */
 export async function reopenPayroll(periodId: string): Promise<ActionResult<{ id: string }>> {
+  try {
+    await assertRole(["owner", "manager"]);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Bạn không có quyền thực hiện thao tác này");
+  }
+
   const supabase = await createClient();
   const { error } = await supabase.rpc("reopen_payroll", { p_period_id: periodId });
   if (error) return fail(parseDbError(error));
@@ -239,6 +264,12 @@ export async function payPayroll(
   periodId: string,
   input: PayrollPayInput
 ): Promise<ActionResult<{ id: string }>> {
+  try {
+    await assertRole(["owner"]);
+  } catch (e) {
+    return fail(e instanceof Error ? e.message : "Chỉ Chủ nhà hàng mới có quyền chi trả lương");
+  }
+
   const parsed = payrollPaySchema.safeParse(input);
   if (!parsed.success) return fail(INVALID, parsed.error.flatten().fieldErrors);
 

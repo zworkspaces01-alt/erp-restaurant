@@ -1,10 +1,11 @@
 import { AlertTriangle, Banknote, CalendarClock, Truck } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { SuppliersTable } from "@/components/suppliers/suppliers-table";
 import type { SupplierFormData } from "@/components/suppliers/supplier-form-dialog";
 import { getSupplierDebtSummary } from "@/lib/queries/purchases.queries";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate, formatVND } from "@/lib/format";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Nhà cung cấp" };
 
@@ -24,13 +25,18 @@ async function getSupplierDetails(): Promise<SupplierFormData[]> {
     email: s.email,
     address: s.address,
     tax_code: s.tax_code,
-    payment_terms_days: s.payment_terms_days ?? 0,
-    is_active: s.is_active ?? true,
+    payment_terms_days: s.payment_terms_days,
+    is_active: s.is_active,
     note: s.note,
   }));
 }
 
 export default async function SuppliersPage() {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const [rows, details] = await Promise.all([getSupplierDebtSummary(), getSupplierDetails()]);
 
   const totalDebt = rows.reduce((s, r) => s + r.current_debt, 0);

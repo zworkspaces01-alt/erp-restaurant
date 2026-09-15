@@ -49,3 +49,47 @@ export async function signOut(): Promise<void> {
   revalidatePath("/", "layout");
   redirect("/login");
 }
+
+const changePasswordSchema = z.object({
+  currentPassword: z.string().min(1, "Vui lòng nhập mật khẩu hiện tại"),
+  newPassword: z.string().min(6, "Mật khẩu mới tối thiểu 6 ký tự"),
+});
+
+export type ChangePasswordInput = z.infer<typeof changePasswordSchema>;
+
+export async function changePassword(input: ChangePasswordInput): Promise<ActionResult<null>> {
+  const parsed = changePasswordSchema.safeParse(input);
+  if (!parsed.success) {
+    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+  }
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+
+  if (!user || !user.email) {
+    return fail("Phiên làm việc đã hết hạn, vui lòng đăng nhập lại");
+  }
+
+  // Xác thực mật khẩu cũ
+  const { error: verifyError } = await supabase.auth.signInWithPassword({
+    email: user.email,
+    password: parsed.data.currentPassword,
+  });
+
+  if (verifyError) {
+    return fail("Mật khẩu hiện tại không chính xác");
+  }
+
+  // Cập nhật mật khẩu mới
+  const { error: updateError } = await supabase.auth.updateUser({
+    password: parsed.data.newPassword,
+  });
+
+  if (updateError) {
+    return fail(updateError.message);
+  }
+
+  return ok(null);
+}

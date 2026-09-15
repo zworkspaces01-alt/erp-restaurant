@@ -4,9 +4,10 @@ import { buildPeriod, getPnlPageData, trendPct } from "@/lib/queries/reports.que
 import { PnlCharts } from "@/components/reports/pnl-charts";
 import { PnlPeriodSelector } from "@/components/reports/pnl-period-selector";
 import { PnlStatement } from "@/components/reports/pnl-statement";
-import { PageHeader, StatCard } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { formatDate, formatNumber, formatPercent, formatVND } from "@/lib/format";
 import { Button } from "@/components/ui/button";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Báo cáo P&L | Restaurant ERP" };
 
@@ -23,6 +24,11 @@ function parseInteger(value: string | undefined, fallback: number, min: number, 
 }
 
 export default async function PnlReportPage({ searchParams }: { searchParams: SearchParams }) {
+  const { role, authorized } = await requireAuth(["owner"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner"]} currentRole={role} />;
+  }
+
   const params = await searchParams;
   const now = new Date();
 

@@ -21,12 +21,8 @@ function revalidateInventory(id?: string) {
   revalidatePath("/dashboard");
 }
 
-/** Chuyển đổi dữ liệu form sang row DB. Nếu có default_price > 0 và includePrice = true, gán avg_cost_price ban đầu. */
-function toIngredientRow(input: IngredientInput, includePrice = false) {
-  const factor = Number(input.conversion_factor) || 1;
-  const defaultPrice = Number(input.default_price ?? 0);
-  const avgCostPrice = defaultPrice > 0 ? defaultPrice / factor : 0;
-
+/** Chuyển đổi dữ liệu form sang row DB (loại bỏ các cột do DB tự tính như current_stock, avg_cost_price). */
+function toIngredientRow(input: IngredientInput) {
   return {
     code: input.code,
     name: input.name,
@@ -38,7 +34,6 @@ function toIngredientRow(input: IngredientInput, includePrice = false) {
     default_supplier_id: input.default_supplier_id,
     is_active: input.is_active,
     note: input.note,
-    ...(includePrice && defaultPrice > 0 ? { avg_cost_price: avgCostPrice } : {}),
   };
 }
 
@@ -51,7 +46,7 @@ export async function createIngredient(input: IngredientInput): Promise<ActionRe
   const supabase = await createClient();
   const { data, error } = await supabase
     .from("ingredients")
-    .insert(toIngredientRow(parsed.data, true))
+    .insert(toIngredientRow(parsed.data))
     .select("id")
     .single();
 
@@ -73,10 +68,9 @@ export async function updateIngredient(
   }
 
   const supabase = await createClient();
-  const includePrice = Boolean(parsed.data.default_price && parsed.data.default_price > 0);
   const { error } = await supabase
     .from("ingredients")
-    .update(toIngredientRow(parsed.data, includePrice))
+    .update(toIngredientRow(parsed.data))
     .eq("id", id);
 
   if (error) {
@@ -255,9 +249,6 @@ export async function importIngredients(
 
   for (const item of validItems) {
     const existingId = item.code ? existingMap.get(item.code) : undefined;
-    const factor = Number(item.conversion_factor) || 1;
-    const defaultPrice = Number(item.default_price ?? 0);
-    const avgCostPrice = defaultPrice > 0 ? defaultPrice / factor : 0;
 
     if (existingId) {
       if (mode === "update") {
@@ -272,7 +263,6 @@ export async function importIngredients(
             min_alert_stock: item.min_alert_stock,
             is_active: item.is_active,
             note: item.note ?? null,
-            ...(defaultPrice > 0 ? { avg_cost_price: avgCostPrice } : {}),
           })
           .eq("id", existingId);
 
@@ -294,7 +284,6 @@ export async function importIngredients(
           min_alert_stock: item.min_alert_stock,
           is_active: item.is_active,
           note: item.note ?? null,
-          ...(defaultPrice > 0 ? { avg_cost_price: avgCostPrice } : {}),
         })
         .select("id, code")
         .single();

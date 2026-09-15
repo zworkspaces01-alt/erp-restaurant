@@ -1,6 +1,6 @@
 "use client";
 
-import { LogOut, UserRound } from "lucide-react";
+import { KeyRound, LogOut, UserRound } from "lucide-react";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { signOut } from "@/server-actions/auth.actions";
 import { USER_ROLE_LABELS, type UserRole } from "@/types/restaurant";
+import { ChangePasswordDialog } from "@/components/auth/change-password-dialog";
 
 interface UserMenuProps {
   email: string | null;
@@ -47,9 +48,18 @@ export function UserMenu({ email, fullName, role }: UserMenuProps) {
           {role && <span className="text-xs font-normal text-muted-foreground">Vai trò: {USER_ROLE_LABELS[role]}</span>}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
+
+        <ChangePasswordDialog>
+          <DropdownMenuItem onSelect={(e) => e.preventDefault()} className="cursor-pointer">
+            <KeyRound className="mr-2 size-4" />
+            Đổi mật khẩu
+          </DropdownMenuItem>
+        </ChangePasswordDialog>
+
+        <DropdownMenuSeparator />
         <form action={signOut}>
           <DropdownMenuItem asChild>
-            <button type="submit" className="w-full">
+            <button type="submit" className="w-full text-destructive focus:text-destructive">
               <LogOut className="size-4" />
               Đăng xuất
             </button>

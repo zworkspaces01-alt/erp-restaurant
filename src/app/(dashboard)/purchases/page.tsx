@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { AlertTriangle, Banknote, FileText, Plus, Wallet } from "lucide-react";
-import { PageHeader, StatCard } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { PurchaseOrdersTable } from "@/components/purchases/purchase-orders-table";
 import {
@@ -10,10 +10,16 @@ import {
 } from "@/lib/queries/purchases.queries";
 import { InvoiceOcrDialog } from "@/components/purchases/invoice-ocr-dialog";
 import { formatVND } from "@/lib/format";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Phiếu nhập hàng" };
 
 export default async function PurchasesPage() {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const [orders, suppliers, ingredients] = await Promise.all([
     getPurchaseOrders(),
     getSupplierOptions(),

@@ -7,10 +7,11 @@ import {
   payrollStatusTone,
 } from "@/types/restaurant";
 import { formatDate, formatDateTime, formatNumber, formatVND } from "@/lib/format";
-import { PageHeader, StatCard, StatusBadge } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Card, CardContent } from "@/components/ui/card";
 import { PayrollActions } from "@/components/hr/payroll-actions";
 import { PayrollItemsTable } from "@/components/hr/payroll-items-table";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Bảng lương | Restaurant ERP" };
 
@@ -19,6 +20,11 @@ export default async function PayrollDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const { id } = await params;
   const detail = await getPayrollPeriodDetail(id);
   if (!detail) notFound();

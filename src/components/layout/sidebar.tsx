@@ -2,6 +2,7 @@ import Link from "next/link";
 import { ChefHat } from "lucide-react";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
+import type { UserRole } from "@/types/restaurant";
 
 export function SidebarBrand() {
   return (
@@ -17,13 +18,17 @@ export function SidebarBrand() {
   );
 }
 
+interface SidebarProps {
+  role?: UserRole | null;
+}
+
 /** Desktop sidebar (hidden on small screens). */
-export function Sidebar() {
+export function Sidebar({ role }: SidebarProps) {
   return (
     <aside className="sticky top-0 hidden h-svh w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground lg:flex">
       <SidebarBrand />
       <ScrollArea className="flex-1">
-        <SidebarNav />
+        <SidebarNav role={role} />
       </ScrollArea>
     </aside>
   );

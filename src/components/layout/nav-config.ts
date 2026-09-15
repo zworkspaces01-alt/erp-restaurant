@@ -8,21 +8,30 @@ import {
   Receipt,
   ShoppingCart,
   Truck,
+  UserCheck,
   Users,
   UtensilsCrossed,
   Wallet,
 } from "lucide-react";
+import type { UserRole } from "@/types/restaurant";
 
 export interface NavItem {
   title: string;
   href: string;
   icon: LucideIcon;
+  /** Roles allowed to view this item. If omitted, all authenticated roles can view. */
+  allowedRoles?: UserRole[];
   /** Sub-links rendered under the item (and used for active matching). */
-  children?: { title: string; href: string }[];
+  children?: {
+    title: string;
+    href: string;
+    allowedRoles?: UserRole[];
+  }[];
 }
 
 export interface NavGroup {
   title: string;
+  allowedRoles?: UserRole[];
   items: NavItem[];
 }
 
@@ -38,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
         title: "Kho nguyên liệu",
         href: "/inventory",
         icon: Package,
+        allowedRoles: ["owner", "manager"],
         children: [
           { title: "Nguyên liệu", href: "/inventory" },
           { title: "Danh mục nguyên liệu", href: "/inventory/categories" },
@@ -51,8 +61,8 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: UtensilsCrossed,
         children: [
           { title: "Món ăn", href: "/menu" },
-          { title: "Danh mục món", href: "/menu/categories" },
-          { title: "Menu Engineering", href: "/menu/engineering" },
+          { title: "Danh mục món", href: "/menu/categories", allowedRoles: ["owner", "manager"] },
+          { title: "Menu Engineering", href: "/menu/engineering", allowedRoles: ["owner", "manager"] },
         ],
       },
       { title: "Bán hàng", href: "/orders", icon: Receipt },
@@ -60,6 +70,7 @@ export const NAV_GROUPS: NavGroup[] = [
   },
   {
     title: "Mua hàng & công nợ",
+    allowedRoles: ["owner", "manager"],
     items: [
       { title: "Nhà cung cấp", href: "/suppliers", icon: Truck },
       { title: "Phiếu nhập kho", href: "/purchases", icon: ShoppingCart },
@@ -69,13 +80,14 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     title: "Nhân sự",
     items: [
-      { title: "Nhân viên", href: "/employees", icon: Users },
+      { title: "Nhân viên", href: "/employees", icon: Users, allowedRoles: ["owner", "manager"] },
       { title: "Chấm công", href: "/timekeeping", icon: ClipboardList },
-      { title: "Bảng lương", href: "/payroll", icon: Wallet },
+      { title: "Bảng lương", href: "/payroll", icon: Wallet, allowedRoles: ["owner", "manager"] },
     ],
   },
   {
     title: "Tài chính",
+    allowedRoles: ["owner", "manager"],
     items: [
       {
         title: "Chi phí vận hành",
@@ -92,8 +104,20 @@ export const NAV_GROUPS: NavGroup[] = [
         icon: BarChart3,
         children: [
           { title: "Tiêu hao & Lỗ lãi ngày", href: "/reports/daily" },
-          { title: "Báo cáo P&L (Tháng/Quý)", href: "/reports/pnl" },
+          { title: "Báo cáo P&L (Tháng/Quý)", href: "/reports/pnl", allowedRoles: ["owner"] },
         ],
+      },
+    ],
+  },
+  {
+    title: "Hệ thống",
+    allowedRoles: ["owner"],
+    items: [
+      {
+        title: "Tài khoản & Phân quyền",
+        href: "/settings/users",
+        icon: UserCheck,
+        allowedRoles: ["owner"],
       },
     ],
   },
@@ -103,4 +127,24 @@ export const NAV_GROUPS: NavGroup[] = [
 export function isNavActive(pathname: string, href: string): boolean {
   if (href === "/dashboard") return pathname === href;
   return pathname === href || pathname.startsWith(`${href}/`);
+}
+
+/** Lọc menu navigation theo role của người dùng hiện tại */
+export function filterNavGroupsByRole(groups: NavGroup[], role: UserRole | null): NavGroup[] {
+  if (!role) return [];
+
+  return groups
+    .filter((group) => !group.allowedRoles || group.allowedRoles.includes(role))
+    .map((group) => ({
+      ...group,
+      items: group.items
+        .filter((item) => !item.allowedRoles || item.allowedRoles.includes(role))
+        .map((item) => ({
+          ...item,
+          children: item.children?.filter(
+            (child) => !child.allowedRoles || child.allowedRoles.includes(role)
+          ),
+        })),
+    }))
+    .filter((group) => group.items.length > 0);
 }

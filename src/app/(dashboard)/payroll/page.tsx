@@ -1,13 +1,19 @@
 import { CalendarRange, Wallet, FileCheck2 } from "lucide-react";
 import { getPayrollPeriods } from "@/lib/queries/hr.queries";
 import { formatNumber, formatVND } from "@/lib/format";
-import { EmptyState, PageHeader, StatCard } from "@/components/shared";
+import { EmptyState, Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { CreatePayrollDialog } from "@/components/hr/create-payroll-dialog";
 import { PayrollPeriodsTable } from "@/components/hr/payroll-periods-table";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Kỳ lương | Restaurant ERP" };
 
 export default async function PayrollPage() {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   // Tính ở server theo giờ Việt Nam để client không phụ thuộc timezone trình duyệt.
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
   const periods = await getPayrollPeriods();

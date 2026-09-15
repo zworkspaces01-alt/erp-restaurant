@@ -2,12 +2,13 @@ import Link from "next/link";
 import { BarChart3, FileText } from "lucide-react";
 import { getDailyReportPageData } from "@/lib/queries/reports.queries";
 import { formatDate } from "@/lib/format";
-import { PageHeader } from "@/components/shared";
+import { Forbidden, PageHeader } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { DailyReportHeader } from "@/components/reports/daily-report-header";
 import { DailyKpiCards } from "@/components/reports/daily-kpi-cards";
 import { DailyIngredientTable } from "@/components/reports/daily-ingredient-table";
 import { DailyTrendSection } from "@/components/reports/daily-trend-section";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Báo cáo tiêu hao nguyên liệu & Lỗ lãi ngày | Restaurant ERP" };
 export const dynamic = "force-dynamic";
@@ -19,6 +20,11 @@ function firstValue(value: string | string[] | undefined): string | undefined {
 }
 
 export default async function DailyReportPage({ searchParams }: { searchParams: SearchParams }) {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const params = await searchParams;
   const todayStr = new Date().toISOString().slice(0, 10);
   const targetDate = firstValue(params.date) || todayStr;

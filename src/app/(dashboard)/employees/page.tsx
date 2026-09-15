@@ -1,13 +1,19 @@
 import { Users, UserCheck, Wallet } from "lucide-react";
 import { getEmployees } from "@/lib/queries/hr.queries";
 import { formatNumber, formatVND } from "@/lib/format";
-import { PageHeader, StatCard, EmptyState } from "@/components/shared";
+import { PageHeader, StatCard, EmptyState, Forbidden } from "@/components/shared";
 import { EmployeeFormDialog } from "@/components/hr/employee-form-dialog";
 import { EmployeesTable } from "@/components/hr/employees-table";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Nhân viên | Restaurant ERP" };
 
 export default async function EmployeesPage() {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   // Tính ở server theo giờ Việt Nam để mặc định ngày vào làm không lệch múi giờ.
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Ho_Chi_Minh" }).format(new Date());
   const employees = await getEmployees();

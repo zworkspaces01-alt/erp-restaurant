@@ -12,8 +12,13 @@ import {
   SheetTrigger,
 } from "@/components/ui/sheet";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
+import type { UserRole } from "@/types/restaurant";
 
-export function MobileNav() {
+interface MobileNavProps {
+  role?: UserRole | null;
+}
+
+export function MobileNav({ role }: MobileNavProps) {
   const [open, setOpen] = useState(false);
 
   return (
@@ -29,7 +34,7 @@ export function MobileNav() {
           <SheetDescription className="sr-only">Điều hướng</SheetDescription>
         </SheetHeader>
         <div className="overflow-y-auto">
-          <SidebarNav onNavigate={() => setOpen(false)} />
+          <SidebarNav role={role} onNavigate={() => setOpen(false)} />
         </div>
       </SheetContent>
     </Sheet>

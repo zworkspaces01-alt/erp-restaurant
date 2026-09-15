@@ -72,7 +72,6 @@ async function autoProvisionMissingEntities(
           .slice(0, 4) || "NL";
       const autoCode = `NL-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
       const unit = (item.unit && item.unit.trim()) || "kg";
-      const unitPrice = Number(item.unit_price) > 0 ? Number(item.unit_price) : 0;
 
       const { data: newIng } = await supabase
         .from("ingredients")
@@ -82,7 +81,6 @@ async function autoProvisionMissingEntities(
           base_unit: unit,
           import_unit: unit,
           conversion_factor: 1,
-          avg_cost_price: unitPrice,
           is_active: true,
           note: "Tự động tạo khi scan hóa đơn nhập kho",
         })

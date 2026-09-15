@@ -7,11 +7,12 @@ import {
   summarizeExpenses,
 } from "@/lib/queries/expenses.queries";
 import { formatMonth, formatVND } from "@/lib/format";
-import { PageHeader, StatCard } from "@/components/shared";
+import { Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { ExpensesTable } from "@/components/expenses/expenses-table";
 import { MonthFilter } from "@/components/expenses/month-filter";
 import type { ExpenseStatus } from "@/types/restaurant";
+import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Chi phí vận hành | Restaurant ERP" };
 
@@ -20,6 +21,11 @@ interface PageProps {
 }
 
 export default async function ExpensesPage({ searchParams }: PageProps) {
+  const { role, authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
+  }
+
   const params = await searchParams;
   const month = normalizeMonth(params.month);
   const status: ExpenseStatus | undefined =

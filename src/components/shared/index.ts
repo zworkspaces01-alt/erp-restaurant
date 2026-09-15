@@ -13,3 +13,4 @@ export { EmptyState } from "./empty-state";
 export { FormError, FormServerError } from "./form-error";
 export { SubmitButton } from "./submit-button";
 export { Money } from "./money";
+export { Forbidden } from "./forbidden";
