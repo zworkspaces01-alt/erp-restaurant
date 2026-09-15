@@ -203,17 +203,30 @@ export function IngredientOcrDialog({
         note: it.note || null,
       }));
 
-      const res = await importIngredients(payload, duplicateMode);
+      const supplierInfo = (ocrResult?.supplier || ocrResult?.matched_supplier_name) ? {
+        id: ocrResult.supplier_id || null,
+        name: ocrResult.matched_supplier_name || ocrResult.supplier?.name || null,
+        tax_code: ocrResult.supplier?.tax_code || null,
+        phone: ocrResult.supplier?.phone || null,
+        address: ocrResult.supplier?.address || null,
+        contact_name: ocrResult.supplier?.contact_name || null,
+      } : null;
+
+      const res = await importIngredients(payload, duplicateMode, supplierInfo);
 
       if (!res.success) {
         toast.error(res.error);
         return;
       }
 
+      const linkedSupName = res.data.supplier_name || ocrResult?.matched_supplier_name || ocrResult?.supplier?.name;
+
       toast.success(
         `Đã lưu thành công ${res.data.inserted} nguyên liệu mới${
           res.data.updated ? `, cập nhật ${res.data.updated}` : ""
-        }${res.data.skipped ? `, bỏ qua ${res.data.skipped} trùng mã` : ""}!`
+        }${res.data.skipped ? `, bỏ qua ${res.data.skipped} trùng mã` : ""}${
+          linkedSupName ? ` và tự động liên kết vào danh mục NCC "${linkedSupName}"` : ""
+        }!`
       );
 
       setOpen(false);

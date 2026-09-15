@@ -4,6 +4,8 @@ import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 export type IngredientParsedItem = IngredientInput;
 
 export interface SupplierParsedInfo {
+  id?: string | null;
+  code?: string | null;
   name?: string | null;
   tax_code?: string | null;
   phone?: string | null;

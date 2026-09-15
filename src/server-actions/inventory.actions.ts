@@ -2,9 +2,10 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import { ingredientSchema, parseDbError, type IngredientInput } from "@/types/restaurant";
-import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
+import { normalizeVietnamese, computeSimilarity } from "@/lib/ai/invoice-matcher";
 import { todayISO } from "@/lib/format";
 import {
   stockAdjustmentWithDateSchema,
@@ -20,6 +21,8 @@ function revalidateInventory(id?: string) {
   revalidatePath("/inventory/adjustments");
   if (id) revalidatePath(`/inventory/${id}`);
   revalidatePath("/dashboard");
+  revalidatePath("/suppliers");
+  revalidatePath("/purchases");
 }
 
 /** Chuyển đổi dữ liệu form sang row DB (loại bỏ các cột do DB tự tính như current_stock, avg_cost_price). */
@@ -197,21 +200,34 @@ export async function recordStocktakeSheet(
   return ok({ recorded, skipped });
 }
 
+export interface SupplierProvisionInfo {
+  id?: string | null;
+  name?: string | null;
+  tax_code?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  contact_name?: string | null;
+}
+
 export interface IngredientImportResult {
   inserted: number;
   updated: number;
   skipped: number;
   total: number;
+  supplier_id?: string | null;
+  supplier_name?: string | null;
 }
 
 /**
- * Nhập hàng loạt nguyên liệu từ file Excel.
+ * Nhập hàng loạt nguyên liệu từ file Excel hoặc từ quét hóa đơn OCR.
  * - mode = "skip": Nếu mã nguyên liệu đã tồn tại thì bỏ qua.
  * - mode = "update": Nếu mã nguyên liệu đã tồn tại thì cập nhật thông tin.
+ * - supplierInfo: Thông tin NCC quét từ hóa đơn, tự động thêm vào danh mục NCC nếu chưa có.
  */
 export async function importIngredients(
   items: IngredientInput[],
-  mode: "skip" | "update" = "skip"
+  mode: "skip" | "update" = "skip",
+  supplierInfo?: SupplierProvisionInfo | null
 ): Promise<ActionResult<IngredientImportResult>> {
   if (!items || items.length === 0) {
     return fail("Không có dữ liệu để nhập");
@@ -247,8 +263,96 @@ export async function importIngredients(
   }
 
   const supabase = await createClient();
+  const db = process.env.SUPABASE_SERVICE_ROLE_KEY ? createAdminClient() : supabase;
 
-  // Truy vấn toàn bộ nguyên liệu hiện có để đối chiếu cả Mã (code) và Tên (name)
+  // 1. Tự động kiểm tra & thêm Nhà cung cấp vào hệ thống nếu có thông tin NCC
+  let resolvedSupplierId: string | null = supplierInfo?.id || null;
+  let resolvedSupplierName: string | null = supplierInfo?.name || null;
+
+  if (supplierInfo?.name?.trim()) {
+    const rawSupName = supplierInfo.name.trim();
+    const cleanTax = supplierInfo.tax_code ? supplierInfo.tax_code.replace(/\D/g, "") : "";
+    const cleanPhone = supplierInfo.phone ? supplierInfo.phone.replace(/\D/g, "") : "";
+    const normRawName = normalizeVietnamese(rawSupName);
+
+    const { data: existingSuppliers } = await db
+      .from("suppliers")
+      .select("id, name, code, tax_code, phone, address")
+      .eq("is_active", true);
+
+    let matched = (existingSuppliers ?? []).find((s) => {
+      if (cleanTax && s.tax_code && s.tax_code.replace(/\D/g, "") === cleanTax) return true;
+      if (cleanPhone && s.phone && s.phone.replace(/\D/g, "") === cleanPhone) return true;
+      if (normalizeVietnamese(s.name) === normRawName) return true;
+      return computeSimilarity(s.name, rawSupName) >= 0.75;
+    });
+
+    if (!matched) {
+      const supPrefix =
+        normRawName
+          .split(/\s+/)
+          .map((w) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 4) || "NCC";
+      let supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
+
+      let { data: newSup, error: insSupErr } = await db
+        .from("suppliers")
+        .insert({
+          name: rawSupName,
+          code: supCode,
+          tax_code: supplierInfo.tax_code || null,
+          phone: supplierInfo.phone || null,
+          address: supplierInfo.address || null,
+          contact_name: supplierInfo.contact_name || null,
+          is_active: true,
+          payment_terms_days: 0,
+        })
+        .select("id, name, code, tax_code, phone, address")
+        .maybeSingle();
+
+      if (insSupErr && insSupErr.code === "23505") {
+        supCode = `NCC-${supPrefix}-${Date.now().toString().slice(-4)}`;
+        const retryRes = await db
+          .from("suppliers")
+          .insert({
+            name: rawSupName,
+            code: supCode,
+            tax_code: supplierInfo.tax_code || null,
+            phone: supplierInfo.phone || null,
+            address: supplierInfo.address || null,
+            contact_name: supplierInfo.contact_name || null,
+            is_active: true,
+            payment_terms_days: 0,
+          })
+          .select("id, name, code, tax_code, phone, address")
+          .maybeSingle();
+        newSup = retryRes.data;
+        insSupErr = retryRes.error;
+      }
+
+      if (newSup) {
+        matched = newSup;
+      }
+    }
+
+    if (matched) {
+      resolvedSupplierId = matched.id;
+      resolvedSupplierName = matched.name;
+    }
+  }
+
+  // Gán nhà cung cấp vào các nguyên liệu chưa có default_supplier_id
+  if (resolvedSupplierId) {
+    for (const item of uniqueItems) {
+      if (!item.default_supplier_id) {
+        item.default_supplier_id = resolvedSupplierId;
+      }
+    }
+  }
+
+  // 2. Truy vấn toàn bộ nguyên liệu hiện có để đối chiếu cả Mã (code) và Tên (name)
   const { data: allExisting, error: queryError } = await supabase
     .from("ingredients")
     .select("id, code, name");
@@ -327,6 +431,8 @@ export async function importIngredients(
     updated,
     skipped,
     total: validItems.length,
+    supplier_id: resolvedSupplierId,
+    supplier_name: resolvedSupplierName,
   });
 }
 

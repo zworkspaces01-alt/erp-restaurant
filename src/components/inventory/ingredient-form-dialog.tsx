@@ -131,6 +131,11 @@ export function IngredientFormDialog({
     defaultValues: toDefaults(ingredient),
   });
 
+  const [supplierOptions, setSupplierOptions] = useState<SupplierOption[]>(suppliers);
+  useEffect(() => {
+    setSupplierOptions(suppliers);
+  }, [suppliers]);
+
   const [isScanningLabel, setIsScanningLabel] = useState(false);
   const [batchResult, setBatchResult] = useState<IngredientOcrResult | null>(null);
   const [batchItems, setBatchItems] = useState<IngredientParsedItem[]>([]);
@@ -151,6 +156,18 @@ export function IngredientFormDialog({
       if (!res.success) {
         toast.error(res.error);
         return;
+      }
+
+      // Cập nhật danh mục NCC vào state chọn lựa nếu nhận diện được nhà cung cấp mới
+      if (res.data.supplier_id && (res.data.matched_supplier_name || res.data.supplier?.name)) {
+        const newSupId = res.data.supplier_id;
+        const newSupName = res.data.matched_supplier_name || res.data.supplier?.name || "Nhà cung cấp mới";
+        setSupplierOptions((prev) => {
+          if (!prev.some((s) => s.id === newSupId)) {
+            return [{ id: newSupId, name: newSupName }, ...prev];
+          }
+          return prev;
+        });
       }
 
       const items = res.data.items || [];
@@ -272,16 +289,29 @@ export function IngredientFormDialog({
         note: it.note || null,
       }));
 
-      const res = await importIngredients(payload, "update");
+      const supplierInfo = (batchResult?.supplier || batchResult?.matched_supplier_name) ? {
+        id: batchResult.supplier_id || null,
+        name: batchResult.matched_supplier_name || batchResult.supplier?.name || null,
+        tax_code: batchResult.supplier?.tax_code || null,
+        phone: batchResult.supplier?.phone || null,
+        address: batchResult.supplier?.address || null,
+        contact_name: batchResult.supplier?.contact_name || null,
+      } : null;
+
+      const res = await importIngredients(payload, "update", supplierInfo);
       if (!res.success) {
         toast.error(res.error);
         return;
       }
 
+      const linkedSupName = res.data.supplier_name || batchResult?.matched_supplier_name || batchResult?.supplier?.name;
+
       toast.success(
         `Đã lưu thành công ${res.data.inserted} nguyên liệu mới${
           res.data.updated ? `, cập nhật ${res.data.updated}` : ""
-        }${res.data.skipped ? `, bỏ qua ${res.data.skipped} trùng mã` : ""}!`
+        }${res.data.skipped ? `, bỏ qua ${res.data.skipped} trùng mã` : ""}${
+          linkedSupName ? ` và tự động liên kết vào danh mục NCC "${linkedSupName}"` : ""
+        }!`
       );
 
       setBatchResult(null);
@@ -757,7 +787,7 @@ export function IngredientFormDialog({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value={NO_SUPPLIER}>Không chọn</SelectItem>
-                    {suppliers.map((s) => (
+                    {supplierOptions.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name}
                       </SelectItem>

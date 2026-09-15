@@ -1,11 +1,14 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import { parseInvoiceImage, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
 import {
   matchInvoiceData,
   normalizeVietnamese,
+  computeSimilarity,
   type IngredientMatchCandidate,
   type SupplierMatchCandidate,
 } from "@/lib/ai/invoice-matcher";
@@ -26,36 +29,97 @@ async function autoProvisionMissingEntities(
   reviewData: InvoiceOcrReviewData,
   parsedData: InvoiceParsedData
 ) {
-  // 1. Tự động thêm Nhà cung cấp nếu chưa có
+  const db = process.env.SUPABASE_SERVICE_ROLE_KEY ? createAdminClient() : supabase;
+
+  // 1. Tự động kiểm tra / thêm Nhà cung cấp nếu chưa có
   if (!reviewData.supplier_id && parsedData.supplier_name?.trim()) {
     const rawSupName = parsedData.supplier_name.trim();
-    const supPrefix =
-      normalizeVietnamese(rawSupName)
-        .split(/\s+/)
-        .map((w) => w[0])
-        .join("")
-        .toUpperCase()
-        .slice(0, 4) || "NCC";
-    const supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
+    const normRawName = normalizeVietnamese(rawSupName);
+    const taxCode = parsedData.supplier_tax_code?.trim() || null;
+    const phone = parsedData.supplier_phone?.trim() || null;
+    const address = parsedData.supplier_address?.trim() || null;
 
-    const { data: newSup } = await supabase
+    // Tra cứu lại xem NCC đã có trong DB chưa
+    const { data: existingSuppliers } = await db
       .from("suppliers")
-      .insert({
-        name: rawSupName,
-        code: supCode,
-        tax_code: parsedData.supplier_tax_code || null,
-        phone: parsedData.supplier_phone || null,
-        address: parsedData.supplier_address || null,
-        is_active: true,
-        payment_terms_days: 0,
-      })
-      .select("id, name, code")
-      .maybeSingle();
+      .select("id, name, code, tax_code, phone, address")
+      .eq("is_active", true);
 
-    if (newSup) {
-      reviewData.supplier_id = newSup.id;
-      reviewData.matched_supplier_name = newSup.name;
+    const cleanTax = taxCode ? taxCode.replace(/\D/g, "") : "";
+    const cleanPhone = phone ? phone.replace(/\D/g, "") : "";
+
+    let matchedSup = (existingSuppliers ?? []).find((s) => {
+      if (cleanTax && s.tax_code && s.tax_code.replace(/\D/g, "") === cleanTax) return true;
+      if (cleanPhone && s.phone && s.phone.replace(/\D/g, "") === cleanPhone) return true;
+      if (normalizeVietnamese(s.name) === normRawName) return true;
+      return computeSimilarity(s.name, rawSupName) >= 0.75;
+    });
+
+    if (!matchedSup) {
+      const supPrefix =
+        normRawName
+          .split(/\s+/)
+          .map((w) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 4) || "NCC";
+      let supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
+
+      let { data: newSup, error: insErr } = await db
+        .from("suppliers")
+        .insert({
+          name: rawSupName,
+          code: supCode,
+          tax_code: taxCode,
+          phone: phone,
+          address: address,
+          is_active: true,
+          payment_terms_days: 0,
+        })
+        .select("id, name, code, tax_code, phone, address")
+        .maybeSingle();
+
+      if (insErr && insErr.code === "23505") {
+        supCode = `NCC-${supPrefix}-${Date.now().toString().slice(-4)}`;
+        const retryRes = await db
+          .from("suppliers")
+          .insert({
+            name: rawSupName,
+            code: supCode,
+            tax_code: taxCode,
+            phone: phone,
+            address: address,
+            is_active: true,
+            payment_terms_days: 0,
+          })
+          .select("id, name, code, tax_code, phone, address")
+          .maybeSingle();
+        newSup = retryRes.data;
+        insErr = retryRes.error;
+      }
+
+      if (insErr) {
+        console.error("Lỗi khi tự động thêm NCC từ hóa đơn:", insErr);
+      }
+
+      if (newSup) {
+        matchedSup = newSup;
+      }
+    } else {
+      const updates: { tax_code?: string; phone?: string; address?: string } = {};
+      if (!matchedSup.tax_code && taxCode) updates.tax_code = taxCode;
+      if (!matchedSup.phone && phone) updates.phone = phone;
+      if (!matchedSup.address && address) updates.address = address;
+      if (Object.keys(updates).length > 0) {
+        await db.from("suppliers").update(updates).eq("id", matchedSup.id);
+      }
+    }
+
+    if (matchedSup) {
+      reviewData.supplier_id = matchedSup.id;
+      reviewData.matched_supplier_name = matchedSup.name;
       reviewData.supplier_match_confidence = "exact";
+      revalidatePath("/suppliers");
     }
   } else if (reviewData.supplier_id) {
     // Nếu NCC đã có sẵn nhưng còn thiếu thông tin (MST/SĐT/Địa chỉ), cập nhật bổ sung
@@ -64,7 +128,8 @@ async function autoProvisionMissingEntities(
     if (parsedData.supplier_phone) updates.phone = parsedData.supplier_phone;
     if (parsedData.supplier_address) updates.address = parsedData.supplier_address;
     if (Object.keys(updates).length > 0) {
-      await supabase.from("suppliers").update(updates).eq("id", reviewData.supplier_id);
+      await db.from("suppliers").update(updates).eq("id", reviewData.supplier_id);
+      revalidatePath("/suppliers");
     }
   }
 
@@ -80,10 +145,10 @@ async function autoProvisionMissingEntities(
           .join("")
           .toUpperCase()
           .slice(0, 4) || "NL";
-      const autoCode = `NL-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+      let autoCode = `NL-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
       const unit = (item.unit && item.unit.trim()) || "kg";
 
-      const { data: newIng } = await supabase
+      let { data: newIng, error: ingErr } = await db
         .from("ingredients")
         .insert({
           name: rawName,
@@ -98,6 +163,26 @@ async function autoProvisionMissingEntities(
         .select("id, code, name, base_unit, import_unit, conversion_factor")
         .maybeSingle();
 
+      if (ingErr && ingErr.code === "23505") {
+        autoCode = `NL-${prefix}-${Date.now().toString().slice(-4)}`;
+        const retryRes = await db
+          .from("ingredients")
+          .insert({
+            name: rawName,
+            code: autoCode,
+            base_unit: unit,
+            import_unit: unit,
+            conversion_factor: 1,
+            default_supplier_id: reviewData.supplier_id || null,
+            is_active: true,
+            note: "Tự động tạo khi scan hóa đơn nhập kho",
+          })
+          .select("id, code, name, base_unit, import_unit, conversion_factor")
+          .maybeSingle();
+        newIng = retryRes.data;
+        ingErr = retryRes.error;
+      }
+
       if (newIng) {
         item.ingredient_id = newIng.id;
         item.matched_ingredient_name = newIng.name;
@@ -107,6 +192,9 @@ async function autoProvisionMissingEntities(
       }
     }
   }
+
+  revalidatePath("/inventory");
+  revalidatePath("/purchases");
 }
 
 /**

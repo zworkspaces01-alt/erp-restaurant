@@ -1,13 +1,15 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import {
   parseIngredientsFromImage,
   getMockIngredientResult,
   type IngredientOcrResult,
 } from "@/lib/ai/ingredient-ocr";
-import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
+import { normalizeVietnamese, computeSimilarity } from "@/lib/ai/invoice-matcher";
 import { uploadImage } from "@/lib/storage";
 
 /**
@@ -22,6 +24,7 @@ export async function extractIngredientsFromImageAction(
     const apiKeyOverride = (formData.get("api_key") as string | null) || undefined;
 
     const supabase = await createClient();
+    const db = process.env.SUPABASE_SERVICE_ROLE_KEY ? createAdminClient() : supabase;
 
     let result: IngredientOcrResult;
 
@@ -54,7 +57,7 @@ export async function extractIngredientsFromImageAction(
       result.image_url = imageUrl;
     }
 
-    // Tự động kiểm tra / tạo Nhà cung cấp nếu nhận diện được trên ảnh
+    // Tự động kiểm tra / tạo Nhà cung cấp vào hệ thống nếu nhận diện được trên ảnh
     if (result.supplier && result.supplier.name?.trim()) {
       const rawSupName = result.supplier.name.trim();
       const taxCode = result.supplier.tax_code?.trim() || null;
@@ -63,29 +66,38 @@ export async function extractIngredientsFromImageAction(
       const contactName = result.supplier.contact_name?.trim() || null;
 
       // 1. Tìm xem nhà cung cấp đã có trong DB chưa
-      const { data: existingSuppliers } = await supabase
+      const { data: existingSuppliers, error: supQueryErr } = await db
         .from("suppliers")
         .select("id, name, code, tax_code, phone, address")
         .eq("is_active", true);
 
+      if (supQueryErr) {
+        console.error("Lỗi khi truy vấn danh sách NCC:", supQueryErr);
+      }
+
+      const cleanTax = taxCode ? taxCode.replace(/\D/g, "") : "";
+      const cleanPhone = phone ? phone.replace(/\D/g, "") : "";
+      const normRawName = normalizeVietnamese(rawSupName);
+
       let matchedSup = (existingSuppliers ?? []).find((s) => {
-        if (taxCode && s.tax_code && s.tax_code.replace(/\D/g, "") === taxCode.replace(/\D/g, "")) return true;
-        if (phone && s.phone && s.phone.replace(/\D/g, "") === phone.replace(/\D/g, "")) return true;
-        return normalizeVietnamese(s.name) === normalizeVietnamese(rawSupName);
+        if (cleanTax && s.tax_code && s.tax_code.replace(/\D/g, "") === cleanTax) return true;
+        if (cleanPhone && s.phone && s.phone.replace(/\D/g, "") === cleanPhone) return true;
+        if (normalizeVietnamese(s.name) === normRawName) return true;
+        return computeSimilarity(s.name, rawSupName) >= 0.75;
       });
 
-      // 2. Nếu chưa có -> Tự động thêm Nhà cung cấp mới
+      // 2. Nếu chưa có trong hệ thống -> Tự động thêm Nhà cung cấp mới
       if (!matchedSup) {
         const supPrefix =
-          normalizeVietnamese(rawSupName)
+          normRawName
             .split(/\s+/)
             .map((w) => w[0])
             .join("")
             .toUpperCase()
             .slice(0, 4) || "NCC";
-        const supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
+        let supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
 
-        const { data: newSup } = await supabase
+        let { data: newSup, error: insErr } = await db
           .from("suppliers")
           .insert({
             name: rawSupName,
@@ -100,28 +112,63 @@ export async function extractIngredientsFromImageAction(
           .select("id, name, code, tax_code, phone, address")
           .maybeSingle();
 
+        // Xử lý trùng mã NCC (unique constraint 23505) nếu xảy ra
+        if (insErr && insErr.code === "23505") {
+          supCode = `NCC-${supPrefix}-${Date.now().toString().slice(-4)}`;
+          const retryRes = await db
+            .from("suppliers")
+            .insert({
+              name: rawSupName,
+              code: supCode,
+              tax_code: taxCode,
+              phone: phone,
+              address: address,
+              contact_name: contactName,
+              is_active: true,
+              payment_terms_days: 0,
+            })
+            .select("id, name, code, tax_code, phone, address")
+            .maybeSingle();
+          newSup = retryRes.data;
+          insErr = retryRes.error;
+        }
+
+        if (insErr) {
+          console.error("Lỗi khi tự động thêm NCC từ ảnh hóa đơn:", insErr);
+        }
+
         if (newSup) {
           matchedSup = newSup;
         }
       } else {
-        // Cập nhật bổ sung thông tin nếu NCC cũ chưa có
-        const updates: { tax_code?: string; phone?: string; address?: string } = {};
+        // Cập nhật bổ sung thông tin nếu NCC cũ trong hệ thống còn thiếu
+        const updates: { tax_code?: string; phone?: string; address?: string; contact_name?: string } = {};
         if (!matchedSup.tax_code && taxCode) updates.tax_code = taxCode;
         if (!matchedSup.phone && phone) updates.phone = phone;
         if (!matchedSup.address && address) updates.address = address;
+        if (contactName) updates.contact_name = contactName;
         if (Object.keys(updates).length > 0) {
-          await supabase.from("suppliers").update(updates).eq("id", matchedSup.id);
+          await db.from("suppliers").update(updates).eq("id", matchedSup.id);
         }
       }
 
       if (matchedSup) {
         result.supplier_id = matchedSup.id;
         result.matched_supplier_name = matchedSup.name;
+        if (result.supplier) {
+          result.supplier.name = matchedSup.name;
+        }
         // Gán nhà cung cấp mặc định vào toàn bộ nguyên liệu trích xuất
         result.items = result.items.map((it) => ({
           ...it,
           default_supplier_id: matchedSup.id,
         }));
+
+        // Làm mới cache các trang liên quan để danh mục NCC và kho lập tức hiển thị
+        revalidatePath("/suppliers");
+        revalidatePath("/inventory");
+        revalidatePath("/purchases");
+        revalidatePath("/purchases/new");
       }
     }
 
