@@ -3,17 +3,22 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  Building2,
   Camera,
   CheckCircle2,
   FileSpreadsheet,
+  Hash,
+  MapPin,
   Maximize2,
   Package,
+  Phone,
   Plus,
   RotateCw,
   ScanLine,
   Sparkles,
   Trash2,
   UploadCloud,
+  User,
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
@@ -186,7 +191,7 @@ export function IngredientOcrDialog({
         conversion_factor: Number(it.conversion_factor) || 1,
         min_alert_stock: Number(it.min_alert_stock) || 0,
         default_price: Number(it.default_price) || 0,
-        default_supplier_id: null,
+        default_supplier_id: it.default_supplier_id || ocrResult?.supplier_id || null,
         is_active: true,
         note: it.note || null,
       }));
@@ -467,6 +472,59 @@ export function IngredientOcrDialog({
               {/* Right Column: Editable Table (8 cols) */}
               <div className="lg:col-span-8 flex flex-col overflow-hidden bg-background">
                 <div className="flex-1 overflow-y-auto p-4 space-y-3">
+                  {/* Supplier Info Card (Auto-detected & linked) */}
+                  {(ocrResult?.supplier?.name || ocrResult?.matched_supplier_name) && (
+                    <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3 space-y-2">
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2">
+                          <div className="size-7 rounded-md bg-emerald-500/10 flex items-center justify-center text-emerald-600 dark:text-emerald-400 shrink-0">
+                            <Building2 className="size-4" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-xs font-semibold text-foreground">
+                                {ocrResult.matched_supplier_name || ocrResult.supplier?.name}
+                              </span>
+                              <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-emerald-500/30 text-emerald-600 dark:text-emerald-400 bg-emerald-500/10 gap-1 font-medium">
+                                <CheckCircle2 className="size-2.5" /> Tự động liên kết NCC
+                              </Badge>
+                            </div>
+                            <p className="text-[11px] text-muted-foreground">
+                              Tất cả nguyên liệu trong bảng sẽ được gán mặc định cho nhà cung cấp này trong hệ thống
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-emerald-500/10 text-xs">
+                        {ocrResult.supplier?.tax_code && (
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <Hash className="size-3.5 text-emerald-600 shrink-0" />
+                            <span>MST: <strong className="text-foreground font-medium">{ocrResult.supplier.tax_code}</strong></span>
+                          </div>
+                        )}
+                        {ocrResult.supplier?.phone && (
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <Phone className="size-3.5 text-emerald-600 shrink-0" />
+                            <span>SĐT: <strong className="text-foreground font-medium">{ocrResult.supplier.phone}</strong></span>
+                          </div>
+                        )}
+                        {ocrResult.supplier?.contact_name && (
+                          <div className="flex items-center gap-1.5 text-muted-foreground">
+                            <User className="size-3.5 text-emerald-600 shrink-0" />
+                            <span>Liên hệ: <strong className="text-foreground font-medium">{ocrResult.supplier.contact_name}</strong></span>
+                          </div>
+                        )}
+                        {ocrResult.supplier?.address && (
+                          <div className="flex items-center gap-1.5 text-muted-foreground sm:col-span-3">
+                            <MapPin className="size-3.5 text-emerald-600 shrink-0" />
+                            <span className="truncate">Địa chỉ: <strong className="text-foreground font-medium">{ocrResult.supplier.address}</strong></span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
                   <div className="flex items-center justify-between">
                     <div>
                       <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">

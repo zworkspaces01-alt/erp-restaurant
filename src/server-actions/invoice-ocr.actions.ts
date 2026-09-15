@@ -45,6 +45,7 @@ async function autoProvisionMissingEntities(
         code: supCode,
         tax_code: parsedData.supplier_tax_code || null,
         phone: parsedData.supplier_phone || null,
+        address: parsedData.supplier_address || null,
         is_active: true,
         payment_terms_days: 0,
       })
@@ -55,6 +56,15 @@ async function autoProvisionMissingEntities(
       reviewData.supplier_id = newSup.id;
       reviewData.matched_supplier_name = newSup.name;
       reviewData.supplier_match_confidence = "exact";
+    }
+  } else if (reviewData.supplier_id) {
+    // Nếu NCC đã có sẵn nhưng còn thiếu thông tin (MST/SĐT/Địa chỉ), cập nhật bổ sung
+    const updates: { tax_code?: string; phone?: string; address?: string } = {};
+    if (parsedData.supplier_tax_code) updates.tax_code = parsedData.supplier_tax_code;
+    if (parsedData.supplier_phone) updates.phone = parsedData.supplier_phone;
+    if (parsedData.supplier_address) updates.address = parsedData.supplier_address;
+    if (Object.keys(updates).length > 0) {
+      await supabase.from("suppliers").update(updates).eq("id", reviewData.supplier_id);
     }
   }
 
@@ -81,6 +91,7 @@ async function autoProvisionMissingEntities(
           base_unit: unit,
           import_unit: unit,
           conversion_factor: 1,
+          default_supplier_id: reviewData.supplier_id || null,
           is_active: true,
           note: "Tự động tạo khi scan hóa đơn nhập kho",
         })

@@ -2,8 +2,19 @@ import type { IngredientInput } from "@/types/restaurant";
 
 export type IngredientParsedItem = IngredientInput;
 
+export interface SupplierParsedInfo {
+  name?: string | null;
+  tax_code?: string | null;
+  phone?: string | null;
+  address?: string | null;
+  contact_name?: string | null;
+}
+
 export interface IngredientOcrResult {
   source_title?: string | null;
+  supplier?: SupplierParsedInfo | null;
+  supplier_id?: string | null;
+  matched_supplier_name?: string | null;
   items: IngredientParsedItem[];
   model_used: string;
   is_mock: boolean;
@@ -19,27 +30,44 @@ export interface IngredientOcrRequestOptions {
 
 const INGREDIENT_OCR_PROMPT = `
 Bạn là chuyên gia quản lý kho và danh mục nguyên vật liệu nhà hàng tại Việt Nam.
-Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn, bảng kê danh mục sản phẩm, hoặc nhãn bao bì sản phẩm) và trích xuất danh sách các NGUYÊN LIỆU vào định dạng JSON thuần túy.
+Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn, bảng kê danh mục sản phẩm, hoặc nhãn bao bì sản phẩm) và trích xuất:
+1. Thông tin Nhà cung cấp / Đơn vị bán hàng (nếu có trên ảnh).
+2. Danh sách các Nguyên liệu vào định dạng JSON thuần túy.
 
-Quy tắc trích xuất cho từng nguyên liệu:
-1. "name": Tên nguyên liệu chuẩn tiếng Việt (vd: "Thịt bò thăn", "Bột mì đa dụng Meizan", "Sữa tươi Vinamilk không đường", "Dầu hào Lee Kum Kee").
-2. "code": Mã nguyên liệu gợi ý (viết hoa không dấu, bắt đầu bằng NL-, vd: "NL-THITBO", "NL-BOTMI", "NL-SUATUOI").
-3. "category": Danh mục gợi ý chuẩn F&B (vd: "Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
-4. "base_unit": Đơn vị cơ sở dùng để định lượng và xuất kho (bắt buộc, vd: "kg", "g", "lít", "ml", "quả", "hộp", "lon", "chai", "gói", "cái").
-5. "import_unit": Đơn vị mua/nhập từ nhà cung cấp (bắt buộc, vd: "thùng", "bao", "kg", "két", "hộp", "lốc", "bịch").
-6. "conversion_factor": Hệ số quy đổi (1 Đơn vị nhập = bao nhiêu Đơn vị cơ sở, số thực >= 1).
-   Ví dụ:
-   - Mua thùng 24 lon: import_unit = "thùng", base_unit = "lon", conversion_factor = 24.
-   - Mua bao 25 kg: import_unit = "bao", base_unit = "kg", conversion_factor = 25.
-   - Mua theo kg dùng theo kg: import_unit = "kg", base_unit = "kg", conversion_factor = 1.
-   - Mua chai 1 lít dùng theo ml: import_unit = "chai", base_unit = "ml", conversion_factor = 1000.
-7. "default_price": Đơn giá nhập ngầm định (cho 1 đơn vị nhập, dạng số nguyên VNĐ, bỏ dấu phẩy/chấm). Nếu không có giá trên ảnh, điền 0.
-8. "min_alert_stock": Mức cảnh báo tồn tối thiểu đề xuất (dạng số, vd: 5 hoặc 10, mặc định 0).
-9. "note": Ghi chú quy cách hoặc xuất xứ nếu có (vd: "Thùng 24 lon x 330ml", "Quy cách bao 25kg").
+Quy tắc trích xuất:
+1. "supplier": Thông tin nhà cung cấp / đại lý / công ty bán hàng xuất bảng giá hoặc hóa đơn (nếu có tên công ty/cửa hàng/đại lý trên ảnh, hoặc null nếu không có):
+   - "name": Tên nhà cung cấp / công ty / cửa hàng / đại lý (vd: "Công ty Thực Phẩm Tân Nhất Hương", "Đại lý Trứng Gia Cầm Ba Huân").
+   - "tax_code": Mã số thuế nếu có (chuỗi số).
+   - "phone": Số điện thoại liên hệ / hotline nếu có.
+   - "address": Địa chỉ nhà cung cấp nếu có.
+   - "contact_name": Người liên hệ / đại diện bán hàng nếu có.
+2. "source_title": Tiêu đề bảng giá hoặc tên nhà cung cấp nếu có.
+3. "items": Mảng danh sách các mặt hàng nguyên liệu:
+   - "name": Tên nguyên liệu chuẩn tiếng Việt (vd: "Thịt bò thăn", "Bột mì đa dụng Meizan", "Sữa tươi Vinamilk không đường", "Dầu hào Lee Kum Kee").
+   - "code": Mã nguyên liệu gợi ý (viết hoa không dấu, bắt đầu bằng NL-, vd: "NL-THITBO", "NL-BOTMI", "NL-SUATUOI").
+   - "category": Danh mục gợi ý chuẩn F&B (vd: "Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
+   - "base_unit": Đơn vị cơ sở dùng để định lượng và xuất kho (bắt buộc, vd: "kg", "g", "lít", "ml", "quả", "hộp", "lon", "chai", "gói", "cái").
+   - "import_unit": Đơn vị mua/nhập từ nhà cung cấp (bắt buộc, vd: "thùng", "bao", "kg", "két", "hộp", "lốc", "bịch").
+   - "conversion_factor": Hệ số quy đổi (1 Đơn vị nhập = bao nhiêu Đơn vị cơ sở, số thực >= 1).
+      Ví dụ:
+      - Mua thùng 24 lon: import_unit = "thùng", base_unit = "lon", conversion_factor = 24.
+      - Mua bao 25 kg: import_unit = "bao", base_unit = "kg", conversion_factor = 25.
+      - Mua theo kg dùng theo kg: import_unit = "kg", base_unit = "kg", conversion_factor = 1.
+      - Mua chai 1 lít dùng theo ml: import_unit = "chai", base_unit = "ml", conversion_factor = 1000.
+   - "default_price": Đơn giá nhập ngầm định (cho 1 đơn vị nhập, dạng số nguyên VNĐ, bỏ dấu phẩy/chấm). Nếu không có giá trên ảnh, điền 0.
+   - "min_alert_stock": Mức cảnh báo tồn tối thiểu đề xuất (dạng số, vd: 5 hoặc 10, mặc định 0).
+   - "note": Ghi chú quy cách hoặc xuất xứ nếu có (vd: "Thùng 24 lon x 330ml", "Quy cách bao 25kg").
 
 Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick:
 {
-  "source_title": "Tên bảng giá hoặc nhà cung cấp nếu có",
+  "source_title": "Bảng báo giá tháng 09/2026",
+  "supplier": {
+    "name": "Công ty TNHH Thực Phẩm Sạch GreenFarm",
+    "tax_code": "0312345678",
+    "phone": "0901234567",
+    "address": "123 Nguyễn Văn Cừ, Quận 5, TP.HCM",
+    "contact_name": "Nguyễn Văn A"
+  },
   "items": [
     {
       "name": "Bột mì đa dụng Meizan",
@@ -57,7 +85,11 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick
 }
 `;
 
-function parseJsonSafe(text: string): { source_title?: string; items: IngredientParsedItem[] } {
+function parseJsonSafe(text: string): {
+  source_title?: string;
+  supplier?: SupplierParsedInfo | null;
+  items: IngredientParsedItem[];
+} {
   const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
 
   try {
@@ -78,7 +110,11 @@ async function extractWithGroq(
   base64Data: string,
   mimeType: string,
   apiKey: string
-): Promise<{ source_title?: string; items: IngredientParsedItem[] }> {
+): Promise<{
+  source_title?: string;
+  supplier?: SupplierParsedInfo | null;
+  items: IngredientParsedItem[];
+}> {
   const url = "https://api.groq.com/openai/v1/chat/completions";
   const dataUrl = base64Data.startsWith("data:")
     ? base64Data
@@ -185,6 +221,7 @@ export async function parseIngredientsFromImage(
 
     return {
       source_title: rawResult.source_title || "Bảng danh mục nguyên liệu",
+      supplier: rawResult.supplier || null,
       items,
       model_used: "Groq (qwen/qwen3.8-27b)",
       is_mock: false,
@@ -205,6 +242,13 @@ export async function parseIngredientsFromImage(
 export function getMockIngredientResult(): IngredientOcrResult {
   return {
     source_title: "Bảng báo giá Đại lý Gia vị & Thực phẩm Khô Toàn Thắng",
+    supplier: {
+      name: "Đại lý Gia vị & Thực phẩm Khô Toàn Thắng",
+      tax_code: "0314892110",
+      phone: "0908 123 456",
+      address: "Số 45 Đường số 7, Phường Linh Trung, TP. Thủ Đức, TP.HCM",
+      contact_name: "Anh Thắng (Chủ đại lý)",
+    },
     items: [
       {
         code: "NL-BOTMI-MEIZAN",

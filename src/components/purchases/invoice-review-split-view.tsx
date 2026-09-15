@@ -598,9 +598,22 @@ export function InvoiceReviewSplitView({
                 </Select>
 
                 {reviewData.supplier_name_raw && (
-                  <p className="text-[11px] text-muted-foreground truncate">
-                    Tên trên HĐ: <span className="font-medium">{reviewData.supplier_name_raw}</span>
-                  </p>
+                  <div className="text-[11px] text-muted-foreground space-y-0.5 pt-0.5">
+                    <p className="truncate">
+                      Tên trên HĐ: <span className="font-medium text-foreground">{reviewData.supplier_name_raw}</span>
+                    </p>
+                    <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px]">
+                      {reviewData.raw_extracted?.supplier_tax_code && (
+                        <span>MST: <strong className="text-foreground">{reviewData.raw_extracted.supplier_tax_code}</strong></span>
+                      )}
+                      {reviewData.raw_extracted?.supplier_phone && (
+                        <span>SĐT: <strong className="text-foreground">{reviewData.raw_extracted.supplier_phone}</strong></span>
+                      )}
+                      {reviewData.raw_extracted?.supplier_address && (
+                        <span className="truncate max-w-full">Đ/C: {reviewData.raw_extracted.supplier_address}</span>
+                      )}
+                    </div>
+                  </div>
                 )}
               </div>
 

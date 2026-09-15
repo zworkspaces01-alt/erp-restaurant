@@ -3,9 +3,17 @@
 import { revalidatePath } from "next/cache";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { createClient } from "@/lib/supabase/server";
 import { assertRole } from "@/lib/auth";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import type { UserRole } from "@/types/restaurant";
+
+interface DynamicRpcClient {
+  rpc: (
+    fn: string,
+    args?: Record<string, unknown>
+  ) => Promise<{ data: unknown; error: { message: string; code?: string } | null }>;
+}
 
 export interface UserAccountItem {
   id: string;
@@ -21,37 +29,72 @@ export async function getUsersList(): Promise<ActionResult<UserAccountItem[]>> {
   try {
     await assertRole(["owner"]);
 
-    const adminClient = createAdminClient();
-    const [{ data: authData, error: authError }, { data: profiles, error: profileError }] =
-      await Promise.all([
-        adminClient.auth.admin.listUsers(),
-        adminClient.from("profiles").select("id, full_name, role"),
-      ]);
+    const supabase = await createClient();
+    const dynamicClient = supabase as unknown as DynamicRpcClient;
 
-    if (authError) {
-      return fail(`Lỗi lấy danh sách tài khoản: ${authError.message}`);
+    // 1. Thử gọi RPC admin_list_users trước
+    const { data: rpcUsers, error: rpcError } = await dynamicClient.rpc("admin_list_users");
+    if (!rpcError && Array.isArray(rpcUsers)) {
+      return ok(
+        rpcUsers.map((u: Record<string, unknown>) => ({
+          id: String(u.id),
+          email: String(u.email || "—"),
+          full_name: String(u.full_name || "Người dùng"),
+          role: (u.role as UserRole) || "staff",
+          created_at: String(u.created_at),
+          last_sign_in_at: u.last_sign_in_at ? String(u.last_sign_in_at) : null,
+        }))
+      );
     }
 
-    if (profileError) {
-      return fail(`Lỗi lấy danh sách hồ sơ: ${profileError.message}`);
+    // 2. Fallback sang Supabase Service Role Admin Client nếu có key
+    try {
+      const adminClient = createAdminClient();
+      const [{ data: authData, error: authError }, { data: profiles, error: profileError }] =
+        await Promise.all([
+          adminClient.auth.admin.listUsers(),
+          adminClient.from("profiles").select("id, full_name, role"),
+        ]);
+
+      if (!authError && !profileError) {
+        const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+        const users: UserAccountItem[] = (authData.users ?? []).map((u) => {
+          const p = profileMap.get(u.id);
+          const metaName = (u.user_metadata as { full_name?: string } | null)?.full_name;
+          return {
+            id: u.id,
+            email: u.email ?? "—",
+            full_name: p?.full_name ?? metaName ?? "Người dùng",
+            role: (p?.role as UserRole) ?? "staff",
+            created_at: u.created_at,
+            last_sign_in_at: u.last_sign_in_at ?? null,
+          };
+        });
+        return ok(users);
+      }
+    } catch {
+      // Bỏ qua nếu service_role key chưa được cấu hình
     }
 
-    const profileMap = new Map((profiles ?? []).map((p) => [p.id, p]));
+    // 3. Fallback tối thiểu: lấy từ profiles đã có
+    const { data: fallbackProfiles } = await supabase
+      .from("profiles")
+      .select("id, full_name, role, updated_at");
 
-    const users: UserAccountItem[] = (authData.users ?? []).map((u) => {
-      const p = profileMap.get(u.id);
-      const metaName = (u.user_metadata as { full_name?: string } | null)?.full_name;
-      return {
-        id: u.id,
-        email: u.email ?? "—",
-        full_name: p?.full_name ?? metaName ?? "Người dùng",
-        role: (p?.role as UserRole) ?? "staff",
-        created_at: u.created_at,
-        last_sign_in_at: u.last_sign_in_at ?? null,
-      };
-    });
+    if (fallbackProfiles) {
+      return ok(
+        fallbackProfiles.map((p) => ({
+          id: p.id,
+          email: "—",
+          full_name: p.full_name ?? "Người dùng",
+          role: p.role as UserRole,
+          created_at: p.updated_at,
+          last_sign_in_at: null,
+        }))
+      );
+    }
 
-    return ok(users);
+    return fail("Không thể lấy danh sách người dùng.");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Lỗi hệ thống";
     return fail(message);
@@ -77,36 +120,60 @@ export async function createUserAction(input: CreateUserInput): Promise<ActionRe
       return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
     }
 
-    const adminClient = createAdminClient();
-    const { data: userData, error: createError } = await adminClient.auth.admin.createUser({
-      email: parsed.data.email,
-      password: parsed.data.password,
-      email_confirm: true,
-      user_metadata: { full_name: parsed.data.fullName },
+    const supabase = await createClient();
+    const dynamicClient = supabase as unknown as DynamicRpcClient;
+
+    // 1. Ưu tiên gọi database RPC admin_create_user (chạy qua session owner)
+    const { data: rpcId, error: rpcError } = await dynamicClient.rpc("admin_create_user", {
+      p_email: parsed.data.email,
+      p_password: parsed.data.password,
+      p_full_name: parsed.data.fullName,
+      p_role: parsed.data.role,
     });
 
-    if (createError) {
-      return fail(`Không thể tạo tài khoản: ${createError.message}`);
+    if (!rpcError && rpcId) {
+      revalidatePath("/settings/users");
+      return ok({ id: String(rpcId) });
     }
 
-    if (!userData.user) {
-      return fail("Không tạo được người dùng");
+    // Nếu lỗi là do email đã tồn tại, trả lỗi ngay
+    if (rpcError && rpcError.message.includes("EMAIL_EXISTS")) {
+      return fail("Email này đã được sử dụng trong hệ thống.");
     }
 
-    // Cập nhật hoặc chèn hồ sơ profile với role chỉ định
-    const { error: profileError } = await adminClient.from("profiles").upsert({
-      id: userData.user.id,
-      full_name: parsed.data.fullName,
-      role: parsed.data.role,
-      updated_at: new Date().toISOString(),
-    });
+    // 2. Thử fallback sang Supabase Admin Client nếu có SUPABASE_SERVICE_ROLE_KEY
+    try {
+      const adminClient = createAdminClient();
+      const { data: userData, error: createError } = await adminClient.auth.admin.createUser({
+        email: parsed.data.email,
+        password: parsed.data.password,
+        email_confirm: true,
+        user_metadata: { full_name: parsed.data.fullName },
+      });
 
-    if (profileError) {
-      return fail(`Tạo tài khoản thành công nhưng gán vai trò thất bại: ${profileError.message}`);
+      if (!createError && userData.user) {
+        await adminClient.from("profiles").upsert({
+          id: userData.user.id,
+          full_name: parsed.data.fullName,
+          role: parsed.data.role,
+          updated_at: new Date().toISOString(),
+        });
+
+        revalidatePath("/settings/users");
+        return ok({ id: userData.user.id });
+      }
+
+      if (createError && !createError.message.includes("Invalid API key")) {
+        return fail(`Không thể tạo tài khoản: ${createError.message}`);
+      }
+    } catch {
+      // service role key không hợp lệ hoặc chưa cấu hình
     }
 
-    revalidatePath("/settings/users");
-    return ok({ id: userData.user.id });
+    // 3. Hướng dẫn người dùng khi cả RPC và Admin API đều chưa được cấu hình
+    return fail(
+      "Chưa cấu hình SUPABASE_SERVICE_ROLE_KEY hoặc chưa chạy SQL RPC quản trị. Vui lòng chạy phần 20 trong file cloud_schema_full.sql trên Supabase SQL Editor, hoặc thêm SUPABASE_SERVICE_ROLE_KEY vào file .env.local."
+    );
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định";
     return fail(message);
@@ -132,8 +199,25 @@ export async function updateUserRoleAction(input: z.infer<typeof updateRoleSchem
       return fail("Bạn không thể tự hạ quyền vai trò Owner của chính mình.");
     }
 
-    const adminClient = createAdminClient();
-    const { error } = await adminClient
+    // Thử cập nhật qua Admin Client nếu có key
+    try {
+      const adminClient = createAdminClient();
+      const { error } = await adminClient
+        .from("profiles")
+        .update({ role: parsed.data.newRole, updated_at: new Date().toISOString() })
+        .eq("id", parsed.data.userId);
+
+      if (!error) {
+        revalidatePath("/settings/users");
+        revalidatePath("/", "layout");
+        return ok(null);
+      }
+    } catch {
+      // Thử cập nhật trực tiếp qua session
+    }
+
+    const supabase = await createClient();
+    const { error } = await supabase
       .from("profiles")
       .update({ role: parsed.data.newRole, updated_at: new Date().toISOString() })
       .eq("id", parsed.data.userId);
@@ -168,16 +252,34 @@ export async function resetUserPasswordAction(
       return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
     }
 
-    const adminClient = createAdminClient();
-    const { error } = await adminClient.auth.admin.updateUserById(parsed.data.userId, {
-      password: parsed.data.newPassword,
+    const supabase = await createClient();
+    const dynamicClient = supabase as unknown as DynamicRpcClient;
+
+    // 1. Thử gọi RPC admin_reset_user_password trước
+    const { error: rpcError } = await dynamicClient.rpc("admin_reset_user_password", {
+      p_user_id: parsed.data.userId,
+      p_new_password: parsed.data.newPassword,
     });
 
-    if (error) {
-      return fail(`Lỗi đặt lại mật khẩu: ${error.message}`);
+    if (!rpcError) {
+      return ok(null);
     }
 
-    return ok(null);
+    // 2. Thử qua Admin Client
+    try {
+      const adminClient = createAdminClient();
+      const { error } = await adminClient.auth.admin.updateUserById(parsed.data.userId, {
+        password: parsed.data.newPassword,
+      });
+
+      if (!error) {
+        return ok(null);
+      }
+    } catch {
+      // bỏ qua
+    }
+
+    return fail("Không thể đặt lại mật khẩu. Vui lòng kiểm tra quyền hoặc chạy SQL RPC.");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định";
     return fail(message);
@@ -202,15 +304,33 @@ export async function deleteUserAction(input: z.infer<typeof deleteUserSchema>):
       return fail("Bạn không thể xóa tài khoản của chính mình.");
     }
 
-    const adminClient = createAdminClient();
-    const { error } = await adminClient.auth.admin.deleteUser(parsed.data.userId);
+    const supabase = await createClient();
+    const dynamicClient = supabase as unknown as DynamicRpcClient;
 
-    if (error) {
-      return fail(`Lỗi xóa người dùng: ${error.message}`);
+    // 1. Thử gọi RPC admin_delete_user
+    const { error: rpcError } = await dynamicClient.rpc("admin_delete_user", {
+      p_user_id: parsed.data.userId,
+    });
+
+    if (!rpcError) {
+      revalidatePath("/settings/users");
+      return ok(null);
     }
 
-    revalidatePath("/settings/users");
-    return ok(null);
+    // 2. Thử qua Admin Client
+    try {
+      const adminClient = createAdminClient();
+      const { error } = await adminClient.auth.admin.deleteUser(parsed.data.userId);
+
+      if (!error) {
+        revalidatePath("/settings/users");
+        return ok(null);
+      }
+    } catch {
+      // bỏ qua
+    }
+
+    return fail("Không thể xóa tài khoản. Vui lòng kiểm tra quyền hoặc chạy SQL RPC.");
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Lỗi không xác định";
     return fail(message);
