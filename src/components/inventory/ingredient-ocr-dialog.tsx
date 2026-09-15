@@ -613,8 +613,8 @@ export function IngredientOcrDialog({
                     </Button>
                   </div>
 
-                  <div className="border rounded-lg overflow-x-auto">
-                    <table className="w-full text-xs text-left">
+                  <div className="border rounded-lg overflow-x-auto shadow-sm">
+                    <table className="min-w-[850px] w-full text-xs text-left">
                       <thead className="bg-muted/50 border-b">
                         <tr>
                           <th className="p-2 min-w-[150px]">Tên nguyên liệu</th>

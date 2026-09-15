@@ -685,20 +685,22 @@ export function InvoiceReviewSplitView({
                 </Button>
               </div>
 
-              <div className="border rounded-lg overflow-x-auto">
-                <table className="w-full text-xs text-left">
-                  <thead className="bg-muted/50 border-b">
+              <div className="border rounded-lg overflow-x-auto shadow-sm bg-card">
+                <table className="min-w-[940px] w-full text-xs text-left border-collapse">
+                  <thead className="bg-muted/60 border-b">
                     <tr>
-                      <th className="p-2.5 min-w-[160px]">Tên trên hóa đơn</th>
-                      <th className="p-2.5 min-w-[200px]">Nguyên liệu trong kho</th>
-                      <th className="p-2.5 text-center w-[80px]">SL</th>
-                      <th className="p-2.5 w-[80px]">Đơn vị</th>
-                      <th className="p-2.5 text-right min-w-[100px]">Đơn giá</th>
-                      <th className="p-2.5 text-center w-[70px]" title="Hệ số quy đổi về đơn vị gốc của kho">
+                      <th className="p-2.5 w-[180px] min-w-[160px]">Tên trên hóa đơn</th>
+                      <th className="p-2.5 w-[220px] min-w-[190px]">Nguyên liệu trong kho</th>
+                      <th className="p-2.5 text-center w-[100px] min-w-[95px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-x border-emerald-500/20">
+                        Số lượng
+                      </th>
+                      <th className="p-2.5 text-center w-[90px] min-w-[85px]">Đơn vị</th>
+                      <th className="p-2.5 text-right w-[130px] min-w-[125px]">Đơn giá</th>
+                      <th className="p-2.5 text-center w-[80px] min-w-[75px]" title="Hệ số quy đổi về đơn vị gốc của kho">
                         Hệ số
                       </th>
-                      <th className="p-2.5 text-right min-w-[110px]">Thành tiền</th>
-                      <th className="p-2.5 w-[40px]"></th>
+                      <th className="p-2.5 text-right w-[130px] min-w-[120px]">Thành tiền</th>
+                      <th className="p-2.5 w-[44px] min-w-[44px] text-center"></th>
                     </tr>
                   </thead>
                   <tbody className="divide-y">
@@ -709,14 +711,14 @@ export function InvoiceReviewSplitView({
                           key={idx}
                           className={!isMatched ? "bg-amber-500/10 dark:bg-amber-950/20" : undefined}
                         >
-                          <td className="p-2">
+                          <td className="p-2 w-[180px] min-w-[160px]">
                             <Input
                               value={item.raw_name}
                               onChange={(e) => handleUpdateItem(idx, { raw_name: e.target.value })}
                               className="h-8 text-xs font-medium"
                             />
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 w-[220px] min-w-[190px]">
                             <div className="space-y-1">
                               <IngredientPicker
                                 ingredients={currentIngredients}
@@ -740,7 +742,7 @@ export function InvoiceReviewSplitView({
                               )}
                             </div>
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 w-[100px] min-w-[95px] text-center border-x border-emerald-500/15 bg-emerald-500/[0.03]">
                             <Input
                               type="number"
                               step="any"
@@ -748,27 +750,27 @@ export function InvoiceReviewSplitView({
                               onChange={(e) =>
                                 handleUpdateItem(idx, { quantity: Math.max(0, Number(e.target.value)) })
                               }
-                              className="h-8 text-xs text-center tabular-nums"
+                              className="h-8 w-full min-w-[85px] text-xs font-bold text-center tabular-nums px-2 bg-background border-emerald-400 dark:border-emerald-600 focus-visible:ring-emerald-500 shadow-sm"
                             />
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 w-[90px] min-w-[85px] text-center">
                             <Input
                               value={item.unit}
                               onChange={(e) => handleUpdateItem(idx, { unit: e.target.value })}
-                              className="h-8 text-xs text-center"
+                              className="h-8 w-full min-w-[75px] text-xs text-center px-1.5"
                             />
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 w-[130px] min-w-[125px] text-right">
                             <Input
                               type="number"
                               value={item.unit_price}
                               onChange={(e) =>
                                 handleUpdateItem(idx, { unit_price: Math.max(0, Number(e.target.value)) })
                               }
-                              className="h-8 text-xs text-right tabular-nums"
+                              className="h-8 w-full min-w-[115px] text-xs text-right tabular-nums px-2"
                             />
                           </td>
-                          <td className="p-2">
+                          <td className="p-2 w-[80px] min-w-[75px] text-center">
                             <Input
                               type="number"
                               step="any"
@@ -778,14 +780,14 @@ export function InvoiceReviewSplitView({
                                   conversion_factor: Math.max(0.001, Number(e.target.value)),
                                 })
                               }
-                              className="h-8 text-xs text-center tabular-nums"
+                              className="h-8 w-full min-w-[65px] text-xs text-center tabular-nums px-1"
                               title="1 Đơn vị mua = ? Đơn vị cơ sở của kho"
                             />
                           </td>
-                          <td className="p-2 text-right font-medium tabular-nums">
+                          <td className="p-2 w-[130px] min-w-[120px] text-right font-semibold tabular-nums whitespace-nowrap">
                             {formatVND(item.line_total)}
                           </td>
-                          <td className="p-2 text-center">
+                          <td className="p-2 w-[44px] min-w-[44px] text-center">
                             <Button
                               type="button"
                               variant="ghost"

@@ -76,10 +76,13 @@ function parseJsonSafe(text: string): InvoiceParsedData {
           const itemObj = it as Record<string, unknown>;
           const name = (typeof itemObj.raw_name === "string" ? itemObj.raw_name : typeof itemObj.name === "string" ? itemObj.name : "").trim();
           if (!name) continue;
-          const qty = Number(itemObj.quantity || itemObj.qty) || 1;
+          const rawQtyVal = itemObj.quantity !== undefined ? itemObj.quantity : itemObj.qty;
+          const qty = typeof rawQtyVal === "number" ? rawQtyVal : (!isNaN(Number(rawQtyVal)) && rawQtyVal !== "" && rawQtyVal !== null) ? Number(rawQtyVal) : 0;
           const unit = (typeof itemObj.unit === "string" ? itemObj.unit : "kg").trim() || "kg";
-          const price = Number(itemObj.unit_price || itemObj.price) || 0;
-          const total = Number(itemObj.line_total || itemObj.total) || qty * price;
+          const rawPriceVal = itemObj.unit_price !== undefined ? itemObj.unit_price : itemObj.price;
+          const price = typeof rawPriceVal === "number" ? rawPriceVal : (!isNaN(Number(rawPriceVal)) && rawPriceVal !== "" && rawPriceVal !== null) ? Number(rawPriceVal) : 0;
+          const rawTotalVal = itemObj.line_total !== undefined ? itemObj.line_total : itemObj.total;
+          const total = typeof rawTotalVal === "number" ? rawTotalVal : (!isNaN(Number(rawTotalVal)) && rawTotalVal !== "" && rawTotalVal !== null) ? Number(rawTotalVal) : qty * price;
 
           items.push({
             raw_name: name,
