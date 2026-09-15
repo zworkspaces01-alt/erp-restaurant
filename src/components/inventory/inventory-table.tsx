@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { MoreHorizontal, Pencil, PackagePlus, Power, PowerOff } from "lucide-react";
 import type { InventoryStatusRow } from "@/types/restaurant";
@@ -14,6 +14,7 @@ import {
   DataTableColumnHeader,
   StatusBadge,
   type DataTableFilter,
+  type DataTableFilterOption,
 } from "@/components/shared";
 import { formatNumber, formatVND } from "@/lib/format";
 import { Button } from "@/components/ui/button";
@@ -50,15 +51,47 @@ export function InventoryTable({ rows, suppliers, categoryOptions }: InventoryTa
     },
   });
 
+  const searchParams = useSearchParams();
+  const supplierQuery = searchParams.get("supplier");
+
+  const initialColumnFilters = useMemo(() => {
+    if (!supplierQuery) return [];
+    return [{ id: "default_supplier_name", value: supplierQuery }];
+  }, [supplierQuery]);
+
   const filters = useMemo<DataTableFilter[]>(() => {
     const categories = Array.from(
       new Set(rows.map((r) => r.category).filter((c): c is string => Boolean(c)))
     ).sort((a, b) => a.localeCompare(b, "vi"));
+
+    // Thu thập danh sách NCC từ cả danh mục suppliers và dữ liệu rows
+    const supplierSet = new Set<string>();
+    for (const s of suppliers) {
+      if (s.name?.trim()) supplierSet.add(s.name.trim());
+    }
+    for (const r of rows) {
+      if (r.default_supplier_name?.trim()) supplierSet.add(r.default_supplier_name.trim());
+    }
+
+    const supplierOptions: DataTableFilterOption[] = Array.from(supplierSet)
+      .sort((a, b) => a.localeCompare(b, "vi"))
+      .map((name) => ({ label: name, value: name }));
+
+    const hasUnassigned = rows.some((r) => !r.default_supplier_name);
+    if (hasUnassigned) {
+      supplierOptions.push({ label: "Chưa gán NCC", value: "__none__" });
+    }
+
     return [
       {
         columnId: "category",
         title: "Danh mục",
         options: categories.map((c) => ({ label: c, value: c })),
+      },
+      {
+        columnId: "default_supplier_name",
+        title: "Nhà cung cấp",
+        options: supplierOptions,
       },
       {
         columnId: "is_below_min",
@@ -69,7 +102,7 @@ export function InventoryTable({ rows, suppliers, categoryOptions }: InventoryTa
         ],
       },
     ];
-  }, [rows]);
+  }, [rows, suppliers]);
 
   const columns = useMemo<ColumnDef<InventoryStatusRow, unknown>[]>(
     () => [
@@ -154,9 +187,25 @@ export function InventoryTable({ rows, suppliers, categoryOptions }: InventoryTa
       },
       {
         id: "default_supplier_name",
-        accessorFn: (r) => r.default_supplier_name ?? "",
+        accessorFn: (r) => r.default_supplier_name?.trim() || "__none__",
+        filterFn: "equalsString",
         header: ({ column }) => <DataTableColumnHeader column={column} title="Nhà cung cấp" />,
-        cell: ({ row }) => row.original.default_supplier_name ?? "—",
+        cell: ({ row }) => {
+          const supName = row.original.default_supplier_name;
+          const supId = row.original.default_supplier_id;
+          if (!supName) return <span className="text-muted-foreground text-xs">—</span>;
+          return supId ? (
+            <Link
+              href={`/suppliers/${supId}`}
+              className="text-xs font-medium text-foreground hover:text-emerald-600 dark:hover:text-emerald-400 hover:underline transition-colors"
+              title={`Xem chi tiết nhà cung cấp ${supName}`}
+            >
+              {supName}
+            </Link>
+          ) : (
+            <span className="text-xs">{supName}</span>
+          );
+        },
       },
       {
         id: "is_below_min",
@@ -222,7 +271,8 @@ export function InventoryTable({ rows, suppliers, categoryOptions }: InventoryTa
         columns={columns}
         data={rows}
         filters={filters}
-        searchPlaceholder="Tìm theo tên hoặc mã nguyên liệu..."
+        initialColumnFilters={initialColumnFilters}
+        searchPlaceholder="Tìm theo tên, mã hoặc nhà cung cấp..."
         initialSorting={[{ id: "is_below_min", desc: true }]}
         emptyMessage="Chưa có nguyên liệu nào."
         columnLabels={{

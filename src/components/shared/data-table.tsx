@@ -72,6 +72,7 @@ export interface DataTableProps<TData, TValue> {
   pageSize?: number;
   pageSizeOptions?: number[];
   initialSorting?: SortingState;
+  initialColumnFilters?: ColumnFiltersState;
   emptyMessage?: string;
   onRowClick?: (row: TData) => void;
   rowClassName?: (row: Row<TData>) => string | undefined;
@@ -104,6 +105,7 @@ export function DataTable<TData, TValue>({
   pageSize = 20,
   pageSizeOptions = [10, 20, 50, 100],
   initialSorting = [],
+  initialColumnFilters = [],
   emptyMessage = "Không có dữ liệu.",
   onRowClick,
   rowClassName,
@@ -112,7 +114,7 @@ export function DataTable<TData, TValue>({
   hidePagination = false,
 }: DataTableProps<TData, TValue>) {
   const [sorting, setSorting] = React.useState<SortingState>(initialSorting);
-  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>([]);
+  const [columnFilters, setColumnFilters] = React.useState<ColumnFiltersState>(initialColumnFilters);
   const [columnVisibility, setColumnVisibility] = React.useState<VisibilityState>({});
   const [globalFilter, setGlobalFilter] = React.useState("");
 

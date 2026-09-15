@@ -1,6 +1,6 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
-import { AlertTriangle, Banknote, CalendarClock, FileText, Plus, Wallet } from "lucide-react";
+import { AlertTriangle, Banknote, CalendarClock, FileText, Package, Plus, Wallet } from "lucide-react";
 import { PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -73,6 +73,12 @@ export default async function SupplierDetailPage({
               presetSupplierId={supplier.id}
               disabled={currentDebt <= 0}
             />
+            <Button asChild size="sm" variant="outline" className="gap-1.5">
+              <Link href={`/inventory?supplier=${encodeURIComponent(supplier.name)}`}>
+                <Package className="size-4 text-emerald-600 dark:text-emerald-400" />
+                <span>Kho nguyên liệu</span>
+              </Link>
+            </Button>
             <Button asChild size="sm" variant="outline">
               <Link href="/purchases/new">
                 <Plus className="mr-1.5 size-4" />
