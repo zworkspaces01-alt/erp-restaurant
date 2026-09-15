@@ -83,8 +83,12 @@ export function IngredientOcrDialog({
   };
 
   const handleFileUpload = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
-      toast.error("Vui lòng chọn file hình ảnh (PNG, JPG, WEBP).");
+    const isImage =
+      file.type.startsWith("image/") ||
+      /\.(jpg|jpeg|png|webp|heic|heif|bmp|tiff)$/i.test(file.name);
+
+    if (!isImage) {
+      toast.error("Vui lòng chọn file hình ảnh (PNG, JPG, WEBP, HEIC).");
       return;
     }
 
@@ -119,8 +123,13 @@ export function IngredientOcrDialog({
           { duration: 7000 }
         );
       }
-    } catch {
-      toast.error("Không thể xử lý ảnh nguyên liệu. Vui lòng thử lại.");
+    } catch (err: unknown) {
+      console.error("Lỗi scan ảnh nguyên liệu:", err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Không thể xử lý ảnh nguyên liệu. Vui lòng thử lại hoặc chụp cận cảnh hơn.";
+      toast.error(msg);
     } finally {
       setIsScanning(false);
     }

@@ -11,6 +11,7 @@ import {
 } from "@/lib/ai/ingredient-ocr";
 import { normalizeVietnamese, computeSimilarity } from "@/lib/ai/invoice-matcher";
 import { uploadImage } from "@/lib/storage";
+import { optimizeImageForOcr } from "@/lib/image-optimizer";
 
 /**
  * Server action: Trích xuất danh sách nguyên liệu và nhà cung cấp từ ảnh.
@@ -36,11 +37,14 @@ export async function extractIngredientsFromImageAction(
       }
 
       const arrayBuffer = await file.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
-      const base64Data = buffer.toString("base64");
-      const mimeType = file.type || "image/jpeg";
+      const rawBuffer = Buffer.from(arrayBuffer);
 
-      const uploadRes = await uploadImage(buffer, {
+      // Tối ưu ảnh với sharp: xoay đúng chiều EXIF, chuẩn hóa kích thước và nén nhẹ
+      const optimized = await optimizeImageForOcr(rawBuffer, file.type || "image/jpeg");
+      const base64Data = optimized.base64;
+      const mimeType = optimized.mimeType;
+
+      const uploadRes = await uploadImage(optimized.buffer, {
         filename: file.name,
         contentType: mimeType,
         folder: "restaurant-erp/ingredients_ocr",

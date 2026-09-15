@@ -13,6 +13,7 @@ import {
   type SupplierMatchCandidate,
 } from "@/lib/ai/invoice-matcher";
 import { uploadImage } from "@/lib/storage";
+import { optimizeImageForOcr } from "@/lib/image-optimizer";
 import type { InvoiceOcrReviewData, InvoiceParsedData } from "@/types/restaurant";
 
 export interface ExtractInvoiceResponse {
@@ -252,14 +253,15 @@ export async function extractAndMatchInvoice(
       return fail("Vui lòng chọn hoặc tải lên file ảnh hóa đơn.");
     }
 
-    // Đọc buffer file
+    // Đọc và tối ưu buffer file (auto-rotate EXIF, resize, nén nhẹ)
     const arrayBuffer = await file.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-    base64Data = buffer.toString("base64");
-    mimeType = file.type || "image/jpeg";
+    const rawBuffer = Buffer.from(arrayBuffer);
+    const optimized = await optimizeImageForOcr(rawBuffer, file.type || "image/jpeg");
+    base64Data = optimized.base64;
+    mimeType = optimized.mimeType;
 
-    // 2. Lưu ảnh qua Cloudinary (hoặc Supabase Storage fallback)
-    const uploadRes = await uploadImage(buffer, {
+    // 2. Lưu ảnh qua Cloudinary (hoặc Supabase Storage fallback) bằng buffer đã tối ưu
+    const uploadRes = await uploadImage(optimized.buffer, {
       filename: file.name,
       contentType: mimeType,
       folder: "restaurant-erp/invoices",

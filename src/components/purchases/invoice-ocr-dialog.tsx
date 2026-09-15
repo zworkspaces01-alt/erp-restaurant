@@ -56,8 +56,13 @@ export function InvoiceOcrDialog({
   };
 
   const handleFileUpload = async (file: File) => {
-    if (!file.type.startsWith("image/") && file.type !== "application/pdf") {
-      toast.error("Vui lòng chọn file ảnh (PNG, JPG, WEBP) hoặc PDF.");
+    const isSupported =
+      file.type.startsWith("image/") ||
+      file.type === "application/pdf" ||
+      /\.(jpg|jpeg|png|webp|heic|heif|bmp|tiff|pdf)$/i.test(file.name);
+
+    if (!isSupported) {
+      toast.error("Vui lòng chọn file ảnh (PNG, JPG, WEBP, HEIC) hoặc PDF.");
       return;
     }
 
@@ -90,8 +95,13 @@ export function InvoiceOcrDialog({
           { duration: 7000 }
         );
       }
-    } catch {
-      toast.error("Không thể phân tích hóa đơn. Vui lòng thử lại.");
+    } catch (err: unknown) {
+      console.error("Lỗi quét hóa đơn:", err);
+      const msg =
+        err instanceof Error
+          ? err.message
+          : "Không thể phân tích hóa đơn. Vui lòng thử lại hoặc chụp ảnh rõ nét hơn.";
+      toast.error(msg);
     } finally {
       setIsScanning(false);
     }

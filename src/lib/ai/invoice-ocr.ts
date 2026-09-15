@@ -1,4 +1,4 @@
-import type { InvoiceParsedData } from "@/types/restaurant";
+import type { InvoiceParsedData, InvoiceParsedItem } from "@/types/restaurant";
 
 export interface OcrRequestOptions {
   base64Data: string;
@@ -74,22 +74,136 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick
 
 function parseJsonSafe(text: string): InvoiceParsedData {
   // Loại bỏ các khối suy nghĩ <think>...</think> của mô hình Qwen reasoning nếu có
-  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
+  cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
+  // 1. Thử parse trực tiếp
   try {
-    return JSON.parse(cleaned) as InvoiceParsedData;
-  } catch {
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (match) {
-      return JSON.parse(match[0]) as InvoiceParsedData;
+    const parsed = JSON.parse(cleaned) as InvoiceParsedData;
+    if (parsed && typeof parsed === "object") {
+      return {
+        supplier_name: parsed.supplier_name || null,
+        supplier_tax_code: parsed.supplier_tax_code || null,
+        supplier_phone: parsed.supplier_phone || null,
+        supplier_address: parsed.supplier_address || null,
+        invoice_number: parsed.invoice_number || null,
+        order_date: parsed.order_date || null,
+        items: Array.isArray(parsed.items) ? parsed.items : [],
+        excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
+        subtotal: Number(parsed.subtotal) || 0,
+        tax_percent: Number(parsed.tax_percent) || 0,
+        tax_amount: Number(parsed.tax_amount) || 0,
+        total_amount: Number(parsed.total_amount) || 0,
+      };
     }
-    throw new Error("Không thể chuyển đổi phản hồi từ AI thành JSON hợp lệ.");
+  } catch {
+    // tiếp tục cứu hộ
   }
+
+  // 2. Tìm khối { ... }
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = cleaned.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate) as InvoiceParsedData;
+      if (parsed && typeof parsed === "object") {
+        return {
+          supplier_name: parsed.supplier_name || null,
+          supplier_tax_code: parsed.supplier_tax_code || null,
+          supplier_phone: parsed.supplier_phone || null,
+          supplier_address: parsed.supplier_address || null,
+          invoice_number: parsed.invoice_number || null,
+          order_date: parsed.order_date || null,
+          items: Array.isArray(parsed.items) ? parsed.items : [],
+          excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
+          subtotal: Number(parsed.subtotal) || 0,
+          tax_percent: Number(parsed.tax_percent) || 0,
+          tax_amount: Number(parsed.tax_amount) || 0,
+          total_amount: Number(parsed.total_amount) || 0,
+        };
+      }
+    } catch {
+      // 3. Phục hồi nếu bị ngắt đuôi
+      const lastItemEnd = candidate.lastIndexOf("}");
+      if (lastItemEnd > 0) {
+        const truncatedSlice = candidate.slice(0, lastItemEnd + 1);
+        const recoveryPatterns = [
+          truncatedSlice + "]}",
+          truncatedSlice + "}]}",
+          truncatedSlice + "}",
+        ];
+        for (const pattern of recoveryPatterns) {
+          try {
+            const recovered = JSON.parse(pattern);
+            if (recovered && Array.isArray(recovered.items)) {
+              return {
+                supplier_name: recovered.supplier_name || null,
+                supplier_tax_code: recovered.supplier_tax_code || null,
+                supplier_phone: recovered.supplier_phone || null,
+                supplier_address: recovered.supplier_address || null,
+                invoice_number: recovered.invoice_number || null,
+                order_date: recovered.order_date || null,
+                items: recovered.items,
+                excluded_items: Array.isArray(recovered.excluded_items) ? recovered.excluded_items : [],
+                subtotal: Number(recovered.subtotal) || 0,
+                tax_percent: Number(recovered.tax_percent) || 0,
+                tax_amount: Number(recovered.tax_amount) || 0,
+                total_amount: Number(recovered.total_amount) || 0,
+              };
+            }
+          } catch {
+            // thử tiếp
+          }
+        }
+      }
+    }
+  }
+
+  // 4. Cứu hộ khẩn cấp bằng Regex nếu JSON bị lỗi cú pháp nhưng có các dòng hàng
+  const extractedItems: InvoiceParsedItem[] = [];
+  const itemMatches = cleaned.match(/\{[^{}]*"raw_name"[^{}]*\}/g);
+  if (itemMatches && itemMatches.length > 0) {
+    for (const m of itemMatches) {
+      try {
+        const it = JSON.parse(m);
+        if (it.raw_name) {
+          extractedItems.push({
+            raw_name: it.raw_name,
+            quantity: Number(it.quantity) || 1,
+            unit: it.unit || "kg",
+            unit_price: Number(it.unit_price) || 0,
+            line_total: Number(it.line_total) || 0,
+            note: it.note || null,
+          });
+        }
+      } catch {
+        // bỏ qua
+      }
+    }
+    if (extractedItems.length > 0) {
+      return {
+        supplier_name: null,
+        supplier_tax_code: null,
+        supplier_phone: null,
+        supplier_address: null,
+        invoice_number: null,
+        order_date: null,
+        items: extractedItems,
+        excluded_items: [],
+        subtotal: extractedItems.reduce((acc, curr) => acc + (curr.line_total || 0), 0),
+        tax_percent: 0,
+        tax_amount: 0,
+        total_amount: extractedItems.reduce((acc, curr) => acc + (curr.line_total || 0), 0),
+      };
+    }
+  }
+
+  throw new Error("Không thể chuyển đổi phản hồi từ AI thành JSON hợp lệ. Vui lòng chụp ảnh cận cảnh và rõ nét hơn.");
 }
 
 /**
- * Trích xuất hóa đơn bằng Groq Vision (qwen/qwen3.8-27b & qwen/qwen3.6-27b).
- * Groq cung cấp tốc độ phản hồi cực nhanh trên phần cứng LPU.
+ * Trích xuất hóa đơn bằng Groq Vision với cơ chế dự phòng tự động.
  */
 async function extractWithGroq(
   base64Data: string,
@@ -108,7 +222,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc yêu cầu.",
+            "Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Quét tuần tự và trích xuất tất cả các mặt hàng hợp lệ trên hóa đơn/bảng biểu. Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc yêu cầu.",
         },
         {
           role: "user",
@@ -134,36 +248,40 @@ async function extractWithGroq(
     });
   };
 
-  let response = await sendRequest("qwen/qwen3.8-27b");
+  const modelsToTry = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"];
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const errStatus = response.status;
-    // Thử model qwen3.6-27b nếu 3.8 bận hoặc gặp giới hạn
-    if (errStatus === 429 || errStatus === 400 || errStatus === 503) {
-      try {
-        const fallbackRes = await sendRequest("qwen/qwen3.6-27b");
-        if (fallbackRes.ok) {
-          response = fallbackRes;
-        }
-      } catch {
-        // giữ nguyên phản hồi ban đầu
+  for (const model of modelsToTry) {
+    try {
+      const response = await sendRequest(model);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
       }
+
+      const json = await response.json();
+      const text = json.choices?.[0]?.message?.content;
+      if (!text) {
+        throw new Error(`Mô hình ${model} không nhận được phản hồi.`);
+      }
+
+      const parsed = parseJsonSafe(text);
+      if (parsed.items && parsed.items.length > 0) {
+        return parsed;
+      }
+
+      lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`Thử model ${model} trong hóa đơn thất bại:`, lastError.message);
     }
   }
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Groq API error (${response.status}): ${errText}`);
+  if (lastError) {
+    throw lastError;
   }
 
-  const json = await response.json();
-  const text = json.choices?.[0]?.message?.content;
-
-  if (!text) {
-    throw new Error("Không nhận được nội dung trích xuất từ Groq.");
-  }
-
-  return parseJsonSafe(text);
+  throw new Error("Không thể trích xuất hóa đơn từ ảnh. Hãy chụp lại ảnh rõ nét và ngay ngắn.");
 }
 
 /**

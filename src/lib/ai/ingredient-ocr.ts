@@ -37,51 +37,40 @@ const INGREDIENT_OCR_PROMPT = `
 Bạn là chuyên gia OCR và quản lý kho nguyên vật liệu nhà hàng F&B tại Việt Nam.
 Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn nhập hàng, danh mục sản phẩm, danh sách viết tay hoặc bảng in) và trích xuất TOÀN BỘ các nguyên liệu cùng thông tin Nhà cung cấp vào định dạng JSON.
 
-QUY TẮC BẮT BUỘC 1: XỬ LÝ NÉT GẠCH TAY / GẠCH BỎ / SỬA TAY (HANDWRITTEN STRIKETHROUGH & CORRECTIONS):
-1. DÒNG BỊ GẠCH TAY LÀ BỎ (CANCELLED / STRUCK-THROUGH ITEMS):
-   - Trong phiếu giao hàng / hóa đơn nhập kho thực tế tại nhà hàng, nhân viên nhận hàng hoặc bên giao sẽ dùng bút (bút bi, bút mực, bút dạ đỏ/xanh/đen) GẠCH NGANG qua dòng mặt hàng, GẠCH CHÉO (dấu X) hoặc GẠCH XÓA tên/số lượng để báo là HẾT HÀNG / KHÔNG GIAO / BỎ QUA / TỪ CHỐI NHẬN.
-   - BẮT BUỘC: Bạn PHẢI LOẠI BỎ HOÀN TOÀN các dòng bị gạch tay này! TUYỆT ĐỐI KHÔNG đưa các mặt hàng bị gạch bỏ vào danh sách "items".
-   - Hãy liệt kê tên các mặt hàng bị gạch tay đã loại bỏ này vào mảng "excluded_items" (ví dụ: ["Cá bớp", "Thịt bò thăn"]).
-2. SỐ LƯỢNG HOẶC ĐƠN GIÁ BỊ GẠCH SỬA TAY (HANDWRITTEN OVERRIDES):
-   - Nếu dòng mặt hàng KHÔNG bị gạch bỏ cả dòng, nhưng có con số (số lượng, đơn giá) bị gạch ngang và có chữ số viết tay bên cạnh (hoặc trên/dưới):
-   - BẮT BUỘC: LẤY THEO CON SỐ VIẾT TAY MỚI (đây là số lượng/giá thực giao thực nhận), BỎ QUA con số in cũ bị gạch.
-3. DÒNG NGUYÊN LIỆU VIẾT TAY THÊM (HANDWRITTEN ADDITIONS):
-   - Nếu có dòng nguyên liệu viết tay thêm vào cuối hoặc giữa phiếu (giao bổ sung) và KHÔNG bị gạch xóa: vẫn quét và đưa vào danh sách "items".
-
-QUY TẮC BẮT BUỘC 2: QUÉT ĐẦY ĐỦ CÁC MẶT HÀNG HỢP LỆ (KHÔNG BỎ SÓT):
-1. QUÉT HẾT TẤT CẢ MẶT HÀNG TRÊN ẢNH:
-   - Quét từ dòng đầu tiên đến dòng cuối cùng của bảng/ảnh cho tất cả các mặt hàng hợp lệ (không bị gạch bỏ).
-   - TUYỆT ĐỐI KHÔNG tóm tắt hay dùng dấu ba chấm (...), không dừng lại giữa chừng.
+QUY TẮC ĐẶC BIỆT CHO HÌNH ẢNH PHỨC TẠP & BẢNG BIỂU DÀY ĐẶC (COMPLEX / DENSE TABLES):
+1. QUÉT HẾT TẤT CẢ CÁC DÒNG - TUYỆT ĐỐI KHÔNG BỎ CUỘC:
+   - Dù bảng có 30, 40 hay 60+ dòng mặt hàng, bạn BẮT BUỘC phải duyệt qua từng dòng từ trên xuống dưới.
+   - TUYỆT ĐỐI KHÔNG dừng lại giữa chừng, không tóm tắt, không dùng dấu ba chấm (...).
 2. BẢNG NHIỀU CỘT HOẶC NHIỀU NHÓM DANH MỤC:
    - Nếu ảnh có bảng chia thành 2 hoặc nhiều cột song song, hoặc chia theo nhóm danh mục (Thịt, Hải sản, Rau củ quả, Gia vị...):
-   - Đọc tuần tự từng cột, từng nhóm và đưa TẤT CẢ từng mặt hàng hợp lệ vào mảng "items".
-3. THÔNG TIN NHÀ CUNG CẤP ("supplier"):
-   - Tìm thông tin công ty, cửa hàng, đại lý xuất bảng giá/hóa đơn ở đầu hoặc cuối ảnh:
-     "name": Tên nhà cung cấp / đại lý / cửa hàng.
-     "tax_code": Mã số thuế (nếu có).
-     "phone": Số điện thoại liên hệ / hotline (nếu có).
-     "address": Địa chỉ nhà cung cấp (nếu có).
-     "contact_name": Người liên hệ / đại diện bán hàng (nếu có).
-   - Nếu không có thông tin nhà cung cấp trên ảnh, đặt "supplier": null.
-4. CHI TIẾT TỪNG NGUYÊN LIỆU TRONG MẢNG "items":
-   - "name": Tên nguyên liệu chuẩn tiếng Việt (vd: "Thịt bò thăn", "Bột mì đa dụng Meizan", "Hành tây Đà Lạt", "Dầu hào Maggi").
-   - "code": Mã nguyên liệu viết hoa không dấu bắt đầu bằng NL- (vd: "NL-THITBO", "NL-BOTMI", "NL-HANHTAY").
-   - "category": Nhóm danh mục F&B phù hợp (vd: "Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
-   - "base_unit": Đơn vị cơ sở dùng để định lượng và xuất kho (bắt buộc, vd: "kg", "g", "lít", "ml", "quả", "hộp", "lon", "chai", "gói", "cái", "củ", "bó").
-   - "import_unit": Đơn vị mua/nhập từ NCC (vd: "thùng", "bao", "kg", "két", "hộp", "lốc", "bịch", "túi", "chai").
-   - "conversion_factor": Hệ số quy đổi (1 Đơn vị nhập = bao nhiêu Đơn vị cơ sở, số thực >= 1).
-     Ví dụ:
-     - Mua thùng 24 lon: import_unit="thùng", base_unit="lon", conversion_factor=24.
-     - Mua bao 25 kg: import_unit="bao", base_unit="kg", conversion_factor=25.
-     - Mua theo kg dùng theo kg: import_unit="kg", base_unit="kg", conversion_factor=1.
-     - Mua chai 1 lít dùng theo ml: import_unit="chai", base_unit="ml", conversion_factor=1000.
-   - "default_price": Đơn giá nhập dự kiến cho 1 đơn vị nhập (số nguyên VNĐ). Nếu không có giá ghi 0.
-   - "min_alert_stock": Cảnh báo tồn tối thiểu đề xuất (số, mặc định 0).
-   - "note": Quy cách hoặc ghi chú thêm nếu có.
+   - Hãy đọc tuần tự cột bên trái từ trên xuống dưới, sau đó đọc tiếp cột bên phải từ trên xuống dưới.
+3. HÌNH ẢNH CHỤP NGHIÊNG, MỜ, CHỮ IN KIM (DOT MATRIX) HOẶC HÓA ĐƠN NHIỆT:
+   - Chú ý quan sát kỹ các ký tự mờ, ngắt quãng. Phân biệt cẩn thận các con số dễ nhầm lẫn (0, 6, 8, 9; 1 và 7; 3 và 8).
+4. QUY TẮC XỬ LÝ NÉT GẠCH TAY / GẠCH BỎ / SỬA TAY:
+   - DÒNG BỊ GẠCH TAY (bút bi, bút mực gạch ngang hoặc dấu X qua tên/dòng) = ĐÃ HỦY / HẾT HÀNG -> BẮT BUỘC BỎ QUA KHỎI "items", đưa tên vào "excluded_items".
+   - CON SỐ BỊ GẠCH SỬA TAY (số lượng/đơn giá cũ bị gạch và viết con số mới) -> LẤY CON SỐ VIẾT TAY MỚI.
+   - DÒNG VIẾT TAY THÊM VÀO (bổ sung hàng) và không bị gạch -> Vẫn quét và đưa vào "items".
+5. TỪ VIẾT TẮT NGUYÊN LIỆU F&B:
+   - Chuẩn hóa tên nguyên liệu theo thực tế nhà hàng Việt Nam (vd: "th bò" -> "Thịt bò", "cá basa" -> "Cá ba sa", "ba rọi" -> "Thịt ba chỉ", "h.tây" -> "Hành tây", "x.lách" -> "Xà lách", "d.hào" -> "Dầu hào").
 
-Cấu trúc JSON đầu ra:
+CHI TIẾT TRƯỜNG DỮ LIỆU:
+- "source_title": Tiêu đề chứng từ (vd: "Phiếu giao hàng", "Bảng báo giá", "Hóa đơn bán hàng").
+- "supplier": Thông tin Nhà cung cấp gồm "name", "tax_code", "phone", "address", "contact_name". Nếu không có trên ảnh đặt null.
+- "items": Danh sách từng nguyên liệu hợp lệ:
+  * "name": Tên nguyên liệu chuẩn tiếng Việt.
+  * "code": Mã gợi ý viết hoa không dấu tiền tố NL- (vd: "NL-THITBO", "NL-BOTMI").
+  * "category": Nhóm danh mục ("Thịt - Hải sản", "Rau - Củ - Quả", "Gia vị - Nước sốt", "Đồ uống - Pha chế", "Bột - Ngũ cốc", "Bơ - Sữa - Trứng", "Bao bì - Đồ dùng").
+  * "base_unit": Đơn vị cơ sở dùng xuất kho (kg, g, lít, ml, quả, hộp, lon, chai, gói, cái, củ, bó).
+  * "import_unit": Đơn vị mua/nhập (thùng, bao, kg, két, hộp, lốc, bịch, túi, chai).
+  * "conversion_factor": Hệ số quy đổi (số thực >= 1).
+  * "default_price": Đơn giá nhập dự kiến cho 1 đơn vị nhập (số nguyên VNĐ).
+  * "min_alert_stock": Tồn kho tối thiểu đề xuất (số, mặc định 0).
+  * "note": Quy cách hoặc ghi chú.
+- "excluded_items": Mảng tên các mặt hàng bị gạch tay loại bỏ.
+
+Cấu trúc JSON bắt buộc:
 {
-  "source_title": "Phiếu giao hàng / Bảng báo giá",
+  "source_title": "Phiếu giao hàng",
   "supplier": {
     "name": "Công ty TNHH Thực Phẩm Sạch GreenFarm",
     "tax_code": "0312345678",
@@ -103,7 +92,7 @@ Cấu trúc JSON đầu ra:
       "note": "Bao 25kg"
     }
   ],
-  "excluded_items": ["Mặt hàng bị gạch tay 1", "Mặt hàng bị gạch tay 2"]
+  "excluded_items": ["Mặt hàng bị gạch tay 1"]
 }
 `;
 
@@ -116,34 +105,106 @@ function parseJsonSafe(text: string): {
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
 
+  // 1. Thử parse trực tiếp
   try {
-    return JSON.parse(cleaned);
+    const parsed = JSON.parse(cleaned);
+    if (parsed && typeof parsed === "object") {
+      return {
+        source_title: parsed.source_title,
+        supplier: parsed.supplier || null,
+        items: Array.isArray(parsed.items) ? parsed.items : [],
+        excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
+      };
+    }
   } catch {
-    const firstBrace = cleaned.indexOf("{");
-    const lastBrace = cleaned.lastIndexOf("}");
-    if (firstBrace !== -1 && lastBrace > firstBrace) {
-      const candidate = cleaned.slice(firstBrace, lastBrace + 1);
-      try {
-        return JSON.parse(candidate);
-      } catch {
-        // Cố gắng phục hồi nếu JSON bị cắt ngắn đuôi do vượt giới hạn token
-        const lastItemEnd = candidate.lastIndexOf("}");
-        if (lastItemEnd !== -1) {
-          const repaired = candidate.slice(0, lastItemEnd + 1) + "]}";
+    // bỏ qua, tiếp tục cứu hộ bên dưới
+  }
+
+  // 2. Tìm khối JSON { ... }
+  const firstBrace = cleaned.indexOf("{");
+  const lastBrace = cleaned.lastIndexOf("}");
+  if (firstBrace !== -1 && lastBrace > firstBrace) {
+    const candidate = cleaned.slice(firstBrace, lastBrace + 1);
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === "object") {
+        return {
+          source_title: parsed.source_title,
+          supplier: parsed.supplier || null,
+          items: Array.isArray(parsed.items) ? parsed.items : [],
+          excluded_items: Array.isArray(parsed.excluded_items) ? parsed.excluded_items : [],
+        };
+      }
+    } catch {
+      // 3. Phục hồi JSON bị cắt ngắn đuôi do vượt giới hạn token
+      const lastItemEnd = candidate.lastIndexOf("}");
+      if (lastItemEnd > 0) {
+        const truncatedSlice = candidate.slice(0, lastItemEnd + 1);
+        const recoveryPatterns = [
+          truncatedSlice + "]}",
+          truncatedSlice + "}]}",
+          truncatedSlice + "}",
+        ];
+        for (const pattern of recoveryPatterns) {
           try {
-            return JSON.parse(repaired);
+            const recovered = JSON.parse(pattern);
+            if (recovered && Array.isArray(recovered.items)) {
+              return {
+                source_title: recovered.source_title,
+                supplier: recovered.supplier || null,
+                items: recovered.items,
+                excluded_items: Array.isArray(recovered.excluded_items) ? recovered.excluded_items : [],
+              };
+            }
           } catch {
-            // bỏ qua
+            // thử tiếp mẫu tiếp theo
           }
         }
       }
     }
-    throw new Error("Không thể chuyển đổi dữ liệu AI thành danh sách nguyên liệu JSON hợp lệ.");
   }
+
+  // 4. Cứu hộ khẩn cấp bằng Regex: trích xuất từng object mặt hàng nếu cấu trúc JSON tổng thể bị hỏng
+  const extractedItems: IngredientParsedItem[] = [];
+  const itemMatches = cleaned.match(/\{[^{}]*"name"[^{}]*\}/g);
+  if (itemMatches && itemMatches.length > 0) {
+    for (const m of itemMatches) {
+      try {
+        const itemObj = JSON.parse(m);
+        if (itemObj.name && typeof itemObj.name === "string") {
+          extractedItems.push({
+            name: itemObj.name,
+            code: itemObj.code || null,
+            category: itemObj.category || null,
+            base_unit: itemObj.base_unit || "kg",
+            import_unit: itemObj.import_unit || itemObj.base_unit || "kg",
+            conversion_factor: Number(itemObj.conversion_factor) || 1,
+            default_price: Number(itemObj.default_price) || 0,
+            min_alert_stock: Number(itemObj.min_alert_stock) || 0,
+            default_supplier_id: null,
+            is_active: true,
+            note: itemObj.note || null,
+          });
+        }
+      } catch {
+        // bỏ qua dòng lỗi cục bộ
+      }
+    }
+    if (extractedItems.length > 0) {
+      return {
+        source_title: "Phiếu đã phục hồi một phần",
+        supplier: null,
+        items: extractedItems,
+        excluded_items: [],
+      };
+    }
+  }
+
+  throw new Error("Không thể chuyển đổi dữ liệu AI thành danh sách nguyên liệu JSON hợp lệ. Hãy thử chụp ảnh rõ nét và đủ sáng hơn.");
 }
 
 /**
- * Trích xuất danh sách nguyên liệu từ ảnh bằng Groq Vision API.
+ * Trích xuất danh sách nguyên liệu từ ảnh bằng Groq Vision API với cơ chế dự phòng đa mô hình.
  */
 async function extractWithGroq(
   base64Data: string,
@@ -154,6 +215,7 @@ async function extractWithGroq(
   supplier?: SupplierParsedInfo | null;
   items: IngredientParsedItem[];
   excluded_items?: string[];
+  model_used: string;
 }> {
   const url = "https://api.groq.com/openai/v1/chat/completions";
   const dataUrl = base64Data.startsWith("data:")
@@ -167,7 +229,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kiểm kho nguyên vật liệu nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Trích xuất đầy đủ tất cả các mặt hàng hợp lệ (không bị gạch bỏ) trên ảnh vào JSON. Trả về DUY NHẤT chuỗi JSON hợp lệ.",
+            "Bạn là chuyên gia OCR và kiểm kho nguyên vật liệu nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Đối với bảng biểu nhiều dòng hoặc nhiều cột, quét đầy đủ tất cả các mặt hàng hợp lệ. Trả về DUY NHẤT chuỗi JSON hợp lệ.",
         },
         {
           role: "user",
@@ -193,34 +255,44 @@ async function extractWithGroq(
     });
   };
 
-  let response = await sendRequest("qwen/qwen3.8-27b");
+  const modelsToTry = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"];
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const errStatus = response.status;
-    if (errStatus === 429 || errStatus === 400 || errStatus === 503) {
-      try {
-        const fallbackRes = await sendRequest("qwen/qwen3.6-27b");
-        if (fallbackRes.ok) {
-          response = fallbackRes;
-        }
-      } catch {
-        // giữ nguyên phản hồi ban đầu
+  for (const model of modelsToTry) {
+    try {
+      const response = await sendRequest(model);
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
       }
+
+      const json = await response.json();
+      const text = json.choices?.[0]?.message?.content;
+      if (!text) {
+        throw new Error(`Mô hình ${model} không trả về nội dung.`);
+      }
+
+      const parsed = parseJsonSafe(text);
+      if (parsed.items && parsed.items.length > 0) {
+        return {
+          ...parsed,
+          model_used: model,
+        };
+      }
+
+      // Nếu model không trích xuất được mặt hàng nào, ghi nhớ lỗi và thử model tiếp theo
+      lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`Thử model OCR ${model} thất bại:`, lastError.message);
     }
   }
 
-  if (!response.ok) {
-    const errText = await response.text();
-    throw new Error(`Groq API error (${response.status}): ${errText}`);
+  if (lastError) {
+    throw lastError;
   }
 
-  const json = await response.json();
-  const text = json.choices?.[0]?.message?.content;
-  if (!text) {
-    throw new Error("Không nhận được nội dung phản hồi từ Groq Vision.");
-  }
-
-  return parseJsonSafe(text);
+  throw new Error("Không thể nhận diện dữ liệu từ ảnh. Vui lòng kiểm tra lại độ rõ nét của ảnh.");
 }
 
 /**
@@ -292,7 +364,7 @@ export async function parseIngredientsFromImage(
       items: uniqueItems,
       duplicates_removed: duplicatesRemoved,
       excluded_items: rawResult.excluded_items || [],
-      model_used: "Groq (qwen/qwen3.8-27b)",
+      model_used: rawResult.model_used ? `Groq (${rawResult.model_used})` : "Groq (qwen/qwen3.8-27b)",
       is_mock: false,
       image_url: options.base64Data.startsWith("data:")
         ? options.base64Data
