@@ -5,16 +5,99 @@ import { fail, ok, type ActionResult } from "@/types/actions";
 import { parseInvoiceImage, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
 import {
   matchInvoiceData,
+  normalizeVietnamese,
   type IngredientMatchCandidate,
   type SupplierMatchCandidate,
 } from "@/lib/ai/invoice-matcher";
 import { uploadImage } from "@/lib/storage";
-import type { InvoiceOcrReviewData } from "@/types/restaurant";
+import type { InvoiceOcrReviewData, InvoiceParsedData } from "@/types/restaurant";
 
 export interface ExtractInvoiceResponse {
   reviewData: InvoiceOcrReviewData;
   isMock: boolean;
   modelUsed: string;
+}
+
+/**
+ * Tự động thêm Nhà cung cấp và các Nguyên liệu chưa có trong kho
+ */
+async function autoProvisionMissingEntities(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  reviewData: InvoiceOcrReviewData,
+  parsedData: InvoiceParsedData
+) {
+  // 1. Tự động thêm Nhà cung cấp nếu chưa có
+  if (!reviewData.supplier_id && parsedData.supplier_name?.trim()) {
+    const rawSupName = parsedData.supplier_name.trim();
+    const supPrefix =
+      normalizeVietnamese(rawSupName)
+        .split(/\s+/)
+        .map((w) => w[0])
+        .join("")
+        .toUpperCase()
+        .slice(0, 4) || "NCC";
+    const supCode = `NCC-${supPrefix}-${Math.floor(100 + Math.random() * 900)}`;
+
+    const { data: newSup } = await supabase
+      .from("suppliers")
+      .insert({
+        name: rawSupName,
+        code: supCode,
+        tax_code: parsedData.supplier_tax_code || null,
+        phone: parsedData.supplier_phone || null,
+        is_active: true,
+        payment_terms_days: 0,
+      })
+      .select("id, name, code")
+      .maybeSingle();
+
+    if (newSup) {
+      reviewData.supplier_id = newSup.id;
+      reviewData.matched_supplier_name = newSup.name;
+      reviewData.supplier_match_confidence = "exact";
+    }
+  }
+
+  // 2. Tự động thêm Nguyên liệu vào kho nếu chưa có
+  for (const item of reviewData.items) {
+    if (!item.ingredient_id && item.raw_name?.trim()) {
+      const rawName = item.raw_name.trim();
+      const normName = normalizeVietnamese(rawName);
+      const prefix =
+        normName
+          .split(/\s+/)
+          .map((w) => w[0])
+          .join("")
+          .toUpperCase()
+          .slice(0, 4) || "NL";
+      const autoCode = `NL-${prefix}-${Math.floor(1000 + Math.random() * 9000)}`;
+      const unit = (item.unit && item.unit.trim()) || "kg";
+      const unitPrice = Number(item.unit_price) > 0 ? Number(item.unit_price) : 0;
+
+      const { data: newIng } = await supabase
+        .from("ingredients")
+        .insert({
+          name: rawName,
+          code: autoCode,
+          base_unit: unit,
+          import_unit: unit,
+          conversion_factor: 1,
+          avg_cost_price: unitPrice,
+          is_active: true,
+          note: "Tự động tạo khi scan hóa đơn nhập kho",
+        })
+        .select("id, code, name, base_unit, import_unit, conversion_factor")
+        .maybeSingle();
+
+      if (newIng) {
+        item.ingredient_id = newIng.id;
+        item.matched_ingredient_name = newIng.name;
+        item.match_confidence = "exact";
+        item.unit = newIng.import_unit;
+        item.conversion_factor = 1;
+      }
+    }
+  }
 }
 
 /**
@@ -57,6 +140,9 @@ export async function extractAndMatchInvoice(
         (ingredientsData ?? []) as IngredientMatchCandidate[],
         "/sample-invoice.png"
       );
+
+      // Tự động tạo nguyên liệu & NCC nếu chưa có
+      await autoProvisionMissingEntities(supabase, reviewData, parsedData);
 
       return ok({
         reviewData,
@@ -109,6 +195,9 @@ export async function extractAndMatchInvoice(
       (ingredientsData ?? []) as IngredientMatchCandidate[],
       imageUrl
     );
+
+    // 6. Tự động tạo nguyên liệu & NCC vào kho nếu chưa có
+    await autoProvisionMissingEntities(supabase, reviewData, parsedData);
 
     return ok({
       reviewData,

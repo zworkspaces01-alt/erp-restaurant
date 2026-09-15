@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { Camera, Loader2, Sparkles } from "lucide-react";
+import { Camera, Loader2, PackagePlus, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import type { z } from "zod";
 import { ingredientSchema, type IngredientInput, type InventoryStatusRow } from "@/types/restaurant";
@@ -20,6 +20,7 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -32,9 +33,10 @@ export interface SupplierOption {
   name: string;
 }
 
-interface IngredientFormDialogProps {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
+export interface IngredientFormDialogProps {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  trigger?: React.ReactNode;
   suppliers: SupplierOption[];
   /** Undefined = tạo mới. */
   ingredient?: InventoryStatusRow | null;
@@ -67,13 +69,25 @@ function toDefaults(row?: InventoryStatusRow | null): FormValues {
 }
 
 export function IngredientFormDialog({
-  open,
-  onOpenChange,
+  open: controlledOpen,
+  onOpenChange: controlledOnOpenChange,
+  trigger,
   suppliers,
   ingredient,
   categoryOptions,
 }: IngredientFormDialogProps) {
   const router = useRouter();
+  const [internalOpen, setInternalOpen] = useState(false);
+  const isControlled = controlledOpen !== undefined;
+  const open = isControlled ? controlledOpen : internalOpen;
+  const setOpen = (v: boolean) => {
+    if (isControlled) {
+      controlledOnOpenChange?.(v);
+    } else {
+      setInternalOpen(v);
+    }
+  };
+
   const isEdit = Boolean(ingredient?.id);
 
   const categories = useMemo(() => {
@@ -153,14 +167,24 @@ export function IngredientFormDialog({
     {
       successMessage: isEdit ? "Đã cập nhật nguyên liệu" : "Đã thêm nguyên liệu",
       onSuccess: () => {
-        onOpenChange(false);
+        setOpen(false);
         router.refresh();
       },
     }
   );
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={setOpen}>
+      {trigger !== undefined ? (
+        trigger ? <DialogTrigger asChild>{trigger}</DialogTrigger> : null
+      ) : !isControlled ? (
+        <DialogTrigger asChild>
+          <Button size="sm" className="gap-1.5 bg-primary text-primary-foreground shadow-sm">
+            <PackagePlus className="size-4" />
+            <span>Thêm nguyên liệu</span>
+          </Button>
+        </DialogTrigger>
+      ) : null}
       <DialogContent className="sm:max-w-[560px]">
         <form onSubmit={handleSubmit((values) => void execute(values))} className="space-y-4">
           <DialogHeader>
@@ -346,7 +370,7 @@ export function IngredientFormDialog({
           <FormServerError message={error} />
 
           <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            <Button type="button" variant="outline" onClick={() => setOpen(false)}>
               Hủy
             </Button>
             <SubmitButton pending={pending} pendingText="Đang lưu...">

@@ -7,6 +7,10 @@ import { InventoryTable } from "@/components/inventory/inventory-table";
 import { formatNumber, formatVND } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 
+import { IngredientFormDialog } from "@/components/inventory/ingredient-form-dialog";
+import { IngredientImportDialog } from "@/components/inventory/ingredient-import-dialog";
+import { IngredientOcrDialog } from "@/components/inventory/ingredient-ocr-dialog";
+
 export const metadata = { title: "Kho nguyên liệu | Restaurant ERP" };
 export const dynamic = "force-dynamic";
 
@@ -27,7 +31,7 @@ export default async function InventoryPage() {
         title="Kho nguyên liệu"
         description="Tồn kho theo đơn vị cơ sở và đơn vị nhập, giá vốn bình quân gia quyền được cập nhật tự động."
         actions={
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <Button asChild variant="outline" size="sm">
               <Link href="/inventory/categories">
                 <FolderTree className="size-4" />
@@ -46,6 +50,9 @@ export default async function InventoryPage() {
                 Sổ kho
               </Link>
             </Button>
+            <IngredientOcrDialog categoryOptions={categoryOptions} />
+            <IngredientImportDialog />
+            <IngredientFormDialog suppliers={suppliers} categoryOptions={categoryOptions} />
           </div>
         }
       />
@@ -87,9 +94,16 @@ export default async function InventoryPage() {
 
       {rows.length === 0 ? (
         <EmptyState
-          title="Chưa có nguyên liệu"
-          description="Thêm nguyên liệu để bắt đầu quản lý tồn kho và giá vốn."
+          title="Chưa có nguyên liệu trong kho"
+          description="Bắt đầu bằng cách thêm nguyên liệu thủ công, quét ảnh bảng báo giá / bao bì AI, hoặc nhập danh sách từ file Excel."
           icon={Package}
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+              <IngredientFormDialog suppliers={suppliers} categoryOptions={categoryOptions} />
+              <IngredientOcrDialog categoryOptions={categoryOptions} />
+              <IngredientImportDialog />
+            </div>
+          }
         />
       ) : (
         <InventoryTable rows={rows} suppliers={suppliers} categoryOptions={categoryOptions} />

@@ -198,7 +198,41 @@ export function InvoiceReviewSplitView({
     });
   };
 
-  const [currentIngredients, setCurrentIngredients] = useState<IngredientPickRow[]>(ingredients);
+  const [currentSuppliers] = useState<SupplierPickRow[]>(() => {
+    const list = [...suppliers];
+    if (reviewData.supplier_id && !list.some((s) => s.id === reviewData.supplier_id)) {
+      list.unshift({
+        id: reviewData.supplier_id,
+        name: reviewData.matched_supplier_name || reviewData.supplier_name_raw || "Nhà cung cấp mới",
+        code: "NCC-AUTO",
+        payment_terms_days: 0,
+        current_debt: 0,
+      });
+    }
+    return list;
+  });
+
+  const [currentIngredients, setCurrentIngredients] = useState<IngredientPickRow[]>(() => {
+    const map = new Map<string, IngredientPickRow>();
+    ingredients.forEach((ing) => map.set(ing.id, ing));
+    reviewData.items.forEach((it) => {
+      if (it.ingredient_id && !map.has(it.ingredient_id)) {
+        map.set(it.ingredient_id, {
+          id: it.ingredient_id,
+          name: it.matched_ingredient_name || it.raw_name,
+          code: null,
+          base_unit: it.unit || "kg",
+          import_unit: it.unit || "kg",
+          conversion_factor: it.conversion_factor || 1,
+          current_stock: 0,
+          avg_cost_price: it.unit_price || 0,
+          avg_cost_per_import_unit: it.unit_price || 0,
+          default_supplier_id: reviewData.supplier_id || null,
+        });
+      }
+    });
+    return Array.from(map.values());
+  });
   const [isCreatingIngredient, setIsCreatingIngredient] = useState<number | null>(null);
 
   const handleSelectIngredient = (index: number, ing: IngredientPickRow) => {
@@ -302,15 +336,43 @@ export function InvoiceReviewSplitView({
       return;
     }
 
-    if (hasUnmatchedItems) {
-      toast.error("Có mặt hàng chưa chọn nguyên liệu trong kho. Vui lòng chọn nguyên liệu tương ứng.");
-      return;
-    }
-
     setIsSubmitting(true);
     setServerError(null);
 
     try {
+      // Tự động tạo nguyên liệu cho bất kỳ mục nào chưa có trong kho
+      const finalItems = [...items];
+      for (let i = 0; i < finalItems.length; i++) {
+        const it = finalItems[i];
+        if (!it.ingredient_id) {
+          const res = await createIngredient({
+            name: it.raw_name || "Nguyên liệu mới",
+            code: null,
+            category: null,
+            base_unit: it.unit || "kg",
+            import_unit: it.unit || "kg",
+            conversion_factor: it.conversion_factor || 1,
+            min_alert_stock: 0,
+            default_price: it.unit_price || 0,
+            default_supplier_id: supplierId || null,
+            is_active: true,
+            note: "Tự động tạo khi duyệt hóa đơn nhập kho",
+          });
+
+          if (!res.success) {
+            throw new Error(
+              `Không thể tự động tạo nguyên liệu "${it.raw_name}": ${res.error}`
+            );
+          }
+
+          finalItems[i] = {
+            ...it,
+            ingredient_id: res.data.id,
+            matched_ingredient_name: it.raw_name,
+          };
+        }
+      }
+
       const payload = {
         supplier_id: supplierId,
         order_date: orderDate,
@@ -318,7 +380,7 @@ export function InvoiceReviewSplitView({
         invoice_number: invoiceNumber || null,
         invoice_image_url: reviewData.image_url || null,
         note: note || null,
-        items: items.map((it) => ({
+        items: finalItems.map((it) => ({
           ingredient_id: it.ingredient_id!,
           quantity: it.quantity,
           unit_price: it.unit_price,
@@ -340,8 +402,10 @@ export function InvoiceReviewSplitView({
       onClose();
       router.push(`/purchases/${res.data.id}`);
       router.refresh();
-    } catch {
-      setServerError("Đã xảy ra lỗi không xác định khi lưu phiếu nhập.");
+    } catch (err) {
+      setServerError(
+        err instanceof Error ? err.message : "Đã xảy ra lỗi không xác định khi lưu phiếu nhập."
+      );
     } finally {
       setIsSubmitting(false);
     }
@@ -525,7 +589,7 @@ export function InvoiceReviewSplitView({
                     <SelectValue placeholder="-- Chọn nhà cung cấp --" />
                   </SelectTrigger>
                   <SelectContent>
-                    {suppliers.map((s) => (
+                    {currentSuppliers.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name} {s.code ? `(${s.code})` : ""}
                       </SelectItem>
@@ -874,6 +938,13 @@ export function InvoiceReviewSplitView({
                       Lệch {formatVND(Math.abs(calculatedTotal - reviewData.total_amount))} so với hóa đơn
                     </div>
                   )}
+
+                  {hasUnmatchedItems && (
+                    <div className="flex items-center gap-1.5 text-[11px] text-sky-600 dark:text-sky-400 mt-1">
+                      <Sparkles className="size-3.5 shrink-0" />
+                      Có nguyên liệu chưa có trong danh mục — Sẽ được tự động thêm vào kho khi duyệt!
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -896,7 +967,7 @@ export function InvoiceReviewSplitView({
                 size="sm"
                 pending={isSubmitting}
                 pendingText="Đang lưu phiếu..."
-                disabled={items.length === 0 || hasUnmatchedItems || !supplierId}
+                disabled={items.length === 0 || !supplierId}
                 onClick={() => void handleApproveAndCreate()}
                 className="gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white"
               >
