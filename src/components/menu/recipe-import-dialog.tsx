@@ -14,7 +14,12 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { RecipeImportRowInput } from "@/types/restaurant";
-import { downloadRecipeTemplate, parseRecipeExcelFile, type ParsedExcelRow } from "@/lib/excel";
+import {
+  downloadCostingTemplate,
+  downloadRecipeTemplate,
+  parseRecipeExcelFile,
+  type ParsedExcelRow,
+} from "@/lib/excel";
 import { importRecipes, type RecipeImportSummary } from "@/server-actions/menu.actions";
 import { FormServerError, StatusBadge, SubmitButton } from "@/components/shared";
 import { Button } from "@/components/ui/button";
@@ -193,11 +198,21 @@ export function RecipeImportDialog({ trigger }: { trigger?: React.ReactNode }) {
               <Button
                 type="button"
                 variant="outline"
+                onClick={downloadCostingTemplate}
+                className="gap-2 text-primary border-primary/30 hover:bg-primary/5"
+              >
+                <Download className="size-4" />
+                Tải mẫu Costing đơn món (ảnh)
+              </Button>
+
+              <Button
+                type="button"
+                variant="outline"
                 onClick={downloadRecipeTemplate}
                 className="gap-2"
               >
                 <Download className="size-4" />
-                Tải file mẫu Excel
+                Tải mẫu BOM tổng hợp
               </Button>
             </div>
           </div>

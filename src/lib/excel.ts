@@ -328,6 +328,83 @@ export function downloadRecipeTemplate() {
   XLSX.writeFile(wb, "mau_nhap_dinh_luong_bom.xlsx");
 }
 
+/** Tải file mẫu Bảng tính Costing món ăn chuẩn F&B (theo mẫu ảnh SET CÁ NGỪ 3 LOẠI) */
+export function downloadCostingTemplate() {
+  exportDishCostingExcel(
+    "SET CÁ NGỪ 3 LOẠI",
+    [
+      {
+        ingredient_name: "Akami",
+        portion_quantity: 45,
+        portion_unit: "Gram",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 2300000,
+        line_total: 103500,
+      },
+      {
+        ingredient_name: "Chutoro",
+        portion_quantity: 45,
+        portion_unit: "Gram",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 2300000,
+        line_total: 103500,
+      },
+      {
+        ingredient_name: "Otoro",
+        portion_quantity: 45,
+        portion_unit: "Gram",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 2300000,
+        line_total: 103500,
+      },
+      {
+        ingredient_name: "Wasabi",
+        portion_quantity: 3,
+        portion_unit: "Gram",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 500000,
+        line_total: 1500,
+      },
+      {
+        ingredient_name: "Đá",
+        portion_quantity: 1,
+        portion_unit: "Pack",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 1000,
+        line_total: 1,
+      },
+      {
+        ingredient_name: "Lá tía tô",
+        portion_quantity: 3,
+        portion_unit: "Lá",
+        package_quantity: 100,
+        package_unit: "Lá",
+        package_price: 90000,
+        line_total: 2700,
+      },
+      {
+        ingredient_name: "Củ cải bào",
+        portion_quantity: 200,
+        portion_unit: "Gram",
+        package_quantity: 1000,
+        package_unit: "Gram",
+        package_price: 20000,
+        line_total: 4000,
+      },
+    ],
+    {
+      idealCost: 318701,
+      sellingPrice: 599000,
+      foodCostPct: 53.21,
+    }
+  );
+}
+
 export async function parseRecipeExcelFile(file: File): Promise<ParsedExcelRow<RecipeImportRowInput>[]> {
   const buffer = await file.arrayBuffer();
   const wb = XLSX.read(buffer, { type: "array" });
