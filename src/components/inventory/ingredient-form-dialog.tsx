@@ -24,6 +24,7 @@ import { toast } from "sonner";
 import type { z } from "zod";
 import { ingredientSchema, type IngredientInput, type InventoryStatusRow } from "@/types/restaurant";
 import { createIngredient, importIngredients, updateIngredient } from "@/server-actions/inventory.actions";
+import { compressImageForUpload } from "@/lib/client-image-compression";
 import { extractIngredientsFromImageAction } from "@/server-actions/ingredient-ocr.actions";
 import type { IngredientOcrResult, IngredientParsedItem } from "@/lib/ai/ingredient-ocr";
 import { useAction } from "@/hooks/use-action";
@@ -150,8 +151,9 @@ export function IngredientFormDialog({
 
     setIsScanningLabel(true);
     try {
+      const readyFile = await compressImageForUpload(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", readyFile);
 
       const res = await extractIngredientsFromImageAction(formData);
       if (!res.success) {

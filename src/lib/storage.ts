@@ -99,9 +99,25 @@ export async function uploadImage(
     console.warn("Supabase Storage upload failed, falling back to Data URL:", supabaseErr);
   }
 
-  // 3. Fallback cuối cùng: Data URL
+  if (!buffer || buffer.length === 0) {
+    return {
+      url: "",
+      provider: "data_url",
+      bytes: 0,
+    };
+  }
+
+  // 3. Fallback cuối cùng: Data URL (chỉ áp dụng nếu dung lượng dưới 2MB để không làm sập RSC payload trên Vercel)
+  if (buffer.length <= 2 * 1024 * 1024) {
+    return {
+      url: `data:${contentType};base64,${buffer.toString("base64")}`,
+      provider: "data_url",
+      bytes: buffer.length,
+    };
+  }
+
   return {
-    url: `data:${contentType};base64,${buffer.toString("base64")}`,
+    url: "",
     provider: "data_url",
     bytes: buffer.length,
   };

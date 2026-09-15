@@ -15,6 +15,7 @@ import type {
   SupplierPickRow,
 } from "@/lib/queries/purchases.queries";
 import { SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
+import { compressImageForUpload } from "@/lib/client-image-compression";
 import { extractAndMatchInvoice } from "@/server-actions/invoice-ocr.actions";
 import { Button } from "@/components/ui/button";
 import {
@@ -69,8 +70,9 @@ export function InvoiceOcrDialog({
     setIsScanning(true);
 
     try {
+      const readyFile = await compressImageForUpload(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", readyFile);
       if (customApiKey.trim()) {
         formData.append("api_key", customApiKey.trim());
       }

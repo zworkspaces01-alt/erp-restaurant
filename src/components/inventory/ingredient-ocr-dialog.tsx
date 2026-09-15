@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner";
 import { formatNumber } from "@/lib/format";
 import type { IngredientOcrResult, IngredientParsedItem } from "@/lib/ai/ingredient-ocr";
+import { compressImageForUpload } from "@/lib/client-image-compression";
 import { extractIngredientsFromImageAction } from "@/server-actions/ingredient-ocr.actions";
 import { importIngredients } from "@/server-actions/inventory.actions";
 import { SubmitButton } from "@/components/shared";
@@ -95,8 +96,9 @@ export function IngredientOcrDialog({
     setIsScanning(true);
 
     try {
+      const readyFile = await compressImageForUpload(file);
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", readyFile);
 
       const res = await extractIngredientsFromImageAction(formData);
 
