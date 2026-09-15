@@ -84,6 +84,12 @@ export function InvoiceOcrDialog({
         isMock: res.data.isMock,
       });
       toast.success("Đã quét và trích xuất dữ liệu hóa đơn thành công!");
+      if (res.data.reviewData.excluded_items && res.data.reviewData.excluded_items.length > 0) {
+        toast.info(
+          `AI đã nhận diện và tự động loại bỏ ${res.data.reviewData.excluded_items.length} mặt hàng bị gạch tay trên hóa đơn: ${res.data.reviewData.excluded_items.join(", ")}`,
+          { duration: 7000 }
+        );
+      }
     } catch {
       toast.error("Không thể phân tích hóa đơn. Vui lòng thử lại.");
     } finally {

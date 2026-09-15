@@ -599,6 +599,7 @@ export interface InvoiceParsedData {
   invoice_number?: string | null;
   order_date?: string | null;
   items: InvoiceParsedItem[];
+  excluded_items?: string[];
   subtotal?: number;
   tax_percent?: number;
   tax_amount?: number;
@@ -627,6 +628,7 @@ export interface InvoiceOcrReviewData {
   invoice_number: string;
   order_date: string;
   items: MatchedInvoiceItem[];
+  excluded_items?: string[];
   subtotal: number;
   tax_amount: number;
   total_amount: number;

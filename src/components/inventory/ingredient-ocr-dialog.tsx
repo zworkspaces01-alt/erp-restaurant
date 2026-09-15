@@ -8,6 +8,7 @@ import {
   Camera,
   CheckCircle2,
   FileSpreadsheet,
+  FileX2,
   Hash,
   MapPin,
   Maximize2,
@@ -110,6 +111,12 @@ export function IngredientOcrDialog({
         toast.warning(
           `Đã phát hiện và tự động loại bỏ ${res.data.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau): ${res.data.duplicates_removed.join(", ")}`,
           { duration: 6000 }
+        );
+      }
+      if (res.data.excluded_items && res.data.excluded_items.length > 0) {
+        toast.info(
+          `AI đã nhận diện và tự động loại bỏ ${res.data.excluded_items.length} mặt hàng bị gạch tay trên phiếu: ${res.data.excluded_items.join(", ")}`,
+          { duration: 7000 }
         );
       }
     } catch {
@@ -555,6 +562,21 @@ export function IngredientOcrDialog({
                         </p>
                         <p className="text-[11px] opacity-90 leading-relaxed">
                           {ocrResult.duplicates_removed.join(", ")}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Thông báo các mặt hàng bị gạch tay trên phiếu đã tự động loại bỏ */}
+                  {ocrResult.excluded_items && ocrResult.excluded_items.length > 0 && (
+                    <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3 flex items-start gap-2.5 text-xs text-rose-900 dark:text-rose-200">
+                      <FileX2 className="size-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <p className="font-semibold">
+                          Phát hiện {ocrResult.excluded_items.length} mặt hàng bị gạch tay trên phiếu (hàng hủy / không nhận - đã tự động loại bỏ):
+                        </p>
+                        <p className="text-[11px] opacity-90 leading-relaxed font-mono">
+                          {ocrResult.excluded_items.join(", ")}
                         </p>
                       </div>
                     </div>

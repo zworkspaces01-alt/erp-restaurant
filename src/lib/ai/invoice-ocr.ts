@@ -11,24 +11,40 @@ const INVOICE_OCR_PROMPT = `
 Bạn là chuyên gia OCR và kế toán nhà hàng tại Việt Nam.
 Nhiệm vụ của bạn là đọc hình ảnh hóa đơn / chứng từ mua hàng / phiếu giao hàng của nhà cung cấp và trích xuất thông tin sang định dạng JSON thuần túy.
 
-Quy tắc trích xuất:
+QUY TẮC ĐẶC BIỆT QUAN TRỌNG: XỬ LÝ NÉT GẠCH TAY / GẠCH BỎ / SỬA TAY (HANDWRITTEN STRIKETHROUGH & CORRECTIONS):
+1. DÒNG BỊ GẠCH TAY LÀ BỎ (CANCELLED / STRUCK-THROUGH ITEMS):
+   - Khi giao nhận hàng thực tế tại nhà hàng, bên giao hoặc bên nhận dùng bút bi, bút lông, bút mực GẠCH NGANG qua tên mặt hàng, GẠCH CHÉO (X) hoặc GẠCH XÓA cả dòng: ĐÂY LÀ HÀNG HỦY / KHÔNG GIAO / TỪ CHỐI NHẬN.
+   - BẮT BUỘC: Bạn PHẢI LOẠI BỎ HOÀN TOÀN các dòng bị gạch tay này! TUYỆT ĐỐI KHÔNG đưa vào mảng "items".
+   - Liệt kê tên các mặt hàng bị gạch tay này vào mảng "excluded_items" (ví dụ: ["Cá bớp", "Thịt bò thăn"]).
+2. SỐ LƯỢNG HOẶC ĐƠN GIÁ BỊ GẠCH SỬA TAY (HANDWRITTEN OVERRIDES):
+   - Nếu dòng mặt hàng KHÔNG bị gạch bỏ cả dòng, nhưng có con số (số lượng, đơn giá) bị gạch ngang và có chữ số viết tay bên cạnh (hoặc trên/dưới):
+   - BẮT BUỘC: LẤY THEO CON SỐ VIẾT TAY MỚI (đây là số lượng/giá thực giao thực nhận), BỎ QUA con số in cũ bị gạch.
+   - Tính lại "line_total" = quantity (thực nhận) * unit_price.
+3. DÒNG MẶT HÀNG VIẾT TAY THÊM (HANDWRITTEN ADDITIONS):
+   - Nếu có dòng mặt hàng được viết tay bổ sung vào phiếu và không bị gạch xóa: vẫn quét và đưa vào "items".
+4. TỔNG TIỀN (total_amount & subtotal):
+   - Chỉ tính tổng tiền của các mặt hàng THỰC NHẬN (chỉ cộng các dòng KHÔNG bị gạch bỏ).
+   - Nếu ở cuối phiếu tổng tiền in cũ bị gạch và có tổng tiền viết tay mới, lấy tổng tiền viết tay mới.
+
+Quy tắc trích xuất các trường:
 1. "supplier_name": Tên công ty / cửa hàng / đại lý bán hàng / nhà cung cấp.
 2. "supplier_tax_code": Mã số thuế nếu có (chuỗi số).
 3. "supplier_phone": Số điện thoại liên hệ nếu có.
 4. "supplier_address": Địa chỉ nhà cung cấp nếu có.
 5. "invoice_number": Số hóa đơn / Số chứng từ / Mã phiếu xuất kho.
 6. "order_date": Ngày lập hóa đơn theo định dạng YYYY-MM-DD (nếu không rõ năm, dùng năm hiện tại 2026).
-7. "items": Mảng các mặt hàng nguyên liệu / thực phẩm được mua:
+7. "items": Mảng các mặt hàng nguyên liệu / thực phẩm thực nhận (KHÔNG chứa các dòng bị gạch tay):
    - "raw_name": Tên chính xác mặt hàng như ghi trên hóa đơn.
-   - "quantity": Số lượng (dạng số thập phân hoặc nguyên dương).
+   - "quantity": Số lượng thực nhận (dạng số thập phân hoặc nguyên dương, ưu tiên số viết tay sửa lại nếu có).
    - "unit": Đơn vị tính (kg, g, lít, ml, thùng, hộp, gói, lon, chai, bó, cây, bịch...).
    - "unit_price": Đơn giá trên 1 đơn vị tính (dạng số, bỏ dấu chấm/phẩy ngăn cách hàng nghìn).
    - "line_total": Thành tiền của dòng hàng (quantity * unit_price).
    - "note": Ghi chú hoặc quy cách đóng gói (nếu có).
-8. "subtotal": Tổng tiền hàng trước thuế.
-9. "tax_percent": Tỷ lệ thuế VAT (ví dụ 8 hoặc 10 nếu có, không có thì 0).
-10. "tax_amount": Tiền thuế VAT (nếu có).
-11. "total_amount": Tổng số tiền thanh toán cuối cùng của hóa đơn.
+8. "excluded_items": Mảng các tên mặt hàng bị gạch tay loại bỏ (ví dụ: ["Cá basa", "Hành hoa"]).
+9. "subtotal": Tổng tiền hàng trước thuế của các dòng thực nhận.
+10. "tax_percent": Tỷ lệ thuế VAT (ví dụ 8 hoặc 10 nếu có, không có thì 0).
+11. "tax_amount": Tiền thuế VAT (nếu có).
+12. "total_amount": Tổng số tiền thanh toán cuối cùng của hóa đơn (ưu tiên số viết tay sửa lại ở cuối phiếu).
 
 Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick, cấu trúc đúng như sau:
 {
@@ -48,6 +64,7 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ không có markdown backtick
       "note": null
     }
   ],
+  "excluded_items": ["Mặt hàng gạch tay 1"],
   "subtotal": 450000,
   "tax_percent": 0,
   "tax_amount": 0,
@@ -91,7 +108,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kế toán nhà hàng tại Việt Nam. BẮT BUỘC trả về duy nhất chuỗi JSON hợp lệ theo đúng cấu trúc yêu cầu. Không thêm bất kỳ văn bản chào hỏi, giải thích hay thẻ markdown nào.",
+            "Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc yêu cầu.",
         },
         {
           role: "user",

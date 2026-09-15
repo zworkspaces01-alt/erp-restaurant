@@ -304,6 +304,7 @@ export function matchInvoiceData(
     invoice_number: parsed.invoice_number ?? "",
     order_date: parsed.order_date ?? new Date().toISOString().slice(0, 10),
     items: matchedItems,
+    excluded_items: parsed.excluded_items || [],
     subtotal,
     tax_amount: taxAmount,
     total_amount: totalAmount,

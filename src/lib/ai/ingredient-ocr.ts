@@ -20,6 +20,7 @@ export interface IngredientOcrResult {
   matched_supplier_name?: string | null;
   items: IngredientParsedItem[];
   duplicates_removed?: string[];
+  excluded_items?: string[];
   model_used: string;
   is_mock: boolean;
   image_url?: string | null;
@@ -36,14 +37,24 @@ const INGREDIENT_OCR_PROMPT = `
 Bạn là chuyên gia OCR và quản lý kho nguyên vật liệu nhà hàng F&B tại Việt Nam.
 Nhiệm vụ của bạn là phân tích hình ảnh (bảng báo giá nguyên liệu, phiếu giao hàng, hóa đơn nhập hàng, danh mục sản phẩm, danh sách viết tay hoặc bảng in) và trích xuất TOÀN BỘ các nguyên liệu cùng thông tin Nhà cung cấp vào định dạng JSON.
 
-QUY TẮC BẮT BUỘC VỀ ĐỘ ĐẦY ĐỦ (QUÉT 100% NGUYÊN LIỆU, KHÔNG BỎ SÓT):
+QUY TẮC BẮT BUỘC 1: XỬ LÝ NÉT GẠCH TAY / GẠCH BỎ / SỬA TAY (HANDWRITTEN STRIKETHROUGH & CORRECTIONS):
+1. DÒNG BỊ GẠCH TAY LÀ BỎ (CANCELLED / STRUCK-THROUGH ITEMS):
+   - Trong phiếu giao hàng / hóa đơn nhập kho thực tế tại nhà hàng, nhân viên nhận hàng hoặc bên giao sẽ dùng bút (bút bi, bút mực, bút dạ đỏ/xanh/đen) GẠCH NGANG qua dòng mặt hàng, GẠCH CHÉO (dấu X) hoặc GẠCH XÓA tên/số lượng để báo là HẾT HÀNG / KHÔNG GIAO / BỎ QUA / TỪ CHỐI NHẬN.
+   - BẮT BUỘC: Bạn PHẢI LOẠI BỎ HOÀN TOÀN các dòng bị gạch tay này! TUYỆT ĐỐI KHÔNG đưa các mặt hàng bị gạch bỏ vào danh sách "items".
+   - Hãy liệt kê tên các mặt hàng bị gạch tay đã loại bỏ này vào mảng "excluded_items" (ví dụ: ["Cá bớp", "Thịt bò thăn"]).
+2. SỐ LƯỢNG HOẶC ĐƠN GIÁ BỊ GẠCH SỬA TAY (HANDWRITTEN OVERRIDES):
+   - Nếu dòng mặt hàng KHÔNG bị gạch bỏ cả dòng, nhưng có con số (số lượng, đơn giá) bị gạch ngang và có chữ số viết tay bên cạnh (hoặc trên/dưới):
+   - BẮT BUỘC: LẤY THEO CON SỐ VIẾT TAY MỚI (đây là số lượng/giá thực giao thực nhận), BỎ QUA con số in cũ bị gạch.
+3. DÒNG NGUYÊN LIỆU VIẾT TAY THÊM (HANDWRITTEN ADDITIONS):
+   - Nếu có dòng nguyên liệu viết tay thêm vào cuối hoặc giữa phiếu (giao bổ sung) và KHÔNG bị gạch xóa: vẫn quét và đưa vào danh sách "items".
+
+QUY TẮC BẮT BUỘC 2: QUÉT ĐẦY ĐỦ CÁC MẶT HÀNG HỢP LỆ (KHÔNG BỎ SÓT):
 1. QUÉT HẾT TẤT CẢ MẶT HÀNG TRÊN ẢNH:
-   - Ảnh có thể chứa danh sách rất dài (10, 20, 50, 100 dòng nguyên liệu trở lên).
-   - Bạn PHẢI quét và trích xuất TOÀN BỘ từ dòng đầu tiên đến dòng cuối cùng của bảng/ảnh.
-   - TUYỆT ĐỐI KHÔNG bỏ qua bất kỳ dòng nào, TUYỆT ĐỐI KHÔNG tóm tắt hay dùng dấu ba chấm (...), TUYỆT ĐỐI KHÔNG dừng lại giữa chừng.
+   - Quét từ dòng đầu tiên đến dòng cuối cùng của bảng/ảnh cho tất cả các mặt hàng hợp lệ (không bị gạch bỏ).
+   - TUYỆT ĐỐI KHÔNG tóm tắt hay dùng dấu ba chấm (...), không dừng lại giữa chừng.
 2. BẢNG NHIỀU CỘT HOẶC NHIỀU NHÓM DANH MỤC:
-   - Nếu ảnh có bảng chia thành 2 hoặc nhiều cột song song, hoặc chia theo nhóm/tiêu đề danh mục (Thịt, Hải sản, Rau củ quả, Gia vị, Đồ khô, Bơ sữa trứng, Đồ uống, Bao bì, v.v.):
-   - Bạn phải đọc tuần tự từng cột, từng nhóm và đưa TẤT CẢ từng mặt hàng vào mảng "items".
+   - Nếu ảnh có bảng chia thành 2 hoặc nhiều cột song song, hoặc chia theo nhóm danh mục (Thịt, Hải sản, Rau củ quả, Gia vị...):
+   - Đọc tuần tự từng cột, từng nhóm và đưa TẤT CẢ từng mặt hàng hợp lệ vào mảng "items".
 3. THÔNG TIN NHÀ CUNG CẤP ("supplier"):
    - Tìm thông tin công ty, cửa hàng, đại lý xuất bảng giá/hóa đơn ở đầu hoặc cuối ảnh:
      "name": Tên nhà cung cấp / đại lý / cửa hàng.
@@ -70,7 +81,7 @@ QUY TẮC BẮT BUỘC VỀ ĐỘ ĐẦY ĐỦ (QUÉT 100% NGUYÊN LIỆU, KHÔN
 
 Cấu trúc JSON đầu ra:
 {
-  "source_title": "Bảng báo giá tháng 09/2026",
+  "source_title": "Phiếu giao hàng / Bảng báo giá",
   "supplier": {
     "name": "Công ty TNHH Thực Phẩm Sạch GreenFarm",
     "tax_code": "0312345678",
@@ -91,7 +102,8 @@ Cấu trúc JSON đầu ra:
       "is_active": true,
       "note": "Bao 25kg"
     }
-  ]
+  ],
+  "excluded_items": ["Mặt hàng bị gạch tay 1", "Mặt hàng bị gạch tay 2"]
 }
 `;
 
@@ -99,6 +111,7 @@ function parseJsonSafe(text: string): {
   source_title?: string;
   supplier?: SupplierParsedInfo | null;
   items: IngredientParsedItem[];
+  excluded_items?: string[];
 } {
   let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "").trim();
   cleaned = cleaned.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/i, "").trim();
@@ -140,6 +153,7 @@ async function extractWithGroq(
   source_title?: string;
   supplier?: SupplierParsedInfo | null;
   items: IngredientParsedItem[];
+  excluded_items?: string[];
 }> {
   const url = "https://api.groq.com/openai/v1/chat/completions";
   const dataUrl = base64Data.startsWith("data:")
@@ -153,7 +167,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kho nguyên liệu nhà hàng tại Việt Nam. BẮT BUỘC phân tích và trích xuất TOÀN BỘ 100% tất cả các nguyên liệu trên ảnh vào JSON, không được bỏ sót bất kỳ dòng nào. Trả về DUY NHẤT một chuỗi JSON hợp lệ.",
+            "Bạn là chuyên gia OCR và kiểm kho nguyên vật liệu nhà hàng tại Việt Nam. BẮT BUỘC: 1) Nhận diện chính xác các dòng bị GẠCH TAY (bút bi, bút mực, gạch chéo X) là dòng ĐÃ BỎ/HỦY -> TUYỆT ĐỐI KHÔNG ĐƯA VÀO items, ghi tên vào excluded_items. 2) Nếu số lượng bị gạch và viết tay số mới -> Lấy số viết tay mới. 3) Trích xuất đầy đủ tất cả các mặt hàng hợp lệ (không bị gạch bỏ) trên ảnh vào JSON. Trả về DUY NHẤT chuỗi JSON hợp lệ.",
         },
         {
           role: "user",
@@ -277,6 +291,7 @@ export async function parseIngredientsFromImage(
       supplier: rawResult.supplier || null,
       items: uniqueItems,
       duplicates_removed: duplicatesRemoved,
+      excluded_items: rawResult.excluded_items || [],
       model_used: "Groq (qwen/qwen3.8-27b)",
       is_mock: false,
       image_url: options.base64Data.startsWith("data:")

@@ -6,6 +6,7 @@ import {
   AlertTriangle,
   CheckCircle2,
   FileCheck2,
+  FileX2,
   HelpCircle,
   Maximize2,
   Percent,
@@ -559,6 +560,21 @@ export function InvoiceReviewSplitView({
             {serverError && (
               <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md">
                 {serverError}
+              </div>
+            )}
+
+            {/* Thông báo các mặt hàng bị gạch tay trên hóa đơn đã tự động loại bỏ */}
+            {reviewData.excluded_items && reviewData.excluded_items.length > 0 && (
+              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 flex items-start gap-3 text-xs text-rose-900 dark:text-rose-200">
+                <FileX2 className="size-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-rose-950 dark:text-rose-100">
+                    AI đã nhận diện và tự động loại bỏ {reviewData.excluded_items.length} mặt hàng bị gạch tay trên hóa đơn (hàng hủy / không nhận):
+                  </p>
+                  <p className="text-[11px] opacity-90 leading-relaxed font-mono">
+                    {reviewData.excluded_items.join(", ")}
+                  </p>
+                </div>
               </div>
             )}
 
