@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Building2,
   Camera,
   CheckCircle2,
@@ -105,6 +106,12 @@ export function IngredientOcrDialog({
       toast.success(
         `Đã trích xuất thành công ${res.data.items.length} nguyên liệu từ ảnh!`
       );
+      if (res.data.duplicates_removed && res.data.duplicates_removed.length > 0) {
+        toast.warning(
+          `Đã phát hiện và tự động loại bỏ ${res.data.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau): ${res.data.duplicates_removed.join(", ")}`,
+          { duration: 6000 }
+        );
+      }
     } catch {
       toast.error("Không thể xử lý ảnh nguyên liệu. Vui lòng thử lại.");
     } finally {
@@ -521,6 +528,21 @@ export function IngredientOcrDialog({
                             <span className="truncate">Địa chỉ: <strong className="text-foreground font-medium">{ocrResult.supplier.address}</strong></span>
                           </div>
                         )}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Cảnh báo nguyên liệu trùng lặp đã tự động loại bỏ */}
+                  {ocrResult.duplicates_removed && ocrResult.duplicates_removed.length > 0 && (
+                    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+                      <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                      <div className="space-y-0.5">
+                        <p className="font-semibold">
+                          Đã tự động loại bỏ {ocrResult.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau):
+                        </p>
+                        <p className="text-[11px] opacity-90 leading-relaxed">
+                          {ocrResult.duplicates_removed.join(", ")}
+                        </p>
                       </div>
                     </div>
                   )}

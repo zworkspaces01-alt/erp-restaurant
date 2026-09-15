@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Controller, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
+  AlertTriangle,
   ArrowLeft,
   Building2,
   Camera,
@@ -173,10 +174,16 @@ export function IngredientFormDialog({
         if (res.data.supplier_id) setValue("default_supplier_id", res.data.supplier_id);
         toast.success(`Đã tự động điền nguyên liệu: ${item.name}!`);
       } else {
-        // Nhiều nguyên liệu (ảnh bảng báo giá / danh mục): Bật chế độ quét toàn bộ
         setBatchResult(res.data);
         setBatchItems(items);
         toast.success(`AI đã quét trọn vẹn ${items.length} nguyên liệu từ ảnh!`);
+      }
+
+      if (res.data.duplicates_removed && res.data.duplicates_removed.length > 0) {
+        toast.warning(
+          `Đã phát hiện và tự động loại bỏ ${res.data.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau): ${res.data.duplicates_removed.join(", ")}`,
+          { duration: 6000 }
+        );
       }
     } catch {
       toast.error("Lỗi khi quét ảnh nguyên liệu.");
@@ -228,9 +235,30 @@ export function IngredientFormDialog({
       return;
     }
 
+    const seenNames = new Set<string>();
+    const seenCodes = new Set<string>();
+    const dedupedItems: typeof batchItems = [];
+    const manualDups: string[] = [];
+
+    for (const it of batchItems) {
+      const norm = it.name.trim().toLowerCase();
+      const c = it.code?.trim().toUpperCase();
+      if (seenNames.has(norm) || (c && seenCodes.has(c))) {
+        manualDups.push(it.name.trim());
+        continue;
+      }
+      seenNames.add(norm);
+      if (c) seenCodes.add(c);
+      dedupedItems.push(it);
+    }
+
+    if (manualDups.length > 0) {
+      toast.info(`Đã loại bỏ ${manualDups.length} dòng trùng lặp: ${manualDups.join(", ")}`);
+    }
+
     setIsSubmittingBatch(true);
     try {
-      const payload: IngredientInput[] = batchItems.map((it) => ({
+      const payload: IngredientInput[] = dedupedItems.map((it) => ({
         code: it.code || null,
         name: it.name.trim(),
         category: it.category || null,
@@ -403,6 +431,21 @@ export function IngredientFormDialog({
                       <span className="truncate">Địa chỉ: <strong className="text-foreground font-medium">{batchResult.supplier.address}</strong></span>
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Cảnh báo nguyên liệu trùng lặp đã tự động loại bỏ */}
+            {batchResult.duplicates_removed && batchResult.duplicates_removed.length > 0 && (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200 shrink-0">
+                <AlertTriangle className="size-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div className="space-y-0.5">
+                  <p className="font-semibold">
+                    Đã tự động loại bỏ {batchResult.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau):
+                  </p>
+                  <p className="text-[11px] opacity-90 leading-relaxed">
+                    {batchResult.duplicates_removed.join(", ")}
+                  </p>
                 </div>
               </div>
             )}

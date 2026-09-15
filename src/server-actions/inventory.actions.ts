@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import { ingredientSchema, parseDbError, type IngredientInput } from "@/types/restaurant";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 import { todayISO } from "@/lib/format";
 import {
   stockAdjustmentWithDateSchema,
@@ -226,29 +227,50 @@ export async function importIngredients(
     validItems.push(parsed.data);
   }
 
+  // Tự động lọc bỏ các nguyên liệu trùng lặp trong đợt nhập (giữ lại mục đầu tiên, bỏ các mục nhập sau)
+  const uniqueItems: IngredientInput[] = [];
+  const seenBatchNames = new Set<string>();
+  const seenBatchCodes = new Set<string>();
+  let duplicateBatchCount = 0;
+
+  for (const item of validItems) {
+    const norm = normalizeVietnamese(item.name);
+    const c = item.code?.trim().toUpperCase();
+
+    if (seenBatchNames.has(norm) || (c && seenBatchCodes.has(c))) {
+      duplicateBatchCount++;
+      continue;
+    }
+    seenBatchNames.add(norm);
+    if (c) seenBatchCodes.add(c);
+    uniqueItems.push(item);
+  }
+
   const supabase = await createClient();
 
-  const codes = validItems.map((it) => it.code).filter((c): c is string => Boolean(c));
-  const existingMap = new Map<string, string>();
+  // Truy vấn toàn bộ nguyên liệu hiện có để đối chiếu cả Mã (code) và Tên (name)
+  const { data: allExisting, error: queryError } = await supabase
+    .from("ingredients")
+    .select("id, code, name");
 
-  if (codes.length > 0) {
-    const { data: existing, error: queryError } = await supabase
-      .from("ingredients")
-      .select("id, code")
-      .in("code", codes);
+  if (queryError) return fail(parseDbError(queryError));
 
-    if (queryError) return fail(parseDbError(queryError));
-    for (const r of existing ?? []) {
-      if (r.code) existingMap.set(r.code, r.id);
-    }
+  const existingByCode = new Map<string, string>();
+  const existingByName = new Map<string, string>();
+
+  for (const r of allExisting ?? []) {
+    if (r.code) existingByCode.set(r.code.trim().toUpperCase(), r.id);
+    if (r.name) existingByName.set(normalizeVietnamese(r.name), r.id);
   }
 
   let inserted = 0;
   let updated = 0;
-  let skipped = 0;
+  let skipped = duplicateBatchCount;
 
-  for (const item of validItems) {
-    const existingId = item.code ? existingMap.get(item.code) : undefined;
+  for (const item of uniqueItems) {
+    const normName = normalizeVietnamese(item.name);
+    const code = item.code?.trim().toUpperCase();
+    const existingId = (code ? existingByCode.get(code) : undefined) || existingByName.get(normName);
 
     if (existingId) {
       if (mode === "update") {
@@ -261,6 +283,7 @@ export async function importIngredients(
             import_unit: item.import_unit,
             conversion_factor: item.conversion_factor,
             min_alert_stock: item.min_alert_stock,
+            default_supplier_id: item.default_supplier_id ?? null,
             is_active: item.is_active,
             note: item.note ?? null,
           })
@@ -282,14 +305,18 @@ export async function importIngredients(
           import_unit: item.import_unit,
           conversion_factor: item.conversion_factor,
           min_alert_stock: item.min_alert_stock,
+          default_supplier_id: item.default_supplier_id ?? null,
           is_active: item.is_active,
           note: item.note ?? null,
         })
-        .select("id, code")
+        .select("id, code, name")
         .single();
 
       if (insErr) return fail(parseDbError(insErr));
-      if (insData?.code) existingMap.set(insData.code, insData.id);
+      if (insData) {
+        if (insData.code) existingByCode.set(insData.code.trim().toUpperCase(), insData.id);
+        if (insData.name) existingByName.set(normalizeVietnamese(insData.name), insData.id);
+      }
       inserted++;
     }
   }

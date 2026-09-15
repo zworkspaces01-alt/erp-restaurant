@@ -1,4 +1,5 @@
 import type { IngredientInput } from "@/types/restaurant";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 
 export type IngredientParsedItem = IngredientInput;
 
@@ -16,6 +17,7 @@ export interface IngredientOcrResult {
   supplier_id?: string | null;
   matched_supplier_name?: string | null;
   items: IngredientParsedItem[];
+  duplicates_removed?: string[];
   model_used: string;
   is_mock: boolean;
   image_url?: string | null;
@@ -232,24 +234,47 @@ export async function parseIngredientsFromImage(
       apiKey
     );
 
-    const items: IngredientParsedItem[] = (rawResult.items || []).map((it, idx) => ({
-      code: it.code || `NL-${String(idx + 1).padStart(3, "0")}`,
-      name: it.name || `Nguyên liệu ${idx + 1}`,
-      category: it.category || "Gia vị",
-      base_unit: it.base_unit || "kg",
-      import_unit: it.import_unit || it.base_unit || "kg",
-      conversion_factor: Math.max(0.001, Number(it.conversion_factor) || 1),
-      min_alert_stock: Math.max(0, Number(it.min_alert_stock) || 0),
-      default_price: Math.max(0, Number(it.default_price) || 0),
-      default_supplier_id: null,
-      is_active: true,
-      note: it.note || null,
-    }));
+    const uniqueItems: IngredientParsedItem[] = [];
+    const seenNames = new Set<string>();
+    const seenCodes = new Set<string>();
+    const duplicatesRemoved: string[] = [];
+
+    for (const it of rawResult.items || []) {
+      const rawName = (it.name || "").trim();
+      if (!rawName) continue;
+
+      const normName = normalizeVietnamese(rawName);
+      const code = (it.code || "").trim().toUpperCase();
+
+      // Nếu tên hoặc mã đã xuất hiện trước đó trên ảnh -> tự động loại bỏ bản ghi xuất hiện sau
+      if (seenNames.has(normName) || (code && seenCodes.has(code))) {
+        duplicatesRemoved.push(rawName);
+        continue;
+      }
+
+      seenNames.add(normName);
+      if (code) seenCodes.add(code);
+
+      uniqueItems.push({
+        code: code || `NL-${String(uniqueItems.length + 1).padStart(3, "0")}`,
+        name: rawName,
+        category: it.category || "Gia vị",
+        base_unit: it.base_unit || "kg",
+        import_unit: it.import_unit || it.base_unit || "kg",
+        conversion_factor: Math.max(0.001, Number(it.conversion_factor) || 1),
+        min_alert_stock: Math.max(0, Number(it.min_alert_stock) || 0),
+        default_price: Math.max(0, Number(it.default_price) || 0),
+        default_supplier_id: null,
+        is_active: true,
+        note: it.note || null,
+      });
+    }
 
     return {
       source_title: rawResult.source_title || "Bảng danh mục nguyên liệu",
       supplier: rawResult.supplier || null,
-      items,
+      items: uniqueItems,
+      duplicates_removed: duplicatesRemoved,
       model_used: "Groq (qwen/qwen3.8-27b)",
       is_mock: false,
       image_url: options.base64Data.startsWith("data:")
