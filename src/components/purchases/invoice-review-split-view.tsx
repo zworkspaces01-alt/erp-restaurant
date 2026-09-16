@@ -77,10 +77,40 @@ export function InvoiceReviewSplitView({
     `Nhập tự động qua AI OCR (${modelUsed}). Hóa đơn: ${reviewData.invoice_number || "—"}`
   );
   const [items, setItems] = useState<MatchedInvoiceItem[]>(reviewData.items);
+  const [excludedItems, setExcludedItems] = useState<string[]>(() => reviewData.excluded_items || []);
   const [paidNow, setPaidNow] = useState<number>(0);
   const [paidMethod, setPaidMethod] = useState<PaymentMethod>("cash");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+
+  // Khôi phục món bị gạch tay khi NCC giao bổ sung
+  const handleRestoreExcludedItem = (itemName: string) => {
+    const foundRaw = reviewData.raw_extracted?.items?.find((it) =>
+      it.raw_name?.toLowerCase().includes(itemName.toLowerCase()) ||
+      itemName.toLowerCase().includes(it.raw_name?.toLowerCase() || "")
+    );
+
+    const defaultQty = foundRaw?.quantity && foundRaw.quantity > 0 ? foundRaw.quantity : 1;
+    const defaultPrice = foundRaw?.unit_price && foundRaw.unit_price > 0 ? foundRaw.unit_price : 0;
+
+    const restoredItem: MatchedInvoiceItem = {
+      raw_name: itemName,
+      quantity: defaultQty,
+      unit: foundRaw?.unit || "kg",
+      unit_price: defaultPrice,
+      line_total: defaultQty * defaultPrice,
+      ingredient_id: null,
+      matched_ingredient_name: null,
+      conversion_factor: 1,
+      match_confidence: "unmatched",
+    };
+
+    setItems((prev) => [...prev, restoredItem]);
+    setExcludedItems((prev) => prev.filter((name) => name !== itemName));
+    toast.success(
+      `Đã khôi phục món "${itemName}" vào danh sách nhập kho. Bạn có thể kiểm tra lại số lượng và đơn giá!`
+    );
+  };
 
   // VAT & Pricing Reconciliation States
   const [rawItems] = useState<MatchedInvoiceItem[]>(() =>
@@ -734,17 +764,40 @@ export function InvoiceReviewSplitView({
               </div>
             )}
 
-            {/* Thông báo các mặt hàng bị gạch tay trên hóa đơn đã tự động loại bỏ */}
-            {reviewData.excluded_items && reviewData.excluded_items.length > 0 && (
-              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 flex items-start gap-3 text-xs text-rose-900 dark:text-rose-200">
-                <FileX2 className="size-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                <div className="space-y-1">
-                  <p className="font-semibold text-rose-950 dark:text-rose-100">
-                    AI đã nhận diện và tự động loại bỏ {reviewData.excluded_items.length} mặt hàng bị gạch tay trên hóa đơn (hàng hủy / không nhận):
-                  </p>
-                  <p className="text-[11px] opacity-90 leading-relaxed font-mono">
-                    {reviewData.excluded_items.join(", ")}
-                  </p>
+            {/* Thông báo các mặt hàng bị gạch tay trên hóa đơn kèm nút khôi phục nếu NCC đã giao bổ sung */}
+            {excludedItems && excludedItems.length > 0 && (
+              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 space-y-2.5 text-xs text-rose-900 dark:text-rose-200 shadow-sm">
+                <div className="flex items-start gap-2.5">
+                  <FileX2 className="size-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
+                  <div className="space-y-0.5">
+                    <p className="font-semibold text-rose-950 dark:text-rose-100">
+                      AI đã nhận diện và tự động loại bỏ {excludedItems.length} mặt hàng bị gạch tay trên hóa đơn (hàng hủy / không nhận):
+                    </p>
+                    <p className="text-[11px] text-muted-foreground">
+                      Nếu nhà cung cấp đã giao bổ sung món này đợt này, bạn có thể bấm <strong>Khôi phục</strong> để đưa vào phiếu nhập kho:
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pl-6">
+                  {excludedItems.map((itemName, idx) => (
+                    <div
+                      key={idx}
+                      className="inline-flex items-center gap-2 px-2.5 py-1 bg-background/90 border border-rose-300 dark:border-rose-800 rounded-md shadow-sm"
+                    >
+                      <span className="line-through font-mono text-muted-foreground">{itemName}</span>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => handleRestoreExcludedItem(itemName)}
+                        className="h-6 px-2 text-[11px] gap-1 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 font-medium"
+                      >
+                        <Plus className="size-3" />
+                        Khôi phục (Đã bổ sung)
+                      </Button>
+                    </div>
+                  ))}
                 </div>
               </div>
             )}
