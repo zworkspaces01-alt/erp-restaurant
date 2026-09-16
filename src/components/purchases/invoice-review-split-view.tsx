@@ -82,42 +82,101 @@ export function InvoiceReviewSplitView({
   const [serverError, setServerError] = useState<string | null>(null);
 
   // VAT & Pricing Reconciliation States
-  const extractedSubtotal = reviewData.subtotal > 0
-    ? reviewData.subtotal
-    : reviewData.total_amount - (reviewData.tax_amount || 0);
-
-  const extractedTaxAmount = reviewData.tax_amount > 0
-    ? reviewData.tax_amount
-    : Math.max(0, reviewData.total_amount - extractedSubtotal);
-
-  const detectedTaxPercent = reviewData.raw_extracted?.tax_percent ?? (
-    extractedSubtotal > 0 && extractedTaxAmount > 0
-      ? Math.round((extractedTaxAmount / extractedSubtotal) * 100)
-      : 0
-  );
-
   const [rawItems] = useState<MatchedInvoiceItem[]>(() =>
     reviewData.items.map((it) => ({ ...it }))
   );
-  const [taxPercent, setTaxPercent] = useState<number>(detectedTaxPercent);
-  const [isVatAllocated, setIsVatAllocated] = useState<boolean>(false);
 
-  // Allocate VAT into line items so unit prices reflect net cost + tax & match invoice total
-  const handleAllocateVat = (percentToApply: number = taxPercent) => {
-    const rate = percentToApply > 0 ? percentToApply : 0;
-    if (rate <= 0 && extractedTaxAmount <= 0) {
-      toast.error("Không có thông tin thuế suất VAT để phân bổ.");
+  const baseSubtotal = rawItems.reduce((sum, it) => sum + (it.line_total || 0), 0);
+
+  const initialTaxAmount = reviewData.tax_amount > 0
+    ? reviewData.tax_amount
+    : Math.max(0, (reviewData.total_amount || 0) - baseSubtotal);
+
+  const initialTaxPercent = reviewData.raw_extracted?.tax_percent ?? (
+    baseSubtotal > 0 && initialTaxAmount > 0
+      ? Math.round((initialTaxAmount / baseSubtotal) * 100)
+      : 0
+  );
+
+  const [taxPercent, setTaxPercent] = useState<number>(initialTaxPercent);
+  const [taxAmount, setTaxAmount] = useState<number>(initialTaxAmount);
+  const [targetInvoiceTotal, setTargetInvoiceTotal] = useState<number>(
+    reviewData.total_amount > 0 ? reviewData.total_amount : baseSubtotal + initialTaxAmount
+  );
+  const [isVatAllocated, setIsVatAllocated] = useState<boolean>(false);
+  const [vatPreset, setVatPreset] = useState<"0" | "5" | "8" | "10" | "custom">(() => {
+    if (initialTaxPercent === 5) return "5";
+    if (initialTaxPercent === 8) return "8";
+    if (initialTaxPercent === 10) return "10";
+    if (initialTaxAmount > 0) return "custom";
+    return "0";
+  });
+  const [showCustomTaxInput, setShowCustomTaxInput] = useState<boolean>(
+    initialTaxAmount > 0 && initialTaxPercent !== 5 && initialTaxPercent !== 8 && initialTaxPercent !== 10
+  );
+
+  // Áp dụng mức VAT định sẵn hoặc tùy chỉnh
+  const handleSelectVatPreset = (preset: "0" | "5" | "8" | "10" | "custom") => {
+    setVatPreset(preset);
+    if (preset === "0") {
+      setTaxPercent(0);
+      setTaxAmount(0);
+      setTargetInvoiceTotal(baseSubtotal);
+      setShowCustomTaxInput(false);
+      if (isVatAllocated) {
+        handleRevertVat();
+      }
+    } else if (preset === "5" || preset === "8" || preset === "10") {
+      const pct = Number(preset);
+      const computedTax = Math.round(baseSubtotal * (pct / 100));
+      setTaxPercent(pct);
+      setTaxAmount(computedTax);
+      setTargetInvoiceTotal(baseSubtotal + computedTax);
+      setShowCustomTaxInput(false);
+      if (isVatAllocated) {
+        applyVatAllocation(computedTax, pct);
+      }
+    } else {
+      setShowCustomTaxInput(true);
+    }
+  };
+
+  const handleCustomTaxChange = (newTax: number) => {
+    const validTax = Math.max(0, newTax);
+    setTaxAmount(validTax);
+    setTargetInvoiceTotal(baseSubtotal + validTax);
+    setTaxPercent(baseSubtotal > 0 ? Math.round((validTax / baseSubtotal) * 100) : 0);
+    if (isVatAllocated) {
+      applyVatAllocation(validTax, 0);
+    }
+  };
+
+  const handleTargetTotalChange = (newTotal: number) => {
+    const validTotal = Math.max(0, newTotal);
+    setTargetInvoiceTotal(validTotal);
+    const diff = Math.max(0, validTotal - baseSubtotal);
+    setTaxAmount(diff);
+    setTaxPercent(baseSubtotal > 0 ? Math.round((diff / baseSubtotal) * 100) : 0);
+    if (isVatAllocated) {
+      applyVatAllocation(diff, 0);
+    }
+  };
+
+  // Phân bổ VAT vào từng dòng hàng hóa để đơn giá phản ánh đúng giá vốn và khớp 100% hóa đơn
+  const applyVatAllocation = (amountToAllocate: number, pct: number = 0) => {
+    if (amountToAllocate <= 0) {
+      toast.error("Không có số tiền thuế VAT để phân bổ.");
       return;
     }
 
-    const ratio = rate > 0
-      ? 1 + rate / 100
-      : (extractedSubtotal > 0 ? (extractedSubtotal + extractedTaxAmount) / extractedSubtotal : 1);
+    const desiredTotal = baseSubtotal + amountToAllocate;
+    const ratio = desiredTotal / (baseSubtotal || 1);
 
     setItems((prev) => {
       let currentSum = 0;
-      const updated = prev.map((item) => {
-        const newPrice = Math.round(item.unit_price * ratio);
+      const updated = prev.map((item, idx) => {
+        const raw = rawItems[idx] || item;
+        const newPrice = Math.round(raw.unit_price * ratio);
         const newLineTotal = item.quantity * newPrice;
         currentSum += newLineTotal;
         return {
@@ -127,10 +186,9 @@ export function InvoiceReviewSplitView({
         };
       });
 
-      // Điều chỉnh làm tròn vào mặt hàng có thành tiền lớn nhất để tổng đúng 100%
-      const targetTotal = reviewData.total_amount;
-      const diff = targetTotal - currentSum;
-      if (Math.abs(diff) > 0 && Math.abs(diff) < 5000 && updated.length > 0) {
+      // Bù trừ chênh lệch làm tròn vào mặt hàng có thành tiền lớn nhất
+      const diff = desiredTotal - currentSum;
+      if (Math.abs(diff) > 0 && Math.abs(diff) < 10000 && updated.length > 0) {
         let maxIdx = 0;
         for (let i = 1; i < updated.length; i++) {
           if (updated[i].line_total > updated[maxIdx].line_total) {
@@ -149,15 +207,16 @@ export function InvoiceReviewSplitView({
     });
 
     setIsVatAllocated(true);
-    if (rate > 0) setTaxPercent(rate);
-
+    const vatLabel = pct > 0 ? `${pct}%` : `+${formatVND(amountToAllocate)}`;
     setNote((prev) => {
-      const tag = `[Đã gồm VAT ${rate > 0 ? `${rate}%` : ""}]`;
-      if (prev.includes(tag)) return prev;
+      const tag = `[Đã gồm VAT ${vatLabel}]`;
+      if (prev.includes("[Đã gồm VAT")) {
+        return prev.replace(/\[Đã gồm VAT.*?\]/g, tag).trim();
+      }
       return `${prev} ${tag}`.trim();
     });
 
-    toast.success(`Đã phân bổ thuế VAT ${rate > 0 ? `${rate}%` : ""} vào đơn giá nguyên liệu!`);
+    toast.success(`Đã phân bổ thuế VAT (${vatLabel}) vào đơn giá kho!`);
   };
 
   // Hoàn tác về đơn giá gốc trước thuế
@@ -334,7 +393,7 @@ export function InvoiceReviewSplitView({
 
   // Calculate totals
   const calculatedTotal = items.reduce((sum, it) => sum + (it.line_total || 0), 0);
-  const isTotalMatched = Math.abs(calculatedTotal - reviewData.total_amount) < 1000;
+  const isTotalMatched = Math.abs(calculatedTotal - targetInvoiceTotal) < 1000;
   const hasUnmatchedItems = items.some((it) => !it.ingredient_id);
 
   // Submit and Approve
@@ -906,6 +965,37 @@ export function InvoiceReviewSplitView({
                     />
                   </div>
                   <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="paid_now" className="text-xs">
+                        Thanh toán ngay (VNĐ)
+                      </Label>
+                      <div className="flex items-center gap-1.5 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => setPaidNow(calculatedTotal)}
+                          className="text-primary hover:underline font-medium"
+                        >
+                          Trả đủ (100%)
+                        </button>
+                        <span className="text-muted-foreground">•</span>
+                        <button
+                          type="button"
+                          onClick={() => setPaidNow(0)}
+                          className="text-muted-foreground hover:underline"
+                        >
+                          Ghi nợ
+                        </button>
+                      </div>
+                    </div>
+                    <Input
+                      id="paid_now"
+                      type="number"
+                      value={paidNow}
+                      onChange={(e) => setPaidNow(Math.max(0, Number(e.target.value)))}
+                      className="h-9 text-xs font-medium"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
                     <Label htmlFor="paid_method" className="text-xs">
                       Hình thức
                     </Label>
@@ -935,33 +1025,121 @@ export function InvoiceReviewSplitView({
                     <Receipt className="size-3.5 text-primary" />
                     Đối Chiếu Số Liệu & Thuế VAT
                   </h4>
-                  {extractedTaxAmount > 0 && (
-                    <Badge variant={isVatAllocated ? "default" : "secondary"} className="text-[10px] gap-1">
+                  {isVatAllocated ? (
+                    <Badge variant="default" className="text-[10px] gap-1 bg-emerald-600 text-white hover:bg-emerald-600">
+                      <CheckCircle2 className="size-2.5" />
+                      Đã phân bổ vào đơn giá
+                    </Badge>
+                  ) : taxAmount > 0 ? (
+                    <Badge variant="secondary" className="text-[10px] gap-1 bg-amber-500/15 text-amber-700 dark:text-amber-300 border-amber-500/30">
                       <Percent className="size-2.5" />
-                      {taxPercent > 0 ? `VAT ${taxPercent}%` : "Có thuế GTGT"}
+                      {taxPercent > 0 ? `VAT ${taxPercent}%` : `VAT +${formatVND(taxAmount)}`}
+                    </Badge>
+                  ) : (
+                    <Badge variant="outline" className="text-[10px] text-muted-foreground">
+                      Không VAT (0%)
                     </Badge>
                   )}
                 </div>
+
+                {/* VAT Quick Presets */}
+                <div className="space-y-1">
+                  <div className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>Mức thuế VAT:</span>
+                    {vatPreset === "custom" && (
+                      <span className="text-[10px] text-primary font-medium">Tùy chỉnh số tiền</span>
+                    )}
+                  </div>
+                  <div className="grid grid-cols-5 gap-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "0" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("0")}
+                      className={`h-7 text-xs px-1 ${vatPreset === "0" ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-black font-semibold" : ""}`}
+                    >
+                      0%
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "5" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("5")}
+                      className={`h-7 text-xs px-1 ${vatPreset === "5" ? "bg-primary text-primary-foreground font-semibold" : ""}`}
+                    >
+                      5%
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "8" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("8")}
+                      className={`h-7 text-xs px-1 ${vatPreset === "8" ? "bg-primary text-primary-foreground font-semibold" : ""}`}
+                    >
+                      8%
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "10" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("10")}
+                      className={`h-7 text-xs px-1 ${vatPreset === "10" ? "bg-primary text-primary-foreground font-semibold" : ""}`}
+                    >
+                      10%
+                    </Button>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "custom" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("custom")}
+                      className={`h-7 text-[11px] px-1 ${vatPreset === "custom" ? "bg-amber-600 hover:bg-amber-700 text-white font-semibold" : ""}`}
+                    >
+                      Tùy chỉnh
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Custom tax input box */}
+                {(vatPreset === "custom" || showCustomTaxInput) && (
+                  <div className="grid grid-cols-2 gap-2 p-2 bg-muted/40 rounded border text-xs">
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Tiền thuế VAT (VNĐ)</Label>
+                      <Input
+                        type="number"
+                        value={taxAmount}
+                        onChange={(e) => handleCustomTaxChange(Number(e.target.value))}
+                        className="h-7 text-xs mt-0.5"
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-[10px] text-muted-foreground">Tổng hóa đơn (VNĐ)</Label>
+                      <Input
+                        type="number"
+                        value={targetInvoiceTotal}
+                        onChange={(e) => handleTargetTotalChange(Number(e.target.value))}
+                        className="h-7 text-xs mt-0.5 font-medium text-primary"
+                      />
+                    </div>
+                  </div>
+                )}
 
                 {/* Detailed breakdown */}
                 <div className="space-y-1 text-xs">
                   <div className="flex justify-between py-0.5 text-muted-foreground">
                     <span>Tiền hàng (chưa thuế):</span>
-                    <span className="font-medium text-foreground">{formatVND(extractedSubtotal)}</span>
+                    <span className="font-medium text-foreground">{formatVND(baseSubtotal)}</span>
                   </div>
 
-                  {(extractedTaxAmount > 0 || taxPercent > 0) && (
-                    <div className="flex justify-between py-0.5 text-muted-foreground">
-                      <span>Thuế GTGT ({taxPercent > 0 ? `${taxPercent}%` : "VAT"}):</span>
-                      <span className="font-medium text-amber-600 dark:text-amber-400">
-                        +{formatVND(extractedTaxAmount)}
-                      </span>
-                    </div>
-                  )}
+                  <div className="flex justify-between py-0.5 text-muted-foreground">
+                    <span>Thuế GTGT ({taxPercent > 0 ? `${taxPercent}%` : "VAT"}):</span>
+                    <span className={`font-medium ${taxAmount > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-foreground"}`}>
+                      +{formatVND(taxAmount)}
+                    </span>
+                  </div>
 
                   <div className="flex justify-between py-1 border-t font-semibold">
                     <span>Tổng hóa đơn thanh toán:</span>
-                    <span className="text-primary">{formatVND(reviewData.total_amount)}</span>
+                    <span className="text-primary font-bold text-sm">{formatVND(targetInvoiceTotal)}</span>
                   </div>
 
                   <div className="flex justify-between py-0.5 text-muted-foreground">
@@ -971,54 +1149,30 @@ export function InvoiceReviewSplitView({
                 </div>
 
                 {/* VAT Allocation Controls */}
-                {(extractedTaxAmount > 0 || taxPercent > 0 || reviewData.total_amount > calculatedTotal) && (
-                  <div className="pt-2 border-t space-y-2">
+                {taxAmount > 0 && (
+                  <div className="pt-1.5 border-t">
                     {!isVatAllocated ? (
-                      <div className="p-2.5 rounded-md bg-amber-500/10 border border-amber-500/20 space-y-2">
+                      <div className="p-2.5 rounded-md bg-amber-500/10 border border-amber-500/25 space-y-2">
                         <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                          Đơn giá trên hóa đơn đang là <strong>giá chưa VAT</strong>. Bạn có thể phân bổ thuế vào đơn giá để khớp 100% công nợ NCC và tính đúng giá vốn món ăn.
+                          Đơn giá trong bảng đang là <strong>giá chưa VAT</strong> ({formatVND(calculatedTotal)}).
+                          Tổng hóa đơn là <strong>{formatVND(targetInvoiceTotal)}</strong> (chênh lệch +{formatVND(taxAmount)} thuế VAT).
                         </div>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="default"
-                            onClick={() => handleAllocateVat(taxPercent || 8)}
-                            className="h-7 text-xs gap-1 bg-amber-600 hover:bg-amber-700 text-white"
-                          >
-                            <Percent className="size-3" />
-                            Phân bổ VAT {taxPercent > 0 ? `(${taxPercent}%)` : ""} vào đơn giá
-                          </Button>
-
-                          {taxPercent !== 8 && taxPercent !== 10 && (
-                            <>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleAllocateVat(8)}
-                                className="h-7 text-[11px] px-2"
-                              >
-                                +8% VAT
-                              </Button>
-                              <Button
-                                type="button"
-                                size="sm"
-                                variant="outline"
-                                onClick={() => handleAllocateVat(10)}
-                                className="h-7 text-[11px] px-2"
-                              >
-                                +10% VAT
-                              </Button>
-                            </>
-                          )}
-                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="default"
+                          onClick={() => applyVatAllocation(taxAmount, taxPercent)}
+                          className="w-full h-7 text-xs gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium shadow-sm"
+                        >
+                          <Percent className="size-3" />
+                          Phân bổ thuế (+{formatVND(taxAmount)}) vào đơn giá hàng
+                        </Button>
                       </div>
                     ) : (
-                      <div className="p-2.5 rounded-md bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-between gap-2">
+                      <div className="p-2.5 rounded-md bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
                           <CheckCircle2 className="size-4 shrink-0" />
-                          <span>Đã phân bổ VAT {taxPercent}% vào đơn giá kho</span>
+                          <span>Đã phân bổ VAT vào đơn giá hàng</span>
                         </div>
                         <Button
                           type="button"
@@ -1028,7 +1182,7 @@ export function InvoiceReviewSplitView({
                           className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1"
                         >
                           <Undo2 className="size-3" />
-                          Giá chưa VAT
+                          Hoàn tác
                         </Button>
                       </div>
                     )}
@@ -1045,7 +1199,7 @@ export function InvoiceReviewSplitView({
                   ) : (
                     <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium">
                       <AlertTriangle className="size-4" />
-                      Lệch {formatVND(Math.abs(calculatedTotal - reviewData.total_amount))} so với hóa đơn
+                      Lệch {formatVND(Math.abs(calculatedTotal - targetInvoiceTotal))} so với hóa đơn
                     </div>
                   )}
 

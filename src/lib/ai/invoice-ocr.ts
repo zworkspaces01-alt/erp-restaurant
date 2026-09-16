@@ -27,8 +27,11 @@ CỰC KỲ QUAN TRỌNG:
    - "Thành tiền" (Line total): = SL giao * Đơn giá (vd: 0.5kg Gừng * 30,000 = 15,000đ; 0.1kg Ngò rí * 59,000 = 5,900đ; Măng tây cồ: 0 * 139,000 = 0).
    - TUYỆT ĐỐI KHÔNG lấy Thành tiền làm Đơn giá!
 
-4. TỔNG TIỀN ĐỢT GIAO THỰC TẾ:
-   - "total_amount": Bằng tổng các dòng thành tiền THỰC GIAO trên phiếu này (ví dụ: các dòng cộng lại = 227,100đ).
+4. TỔNG TIỀN & THUẾ VAT (CỰC KỲ QUAN TRỌNG):
+   - "subtotal": Tổng tiền hàng chưa thuế (tổng các dòng thực giao cộng lại).
+   - "tax_amount": Tiền thuế GTGT / VAT nếu hóa đơn có ghi riêng hoặc suy ra từ chênh lệch tổng tiền. Nếu không có thì để 0.
+   - "tax_percent": Tỷ lệ thuế VAT (% ví dụ 0, 5, 8, 10). Nếu không ghi thì để 0.
+   - "total_amount": BẮT BUỘC ĐỌC ĐÚNG Ô TỔNG TIỀN THANH TOÁN (ví dụ ô "TỔNG TIỀN (VND)" ở góc trên bên trái phiếu giao hàng Kamereo, hoặc dòng "Tổng cộng thanh toán" ở cuối phiếu). Ví dụ phiếu ghi 1,021,090đ thì total_amount PHẢI LÀ 1021090 (chênh lệch so với subtotal 976,000đ chính là tiền thuế VAT 45,090đ).
 
 Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
 {
@@ -42,7 +45,10 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
     ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thành_tiền]
   ],
   "excluded_items": [],
-  "total_amount": 227100
+  "subtotal": 976000,
+  "tax_percent": 0,
+  "tax_amount": 45090,
+  "total_amount": 1021090
 }
 `;
 
@@ -102,7 +108,18 @@ function parseJsonSafe(text: string): InvoiceParsedData {
       : [];
 
     const calculatedSubtotal = items.reduce((acc, curr) => acc + (curr.line_total || 0), 0);
-    const totalAmount = Number(raw.total_amount) || calculatedSubtotal;
+    const subtotal = Number(raw.subtotal) || calculatedSubtotal;
+    let taxAmount = Number(raw.tax_amount) || 0;
+    let taxPercent = Number(raw.tax_percent) || 0;
+    const rawTotalAmount = Number(raw.total_amount) || 0;
+    const totalAmount = rawTotalAmount > 0 ? rawTotalAmount : subtotal + taxAmount;
+
+    if (taxAmount <= 0 && totalAmount > subtotal) {
+      taxAmount = totalAmount - subtotal;
+    }
+    if (taxPercent <= 0 && subtotal > 0 && taxAmount > 0) {
+      taxPercent = Math.round((taxAmount / subtotal) * 100);
+    }
 
     return {
       supplier_name: (typeof raw.supplier_name === "string" ? raw.supplier_name : typeof raw.supplier === "string" ? raw.supplier : null) || null,
@@ -113,9 +130,9 @@ function parseJsonSafe(text: string): InvoiceParsedData {
       order_date: (typeof raw.order_date === "string" ? raw.order_date : null) || null,
       items,
       excluded_items,
-      subtotal: Number(raw.subtotal) || calculatedSubtotal,
-      tax_percent: Number(raw.tax_percent) || 0,
-      tax_amount: Number(raw.tax_amount) || 0,
+      subtotal,
+      tax_percent: taxPercent,
+      tax_amount: taxAmount,
       total_amount: totalAmount,
     };
   };
@@ -706,13 +723,40 @@ export function mergeMultiPageInvoiceData(pages: InvoiceParsedData[]): InvoicePa
     }
   }
 
-  // 4. Tính toán tổng tiền
+  // 4. Tính toán tổng tiền & thuế VAT
   const calculatedItemsTotal = allItems.reduce((acc, it) => acc + (it.line_total || 0), 0);
-  const lastPageTotal = pages[pages.length - 1]?.total_amount || 0;
+
+  // Tìm tổng tiền thanh toán ghi trên hóa đơn (có thể nằm ở trang 1 như Kamereo, hoặc trang cuối)
+  const candidateTotals = pages
+    .map((p) => Number(p.total_amount) || 0)
+    .filter((amt) => amt > 0);
+
+  // Ưu tiên tổng tiền lớn hơn hoặc bằng tổng các mặt hàng (thường đã bao gồm thuế VAT/phí giao hàng)
+  const explicitGrandTotal =
+    candidateTotals.find((amt) => amt >= calculatedItemsTotal) ||
+    candidateTotals[candidateTotals.length - 1] ||
+    calculatedItemsTotal;
+
+  // Tổng hợp thuế VAT từ các trang
+  const explicitTaxPercent = pages.find((p) => (p.tax_percent || 0) > 0)?.tax_percent || 0;
+  let explicitTaxAmount = pages.reduce((sum, p) => sum + (p.tax_amount || 0), 0);
+
+  // Nếu chưa có tax_amount nhưng explicitGrandTotal lớn hơn tổng tiền hàng (subtotal)
+  if (explicitTaxAmount <= 0 && explicitGrandTotal > calculatedItemsTotal) {
+    explicitTaxAmount = explicitGrandTotal - calculatedItemsTotal;
+  }
+
+  const taxPercent =
+    explicitTaxPercent > 0
+      ? explicitTaxPercent
+      : (calculatedItemsTotal > 0 && explicitTaxAmount > 0
+          ? Math.round((explicitTaxAmount / calculatedItemsTotal) * 100)
+          : 0);
+
   const finalTotal =
-    lastPageTotal > 0 && Math.abs(lastPageTotal - calculatedItemsTotal) < 1000
-      ? lastPageTotal
-      : calculatedItemsTotal;
+    explicitGrandTotal > 0
+      ? explicitGrandTotal
+      : calculatedItemsTotal + explicitTaxAmount;
 
   return {
     supplier_name: supplierName,
@@ -724,8 +768,8 @@ export function mergeMultiPageInvoiceData(pages: InvoiceParsedData[]): InvoicePa
     items: allItems,
     excluded_items: Array.from(excludedSet),
     subtotal: calculatedItemsTotal,
-    tax_percent: 0,
-    tax_amount: 0,
+    tax_percent: taxPercent,
+    tax_amount: explicitTaxAmount,
     total_amount: finalTotal,
   };
 }
