@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { fail, ok, type ActionResult } from "@/types/actions";
+import { fail, failZod, ok, type ActionResult } from "@/types/actions";
 import { ingredientSchema, parseDbError, type IngredientInput } from "@/types/restaurant";
 import { normalizeVietnamese, computeSimilarity } from "@/lib/ai/invoice-matcher";
 import { todayISO } from "@/lib/format";
@@ -44,7 +44,7 @@ function toIngredientRow(input: IngredientInput) {
 export async function createIngredient(input: IngredientInput): Promise<ActionResult<{ id: string }>> {
   const parsed = ingredientSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();
@@ -68,7 +68,7 @@ export async function updateIngredient(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = ingredientSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();
@@ -129,7 +129,7 @@ export async function recordStockAdjustment(
 ): Promise<ActionResult<{ id: string | null }>> {
   const parsed = stockAdjustmentWithDateSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();
@@ -162,7 +162,7 @@ export async function recordStocktakeSheet(
 ): Promise<ActionResult<{ recorded: number; skipped: number }>> {
   const parsed = stocktakeSheetSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();

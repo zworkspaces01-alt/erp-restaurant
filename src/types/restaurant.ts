@@ -315,8 +315,38 @@ const optionalText = z
 /** Required trimmed string with a Vietnamese message. */
 const requiredText = (msg: string, min = 1) => z.string({ required_error: msg }).trim().min(min, msg);
 
+/** Chuẩn hóa các định dạng ngày phổ biến (DD/MM/YYYY, DD-MM-YYYY, YYYY/MM/DD) về chuẩn YYYY-MM-DD */
+export function normalizeDateToISO(val: unknown): unknown {
+  if (typeof val !== "string") return val;
+  const trimmed = val.trim();
+  if (!trimmed) return trimmed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+  // Format DD/MM/YYYY hoặc DD-MM-YYYY
+  const m = trimmed.match(/^(\d{1,2})[/.-](\d{1,2})[/.-](\d{4})$/);
+  if (m) {
+    const day = m[1].padStart(2, "0");
+    const month = m[2].padStart(2, "0");
+    const year = m[3];
+    return `${year}-${month}-${day}`;
+  }
+  // Format YYYY/MM/DD
+  const m2 = trimmed.match(/^(\d{4})[/.-](\d{1,2})[/.-](\d{1,2})$/);
+  if (m2) {
+    const year = m2[1];
+    const month = m2[2].padStart(2, "0");
+    const day = m2[3].padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }
+  return trimmed;
+}
+
 const uuid = (msg: string = MSG.uuid) => z.string({ required_error: msg }).uuid(msg);
-const dateString = (msg: string = MSG.date) => z.string({ required_error: msg }).trim().regex(DATE_RE, msg);
+const dateString = (msg: string = MSG.date) =>
+  z
+    .string({ required_error: msg })
+    .trim()
+    .transform((val) => normalizeDateToISO(val) as string)
+    .refine((val) => DATE_RE.test(val), msg);
 
 const optionalUuid = (msg: string) =>
   z
@@ -332,7 +362,7 @@ const optionalDate = z
   .trim()
   .optional()
   .nullable()
-  .transform((v) => (v ? v : null))
+  .transform((v) => (v ? (normalizeDateToISO(v) as string) : null))
   .refine((v) => v === null || DATE_RE.test(v), MSG.date);
 
 const optionalTime = z

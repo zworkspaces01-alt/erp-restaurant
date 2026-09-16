@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import type { Json } from "@/types/database";
-import { fail, ok, type ActionResult } from "@/types/actions";
+import { fail, failZod, ok, type ActionResult } from "@/types/actions";
 import {
   parseDbError,
   purchaseOrderSchema,
@@ -57,7 +57,7 @@ export async function createSupplier(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = supplierSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();
@@ -92,7 +92,7 @@ export async function updateSupplier(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = supplierSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();
@@ -128,7 +128,7 @@ export async function createPurchaseOrder(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = purchaseOrderSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const items: CreatePurchaseOrderItemPayload[] = parsed.data.items.map((it) => ({
@@ -172,7 +172,7 @@ export async function updatePurchaseOrderMeta(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = purchaseOrderMetaSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   // Chỉ gửi đúng các cột người dùng thực sự chỉnh — tránh xóa trắng dữ liệu cũ.
@@ -215,7 +215,7 @@ export async function addPurchaseOrderLine(
 ): Promise<ActionResult<{ id: string }>> {
   const parsed = purchaseOrderLineSchema.safeParse(input);
   if (!parsed.success) {
-    return fail("Dữ liệu không hợp lệ", parsed.error.flatten().fieldErrors);
+    return failZod(parsed.error);
   }
 
   const supabase = await createClient();

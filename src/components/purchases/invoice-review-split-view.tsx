@@ -24,10 +24,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatNumber, formatVND } from "@/lib/format";
-import type {
-  InvoiceOcrReviewData,
-  MatchedInvoiceItem,
-  PaymentMethod,
+import {
+  type InvoiceOcrReviewData,
+  type MatchedInvoiceItem,
+  type PaymentMethod,
+  normalizeDateToISO,
 } from "@/types/restaurant";
 import type {
   IngredientPickRow,
@@ -412,6 +413,13 @@ export function InvoiceReviewSplitView({
     setServerError(null);
 
     try {
+      // Kiểm tra UUID nhà cung cấp
+      const validSupplierUuid =
+        supplierId &&
+        /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(supplierId)
+          ? supplierId
+          : null;
+
       // Tự động tạo nguyên liệu cho bất kỳ mục nào chưa có trong kho
       const finalItems = [...items];
       for (let i = 0; i < finalItems.length; i++) {
@@ -426,7 +434,7 @@ export function InvoiceReviewSplitView({
             conversion_factor: it.conversion_factor || 1,
             min_alert_stock: 0,
             default_price: it.unit_price || 0,
-            default_supplier_id: supplierId || null,
+            default_supplier_id: validSupplierUuid,
             is_active: true,
             note: "Tự động tạo khi duyệt hóa đơn nhập kho",
           });
@@ -445,26 +453,45 @@ export function InvoiceReviewSplitView({
         }
       }
 
+      // Lọc bỏ các dòng có số lượng <= 0 (các món không giao trên phiếu)
+      const validItemsToImport = finalItems.filter((it) => it.quantity > 0);
+      if (validItemsToImport.length === 0) {
+        const msg = "Không có mặt hàng nào có số lượng thực giao lớn hơn 0 để nhập kho.";
+        setServerError(msg);
+        toast.error(msg);
+        return;
+      }
+
+      const totalValidAmount = validItemsToImport.reduce(
+        (sum, it) => sum + it.quantity * it.unit_price,
+        0
+      );
+      const sanitizedPaidNow = Math.min(paidNow, totalValidAmount);
+      const sanitizedOrderDate =
+        typeof orderDate === "string" && orderDate.trim()
+          ? (normalizeDateToISO(orderDate) as string)
+          : new Date().toISOString().slice(0, 10);
+
       const finalInvoiceImageUrl =
         images.length > 1
           ? JSON.stringify(images)
-          : (images[0] || reviewData.image_url || null);
+          : images[0] || reviewData.image_url || null;
 
       const payload = {
         supplier_id: supplierId,
-        order_date: orderDate,
+        order_date: sanitizedOrderDate,
         due_date: null,
         invoice_number: invoiceNumber || null,
         invoice_image_url: finalInvoiceImageUrl,
         note: note || null,
-        items: finalItems.map((it) => ({
+        items: validItemsToImport.map((it) => ({
           ingredient_id: it.ingredient_id!,
           quantity: it.quantity,
           unit_price: it.unit_price,
           unit: it.unit || null,
-          conversion_factor: it.conversion_factor,
+          conversion_factor: it.conversion_factor || 1,
         })),
-        paid_now: paidNow,
+        paid_now: sanitizedPaidNow,
         paid_method: paidMethod,
       };
 
@@ -472,6 +499,7 @@ export function InvoiceReviewSplitView({
 
       if (!res.success) {
         setServerError(res.error);
+        toast.error(res.error, { duration: 8000 });
         return;
       }
 
@@ -480,9 +508,10 @@ export function InvoiceReviewSplitView({
       router.push(`/purchases/${res.data.id}`);
       router.refresh();
     } catch (err) {
-      setServerError(
-        err instanceof Error ? err.message : "Đã xảy ra lỗi không xác định khi lưu phiếu nhập."
-      );
+      const errMsg =
+        err instanceof Error ? err.message : "Đã xảy ra lỗi không xác định khi lưu phiếu nhập.";
+      setServerError(errMsg);
+      toast.error(errMsg, { duration: 8000 });
     } finally {
       setIsSubmitting(false);
     }
@@ -696,8 +725,12 @@ export function InvoiceReviewSplitView({
         <div className="lg:col-span-7 flex flex-col overflow-hidden bg-background">
           <div className="flex-1 overflow-y-auto p-6 space-y-6">
             {serverError && (
-              <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-md">
-                {serverError}
+              <div className="p-3.5 text-xs text-destructive bg-destructive/10 border border-destructive/30 rounded-lg flex items-start gap-2.5 font-medium shadow-sm">
+                <AlertTriangle className="size-4 shrink-0 mt-0.5 text-destructive" />
+                <div className="space-y-1">
+                  <p className="font-semibold text-destructive">Lỗi kiểm tra dữ liệu:</p>
+                  <p className="leading-relaxed whitespace-pre-wrap">{serverError}</p>
+                </div>
               </div>
             )}
 
