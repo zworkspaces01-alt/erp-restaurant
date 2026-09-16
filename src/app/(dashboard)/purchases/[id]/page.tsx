@@ -123,37 +123,63 @@ export default async function PurchaseOrderDetailPage({
         />
       </div>
 
-      {po.invoice_image_url ? (
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <FileText className="size-4 text-emerald-600 dark:text-emerald-400" />
-              Hóa đơn gốc đính kèm
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="max-w-lg rounded-lg border overflow-hidden bg-muted/20">
-              <a
-                href={po.invoice_image_url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="block group relative"
-                title="Bấm để mở ảnh gốc trong tab mới"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={po.invoice_image_url}
-                  alt={`Hóa đơn ${po.invoice_number || po.po_number || ""}`}
-                  className="w-full h-auto max-h-[400px] object-contain group-hover:opacity-90 transition-opacity"
-                />
-              </a>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Nhấp vào ảnh để xem kích thước đầy đủ trong tab mới.
-            </p>
-          </CardContent>
-        </Card>
-      ) : null}
+      {(() => {
+        const invoiceImages = (() => {
+          if (!po.invoice_image_url) return [];
+          try {
+            const parsed = JSON.parse(po.invoice_image_url);
+            if (Array.isArray(parsed)) {
+              return parsed.filter((s): s is string => typeof s === "string" && Boolean(s));
+            }
+          } catch {}
+          return po.invoice_image_url.split(",").map((s) => s.trim()).filter(Boolean);
+        })();
+
+        if (invoiceImages.length === 0) return null;
+
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileText className="size-4 text-emerald-600 dark:text-emerald-400" />
+                Hóa đơn gốc đính kèm {invoiceImages.length > 1 ? `(${invoiceImages.length} trang ảnh)` : ""}
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+                {invoiceImages.map((imgUrl, idx) => (
+                  <div key={idx} className="space-y-1.5">
+                    <div className="relative rounded-lg border overflow-hidden bg-muted/20 aspect-3/4 flex items-center justify-center">
+                      <a
+                        href={imgUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="block w-full h-full group relative"
+                        title={`Bấm để mở ảnh trang ${idx + 1} trong tab mới`}
+                      >
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={imgUrl}
+                          alt={`Hóa đơn trang ${idx + 1}`}
+                          className="w-full h-full object-contain group-hover:opacity-90 transition-opacity"
+                        />
+                        {invoiceImages.length > 1 && (
+                          <span className="absolute top-2 left-2 px-2 py-0.5 rounded text-[11px] font-bold bg-background/90 backdrop-blur-xs shadow-xs">
+                            Trang {idx + 1}
+                          </span>
+                        )}
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Nhấp vào từng ảnh để phóng to và xem chi tiết trong tab mới.
+              </p>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {po.note ? (
         <Card>

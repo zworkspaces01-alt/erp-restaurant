@@ -652,3 +652,139 @@ export async function parseInvoiceImage(options: OcrRequestOptions): Promise<{
     modelUsed: "Demo Mode (Chưa cấu hình GROQ_API_KEY)",
   };
 }
+
+/**
+ * Gộp kết quả trích xuất từ nhiều ảnh/nhiều trang hóa đơn thành một đối tượng duy nhất:
+ * - Thông tin nhà cung cấp, ngày, số hóa đơn lấy từ trang đầu tiên có dữ liệu.
+ * - Danh sách nguyên liệu nối tiếp từ tất cả các trang, tự động khử trùng lặp các dòng giao thoa.
+ * - Các mặt hàng gạch bỏ tổng hợp từ tất cả các trang.
+ * - Tính lại tổng tiền chuẩn xác từ toàn bộ các dòng hàng thực giao.
+ */
+export function mergeMultiPageInvoiceData(pages: InvoiceParsedData[]): InvoiceParsedData {
+  if (pages.length === 0) {
+    throw new Error("Không có dữ liệu hóa đơn nào để gộp.");
+  }
+  if (pages.length === 1) {
+    return pages[0];
+  }
+
+  // 1. Tìm thông tin chung (Header info) từ trang đầu tiên có dữ liệu
+  const supplierName = pages.find((p) => p.supplier_name?.trim())?.supplier_name || null;
+  const supplierTaxCode = pages.find((p) => p.supplier_tax_code?.trim())?.supplier_tax_code || null;
+  const supplierPhone = pages.find((p) => p.supplier_phone?.trim())?.supplier_phone || null;
+  const supplierAddress = pages.find((p) => p.supplier_address?.trim())?.supplier_address || null;
+  const invoiceNumber = pages.find((p) => p.invoice_number?.trim())?.invoice_number || null;
+  const orderDate = pages.find((p) => p.order_date?.trim())?.order_date || null;
+
+  // 2. Gộp danh sách hàng hóa (items) tuần tự theo trang và khử trùng lặp dòng overlap
+  const allItems: InvoiceParsedItem[] = [];
+  for (const page of pages) {
+    const pageItems = page.items || [];
+    for (const item of pageItems) {
+      // Kiểm tra nếu trùng lặp hoàn toàn với dòng cuối cùng đã thêm (trường hợp chụp ảnh 2 trang bị dính lặp dòng cuối trang 1 lên đầu trang 2)
+      if (allItems.length > 0) {
+        const last = allItems[allItems.length - 1];
+        const isDuplicateOverlap =
+          last.raw_name.trim().toLowerCase() === item.raw_name.trim().toLowerCase() &&
+          last.quantity === item.quantity &&
+          last.unit_price === item.unit_price;
+        if (isDuplicateOverlap) {
+          continue; // Bỏ qua dòng bị trùng giao thoa giữa 2 ảnh
+        }
+      }
+      allItems.push(item);
+    }
+  }
+
+  // 3. Tổng hợp mặt hàng bị gạch tay trên tất cả các trang
+  const excludedSet = new Set<string>();
+  for (const page of pages) {
+    if (Array.isArray(page.excluded_items)) {
+      page.excluded_items.forEach((ex) => {
+        if (ex && ex.trim()) excludedSet.add(ex.trim());
+      });
+    }
+  }
+
+  // 4. Tính toán tổng tiền
+  const calculatedItemsTotal = allItems.reduce((acc, it) => acc + (it.line_total || 0), 0);
+  const lastPageTotal = pages[pages.length - 1]?.total_amount || 0;
+  const finalTotal =
+    lastPageTotal > 0 && Math.abs(lastPageTotal - calculatedItemsTotal) < 1000
+      ? lastPageTotal
+      : calculatedItemsTotal;
+
+  return {
+    supplier_name: supplierName,
+    supplier_tax_code: supplierTaxCode,
+    supplier_phone: supplierPhone,
+    supplier_address: supplierAddress,
+    invoice_number: invoiceNumber,
+    order_date: orderDate,
+    items: allItems,
+    excluded_items: Array.from(excludedSet),
+    subtotal: calculatedItemsTotal,
+    tax_percent: 0,
+    tax_amount: 0,
+    total_amount: finalTotal,
+  };
+}
+
+export interface MultiInvoiceOcrRequestOptions {
+  images: Array<{
+    base64Data: string;
+    mimeType: string;
+  }>;
+  apiKeyOverride?: string;
+  isDemo?: boolean;
+}
+
+/**
+ * Trích xuất hóa đơn từ một hoặc nhiều ảnh (hóa đơn nhiều trang)
+ */
+export async function parseMultipleInvoiceImages(
+  options: MultiInvoiceOcrRequestOptions
+): Promise<{
+  data: InvoiceParsedData;
+  isMock: boolean;
+  modelUsed: string;
+}> {
+  if (!options.images || options.images.length === 0) {
+    throw new Error("Không có ảnh nào để quét.");
+  }
+
+  if (options.images.length === 1) {
+    return parseInvoiceImage({
+      base64Data: options.images[0].base64Data,
+      mimeType: options.images[0].mimeType,
+      apiKeyOverride: options.apiKeyOverride,
+      isDemo: options.isDemo,
+    });
+  }
+
+  // Quét từng ảnh theo thứ tự trang
+  const pageResults: InvoiceParsedData[] = [];
+  let lastModelUsed = "Groq Vision AI";
+  let isMock = false;
+
+  for (let i = 0; i < options.images.length; i++) {
+    const img = options.images[i];
+    const res = await parseInvoiceImage({
+      base64Data: img.base64Data,
+      mimeType: img.mimeType,
+      apiKeyOverride: options.apiKeyOverride,
+      isDemo: options.isDemo,
+    });
+    pageResults.push(res.data);
+    lastModelUsed = res.modelUsed;
+    if (res.isMock) isMock = true;
+  }
+
+  const merged = mergeMultiPageInvoiceData(pageResults);
+  return {
+    data: merged,
+    isMock,
+    modelUsed: `${lastModelUsed} (${options.images.length} trang)`,
+  };
+}
+

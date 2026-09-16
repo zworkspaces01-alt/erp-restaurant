@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
-import { parseInvoiceImage, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
+import { parseMultipleInvoiceImages, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
 import {
   matchInvoiceData,
   normalizeVietnamese,
@@ -222,19 +222,19 @@ async function autoProvisionMissingEntities(
 }
 
 /**
- * Xử lý file ảnh hóa đơn: đọc AI OCR và so khớp với kho / nhà cung cấp hiện tại
+ * Xử lý file ảnh hóa đơn (hỗ trợ 1 hoặc nhiều ảnh): đọc AI OCR và so khớp với kho / nhà cung cấp hiện tại
  */
 export async function extractAndMatchInvoice(
   formData: FormData
 ): Promise<ActionResult<ExtractInvoiceResponse>> {
   try {
-    const file = formData.get("file") as File | null;
+    const rawFiles = formData.getAll("files") as File[];
+    const singleFile = formData.get("file") as File | null;
+    const allFiles: File[] = (rawFiles.length > 0 ? rawFiles : (singleFile ? [singleFile] : []))
+      .filter((f) => f && f.size > 0);
+
     const demoId = (formData.get("demo_id") as string | null) || null;
     const apiKeyOverride = (formData.get("api_key") as string | null) || undefined;
-
-    let base64Data = "";
-    let mimeType = "image/jpeg";
-    let imageUrl = "";
 
     const supabase = await createClient();
 
@@ -272,29 +272,34 @@ export async function extractAndMatchInvoice(
       });
     }
 
-    if (!file || file.size === 0) {
-      return fail("Vui lòng chọn hoặc tải lên file ảnh hóa đơn.");
+    if (allFiles.length === 0) {
+      return fail("Vui lòng chọn hoặc tải lên ít nhất 1 file ảnh hóa đơn.");
     }
 
-    // Đọc và tối ưu buffer file (auto-rotate EXIF, resize, nén nhẹ)
-    const arrayBuffer = await file.arrayBuffer();
-    const rawBuffer = Buffer.from(arrayBuffer);
-    const optimized = await optimizeImageForOcr(rawBuffer, file.type || "image/jpeg");
-    base64Data = optimized.base64;
-    mimeType = optimized.mimeType;
+    // 2. Tối ưu ảnh và upload lưu trữ tất cả các file ảnh
+    const optimizedImages: Array<{ base64Data: string; mimeType: string }> = [];
+    const imageUrls: string[] = [];
 
-    // 2. Lưu ảnh qua Cloudinary (hoặc Supabase Storage fallback) bằng buffer đã tối ưu
-    const uploadRes = await uploadImage(optimized.buffer, {
-      filename: file.name,
-      contentType: mimeType,
-      folder: "restaurant-erp/invoices",
-    });
-    imageUrl = uploadRes.url;
+    for (const file of allFiles) {
+      const arrayBuffer = await file.arrayBuffer();
+      const rawBuffer = Buffer.from(arrayBuffer);
+      const optimized = await optimizeImageForOcr(rawBuffer, file.type || "image/jpeg");
+      optimizedImages.push({
+        base64Data: optimized.base64,
+        mimeType: optimized.mimeType,
+      });
 
-    // 3. Gọi AI OCR Engine
-    const { data: parsedData, isMock, modelUsed } = await parseInvoiceImage({
-      base64Data,
-      mimeType,
+      const uploadRes = await uploadImage(optimized.buffer, {
+        filename: file.name,
+        contentType: optimized.mimeType,
+        folder: "restaurant-erp/invoices",
+      });
+      imageUrls.push(uploadRes.url);
+    }
+
+    // 3. Gọi AI OCR Engine cho 1 hoặc nhiều ảnh
+    const { data: parsedData, isMock, modelUsed } = await parseMultipleInvoiceImages({
+      images: optimizedImages,
       apiKeyOverride,
     });
 
@@ -310,12 +315,12 @@ export async function extractAndMatchInvoice(
         .eq("is_active", true),
     ]);
 
-    // 5. So khớp thông minh
+    // 5. So khớp thông minh (truyền mảng toàn bộ imageUrls)
     const reviewData = matchInvoiceData(
       parsedData,
       (suppliersData ?? []) as SupplierMatchCandidate[],
       (ingredientsData ?? []) as IngredientMatchCandidate[],
-      imageUrl
+      imageUrls
     );
 
     // 6. Tự động tạo nguyên liệu & NCC vào kho nếu chưa có
@@ -335,3 +340,4 @@ export async function extractAndMatchInvoice(
     );
   }
 }
+

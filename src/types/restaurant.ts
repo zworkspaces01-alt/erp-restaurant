@@ -646,6 +646,7 @@ export interface MatchedInvoiceItem {
 
 export interface InvoiceOcrReviewData {
   image_url: string;
+  image_urls?: string[];
   supplier_id: string | null;
   supplier_name_raw: string | null;
   matched_supplier_name?: string | null;

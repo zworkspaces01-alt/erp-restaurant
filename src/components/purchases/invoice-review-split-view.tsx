@@ -5,9 +5,12 @@ import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   FileCheck2,
   FileX2,
   HelpCircle,
+  Layers,
   Maximize2,
   Percent,
   Plus,
@@ -177,6 +180,15 @@ export function InvoiceReviewSplitView({
   };
 
   // Image Viewer Controls
+  const images: string[] =
+    reviewData.image_urls && reviewData.image_urls.length > 0
+      ? reviewData.image_urls
+      : reviewData.image_url
+      ? [reviewData.image_url]
+      : [];
+  const [activeImageIndex, setActiveImageIndex] = useState<number>(0);
+  const currentImageUrl = images[activeImageIndex] || reviewData.image_url || "";
+
   const [zoomLevel, setZoomLevel] = useState<number>(1);
   const [rotation, setRotation] = useState<number>(0);
 
@@ -374,12 +386,17 @@ export function InvoiceReviewSplitView({
         }
       }
 
+      const finalInvoiceImageUrl =
+        images.length > 1
+          ? JSON.stringify(images)
+          : (images[0] || reviewData.image_url || null);
+
       const payload = {
         supplier_id: supplierId,
         order_date: orderDate,
         due_date: null,
         invoice_number: invoiceNumber || null,
-        invoice_image_url: reviewData.image_url || null,
+        invoice_image_url: finalInvoiceImageUrl,
         note: note || null,
         items: finalItems.map((it) => ({
           ingredient_id: it.ingredient_id!,
@@ -425,6 +442,12 @@ export function InvoiceReviewSplitView({
             <Sparkles className="size-3 text-sky-500" />
             {modelUsed}
           </Badge>
+          {images.length > 1 && (
+            <Badge variant="secondary" className="gap-1 text-xs bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border-emerald-500/30">
+              <Layers className="size-3" />
+              {images.length} trang ảnh
+            </Badge>
+          )}
           {isMock && (
             <Badge variant="secondary" className="text-xs">
               Chế độ mẫu (Demo)
@@ -442,7 +465,7 @@ export function InvoiceReviewSplitView({
         {/* Left Column: Interactive Image Viewer (5 cols) */}
         <div className="lg:col-span-5 border-r flex flex-col bg-zinc-950/90 text-zinc-100 overflow-hidden relative select-none">
           {/* Viewer Floating Controls */}
-          <div className="absolute top-3 left-3 z-10 flex items-center gap-1.5 p-1 bg-zinc-900/80 backdrop-blur-md rounded-md border border-zinc-800 shadow-md">
+          <div className="absolute top-3 left-3 z-10 flex flex-wrap items-center gap-1.5 p-1 bg-zinc-900/85 backdrop-blur-md rounded-md border border-zinc-800 shadow-md">
             <Button
               type="button"
               variant="ghost"
@@ -486,15 +509,46 @@ export function InvoiceReviewSplitView({
             <span className="text-[11px] px-1 font-mono text-zinc-400">
               {Math.round(zoomLevel * 100)}%
             </span>
+
+            {/* Điều hướng trang ảnh khi có từ 2 trang trở lên */}
+            {images.length > 1 && (
+              <div className="flex items-center gap-1 pl-1.5 border-l border-zinc-700 ml-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-zinc-300 hover:text-white disabled:opacity-30"
+                  onClick={() => setActiveImageIndex((i) => Math.max(0, i - 1))}
+                  disabled={activeImageIndex === 0}
+                  title="Trang trước"
+                >
+                  <ChevronLeft className="size-4" />
+                </Button>
+                <span className="text-[11px] font-semibold text-emerald-400 whitespace-nowrap px-1">
+                  Trang {activeImageIndex + 1}/{images.length}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="size-7 text-zinc-300 hover:text-white disabled:opacity-30"
+                  onClick={() => setActiveImageIndex((i) => Math.min(images.length - 1, i + 1))}
+                  disabled={activeImageIndex === images.length - 1}
+                  title="Trang sau"
+                >
+                  <ChevronRight className="size-4" />
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Image Canvas Container */}
           <div className="flex-1 overflow-auto flex items-center justify-center p-4">
-            {reviewData.image_url && reviewData.image_url !== "/sample-invoice.png" ? (
+            {currentImageUrl && currentImageUrl !== "/sample-invoice.png" ? (
               // eslint-disable-next-line @next/next/no-img-element
               <img
-                src={reviewData.image_url}
-                alt="Ảnh hóa đơn gốc"
+                src={currentImageUrl}
+                alt={`Ảnh hóa đơn gốc - Trang ${activeImageIndex + 1}`}
                 style={{
                   transform: `scale(${zoomLevel}) rotate(${rotation}deg)`,
                   transformOrigin: "center center",
@@ -552,6 +606,31 @@ export function InvoiceReviewSplitView({
               </div>
             )}
           </div>
+
+          {/* Thanh thumbnail chuyển trang nhanh (nếu nhiều hơn 1 ảnh) */}
+          {images.length > 1 && (
+            <div className="p-2 border-t border-zinc-800 bg-zinc-900/90 flex items-center justify-center gap-2 overflow-x-auto">
+              {images.map((_, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setActiveImageIndex(idx)}
+                  className={`relative rounded border overflow-hidden transition-all flex items-center gap-1.5 px-2.5 py-1 text-xs cursor-pointer ${
+                    activeImageIndex === idx
+                      ? "border-emerald-500 bg-emerald-950/40 text-emerald-300 font-semibold shadow-xs"
+                      : "border-zinc-800 bg-zinc-950 text-zinc-400 hover:text-zinc-200"
+                  }`}
+                >
+                  <span
+                    className={`size-2 rounded-full inline-block ${
+                      activeImageIndex === idx ? "bg-emerald-400" : "bg-zinc-600"
+                    }`}
+                  />
+                  <span>Trang {idx + 1}</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
 
         {/* Right Column: Pre-filled Review & Approval Form (7 cols) */}

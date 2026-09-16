@@ -283,8 +283,11 @@ export function matchInvoiceData(
   parsed: InvoiceParsedData,
   suppliers: SupplierMatchCandidate[],
   ingredients: IngredientMatchCandidate[],
-  imageUrl: string
+  imageUrl: string | string[]
 ) {
+  const imageUrls = Array.isArray(imageUrl) ? imageUrl : [imageUrl].filter(Boolean);
+  const primaryImageUrl = imageUrls[0] || "";
+
   const supplierMatch = matchSupplier(parsed, suppliers);
 
   const matchedItems: MatchedInvoiceItem[] = (parsed.items || []).map((it) =>
@@ -297,7 +300,8 @@ export function matchInvoiceData(
   const totalAmount = parsed.total_amount ?? subtotal + taxAmount;
 
   return {
-    image_url: imageUrl,
+    image_url: primaryImageUrl,
+    image_urls: imageUrls,
     supplier_id: supplierMatch.supplier_id,
     supplier_name_raw: parsed.supplier_name ?? null,
     supplier_match_confidence: supplierMatch.match_confidence,
