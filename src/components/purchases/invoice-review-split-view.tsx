@@ -113,14 +113,26 @@ export function InvoiceReviewSplitView({
   };
 
   // VAT & Pricing Reconciliation States
-  const [rawItems] = useState<MatchedInvoiceItem[]>(() =>
-    reviewData.items.map((it) => ({ ...it }))
+  const [rawItems, setRawItems] = useState<MatchedInvoiceItem[]>(() =>
+    reviewData.items.map((it) => ({
+      ...it,
+      tax_rate: typeof it.tax_rate === "number" ? it.tax_rate : (it.is_taxable ? (reviewData.raw_extracted?.tax_percent || 8) : 0),
+      is_taxable: (it.tax_rate ?? 0) > 0 || Boolean(it.is_taxable),
+    }))
   );
 
   const baseSubtotal = rawItems.reduce((sum, it) => sum + (it.line_total || 0), 0);
 
+  // Tính tiền thuế từ các dòng mặt hàng
+  const initialItemTaxSum = reviewData.items.reduce((sum, it) => {
+    const rate = it.tax_rate || 0;
+    return rate > 0 ? sum + Math.round((it.line_total || 0) * (rate / 100)) : sum;
+  }, 0);
+
   const initialTaxAmount = reviewData.tax_amount > 0
     ? reviewData.tax_amount
+    : initialItemTaxSum > 0
+    ? initialItemTaxSum
     : Math.max(0, (reviewData.total_amount || 0) - baseSubtotal);
 
   const initialTaxPercent = reviewData.raw_extracted?.tax_percent ?? (
@@ -129,13 +141,16 @@ export function InvoiceReviewSplitView({
       : 0
   );
 
+  const hasItemTax = reviewData.items.some((it) => (it.tax_rate ?? 0) > 0);
+
   const [taxPercent, setTaxPercent] = useState<number>(initialTaxPercent);
   const [taxAmount, setTaxAmount] = useState<number>(initialTaxAmount);
   const [targetInvoiceTotal, setTargetInvoiceTotal] = useState<number>(
     reviewData.total_amount > 0 ? reviewData.total_amount : baseSubtotal + initialTaxAmount
   );
   const [isVatAllocated, setIsVatAllocated] = useState<boolean>(false);
-  const [vatPreset, setVatPreset] = useState<"0" | "5" | "8" | "10" | "custom">(() => {
+  const [vatPreset, setVatPreset] = useState<"items" | "0" | "5" | "8" | "10" | "custom">(() => {
+    if (hasItemTax) return "items";
     if (initialTaxPercent === 5) return "5";
     if (initialTaxPercent === 8) return "8";
     if (initialTaxPercent === 10) return "10";
@@ -143,13 +158,31 @@ export function InvoiceReviewSplitView({
     return "0";
   });
   const [showCustomTaxInput, setShowCustomTaxInput] = useState<boolean>(
-    initialTaxAmount > 0 && initialTaxPercent !== 5 && initialTaxPercent !== 8 && initialTaxPercent !== 10
+    initialTaxAmount > 0 && initialTaxPercent !== 5 && initialTaxPercent !== 8 && initialTaxPercent !== 10 && !hasItemTax
   );
 
   // Áp dụng mức VAT định sẵn hoặc tùy chỉnh
-  const handleSelectVatPreset = (preset: "0" | "5" | "8" | "10" | "custom") => {
+  const handleSelectVatPreset = (preset: "items" | "0" | "5" | "8" | "10" | "custom") => {
     setVatPreset(preset);
-    if (preset === "0") {
+    if (preset === "items") {
+      const newTaxSum = items.reduce((sum, it, i) => {
+        const r = it.tax_rate || 0;
+        if (r <= 0) return sum;
+        const rawPrice = rawItems[i]?.unit_price || it.unit_price;
+        return sum + Math.round(it.quantity * rawPrice * (r / 100));
+      }, 0);
+      setTaxAmount(newTaxSum);
+      setTargetInvoiceTotal(baseSubtotal + newTaxSum);
+      setTaxPercent(baseSubtotal > 0 ? Math.round((newTaxSum / baseSubtotal) * 100) : 0);
+      setShowCustomTaxInput(false);
+      if (isVatAllocated) {
+        applyVatAllocationInternal(items, rawItems, newTaxSum);
+      }
+    } else if (preset === "0") {
+      const updated = items.map((it) => ({ ...it, tax_rate: 0, is_taxable: false }));
+      const updatedRaw = rawItems.map((it) => ({ ...it, tax_rate: 0, is_taxable: false }));
+      setItems(updated);
+      setRawItems(updatedRaw);
       setTaxPercent(0);
       setTaxAmount(0);
       setTargetInvoiceTotal(baseSubtotal);
@@ -159,13 +192,17 @@ export function InvoiceReviewSplitView({
       }
     } else if (preset === "5" || preset === "8" || preset === "10") {
       const pct = Number(preset);
+      const updated = items.map((it) => ({ ...it, tax_rate: pct, is_taxable: true }));
+      const updatedRaw = rawItems.map((it) => ({ ...it, tax_rate: pct, is_taxable: true }));
+      setItems(updated);
+      setRawItems(updatedRaw);
       const computedTax = Math.round(baseSubtotal * (pct / 100));
       setTaxPercent(pct);
       setTaxAmount(computedTax);
       setTargetInvoiceTotal(baseSubtotal + computedTax);
       setShowCustomTaxInput(false);
       if (isVatAllocated) {
-        applyVatAllocation(computedTax, pct);
+        applyVatAllocationInternal(updated, updatedRaw, computedTax);
       }
     } else {
       setShowCustomTaxInput(true);
@@ -178,7 +215,7 @@ export function InvoiceReviewSplitView({
     setTargetInvoiceTotal(baseSubtotal + validTax);
     setTaxPercent(baseSubtotal > 0 ? Math.round((validTax / baseSubtotal) * 100) : 0);
     if (isVatAllocated) {
-      applyVatAllocation(validTax, 0);
+      applyVatAllocationInternal(items, rawItems, validTax);
     }
   };
 
@@ -189,55 +226,105 @@ export function InvoiceReviewSplitView({
     setTaxAmount(diff);
     setTaxPercent(baseSubtotal > 0 ? Math.round((diff / baseSubtotal) * 100) : 0);
     if (isVatAllocated) {
-      applyVatAllocation(diff, 0);
+      applyVatAllocationInternal(items, rawItems, diff);
     }
   };
 
-  // Phân bổ VAT vào từng dòng hàng hóa để đơn giá phản ánh đúng giá vốn và khớp 100% hóa đơn
-  const applyVatAllocation = (amountToAllocate: number, pct: number = 0) => {
+  // Phân bổ VAT vào từng dòng hàng hóa:
+  // CHỈ phân bổ thuế vào các mặt hàng CHỊU THUẾ (tax_rate > 0)
+  // Các mặt hàng KHÔNG CHỊU THUẾ (tax_rate === 0) giữ nguyên 100% đơn giá gốc
+  const applyVatAllocationInternal = (
+    currentItems: MatchedInvoiceItem[],
+    currentRaw: MatchedInvoiceItem[],
+    amountToAllocate: number
+  ) => {
     if (amountToAllocate <= 0) {
-      toast.error("Không có số tiền thuế VAT để phân bổ.");
       return;
     }
 
-    const desiredTotal = baseSubtotal + amountToAllocate;
-    const ratio = desiredTotal / (baseSubtotal || 1);
+    const currentBaseSubtotal = currentRaw.reduce(
+      (sum, it) => sum + (it.line_total || it.quantity * it.unit_price || 0),
+      0
+    );
 
-    setItems((prev) => {
-      let currentSum = 0;
-      const updated = prev.map((item, idx) => {
-        const raw = rawItems[idx] || item;
-        const newPrice = Math.round(raw.unit_price * ratio);
-        const newLineTotal = item.quantity * newPrice;
-        currentSum += newLineTotal;
+    // Tính tổng tiền hàng chưa thuế của riêng các món chịu thuế
+    const taxableBaseSum = currentItems.reduce((sum, it, i) => {
+      if ((it.tax_rate || 0) > 0) {
+        const raw = currentRaw[i] || it;
+        return sum + it.quantity * raw.unit_price;
+      }
+      return sum;
+    }, 0);
+
+    const hasTaxable = taxableBaseSum > 0;
+    const allocationBase = hasTaxable ? taxableBaseSum : currentBaseSubtotal;
+    const ratio = (allocationBase + amountToAllocate) / (allocationBase || 1);
+
+    let currentSum = 0;
+    const updated = currentItems.map((item, idx) => {
+      const raw = currentRaw[idx] || item;
+      const isTaxableRow = hasTaxable ? (item.tax_rate || 0) > 0 : true;
+
+      if (!isTaxableRow) {
+        // Mặt hàng không chịu thuế (KCT): GIỮ NGUYÊN ĐƠN GIÁ GỐC
+        const keepPrice = raw.unit_price;
+        const lineTotal = item.quantity * keepPrice;
+        currentSum += lineTotal;
         return {
           ...item,
-          unit_price: newPrice,
-          line_total: newLineTotal,
+          unit_price: keepPrice,
+          line_total: lineTotal,
         };
-      });
+      }
 
-      // Bù trừ chênh lệch làm tròn vào mặt hàng có thành tiền lớn nhất
-      const diff = desiredTotal - currentSum;
-      if (Math.abs(diff) > 0 && Math.abs(diff) < 10000 && updated.length > 0) {
-        let maxIdx = 0;
-        for (let i = 1; i < updated.length; i++) {
-          if (updated[i].line_total > updated[maxIdx].line_total) {
-            maxIdx = i;
-          }
+      // Mặt hàng chịu thuế: tăng đơn giá theo tỷ lệ thuế
+      const newPrice = Math.round(raw.unit_price * ratio);
+      const lineTotal = item.quantity * newPrice;
+      currentSum += lineTotal;
+      return {
+        ...item,
+        unit_price: newPrice,
+        line_total: lineTotal,
+      };
+    });
+
+    // Bù trừ chênh lệch làm tròn vào mặt hàng CHỊU THUẾ có thành tiền lớn nhất
+    const targetGrandTotal = currentBaseSubtotal + amountToAllocate;
+    const diff = targetGrandTotal - currentSum;
+    if (Math.abs(diff) > 0 && Math.abs(diff) < 10000 && updated.length > 0) {
+      let candidateIdx = -1;
+      let maxTotal = -1;
+      for (let i = 0; i < updated.length; i++) {
+        const isTaxableRow = hasTaxable ? (updated[i].tax_rate || 0) > 0 : true;
+        if (isTaxableRow && updated[i].line_total > maxTotal) {
+          maxTotal = updated[i].line_total;
+          candidateIdx = i;
         }
-        const target = updated[maxIdx];
+      }
+      if (candidateIdx !== -1) {
+        const target = updated[candidateIdx];
         if (target.quantity > 0) {
           const adjustedPrice = Math.round((target.line_total + diff) / target.quantity);
           target.unit_price = adjustedPrice;
           target.line_total = target.quantity * adjustedPrice;
         }
       }
+    }
 
-      return updated;
-    });
-
+    setItems(updated);
     setIsVatAllocated(true);
+  };
+
+  const applyVatAllocation = (amountToAllocate: number, pct: number = 0) => {
+    if (amountToAllocate <= 0) {
+      toast.error("Không có số tiền thuế VAT để phân bổ.");
+      return;
+    }
+    applyVatAllocationInternal(items, rawItems, amountToAllocate);
+
+    const taxableCount = items.filter((it) => (it.tax_rate || 0) > 0).length;
+    const nonTaxableCount = items.filter((it) => (it.tax_rate || 0) === 0).length;
+
     const vatLabel = pct > 0 ? `${pct}%` : `+${formatVND(amountToAllocate)}`;
     setNote((prev) => {
       const tag = `[Đã gồm VAT ${vatLabel}]`;
@@ -247,7 +334,58 @@ export function InvoiceReviewSplitView({
       return `${prev} ${tag}`.trim();
     });
 
-    toast.success(`Đã phân bổ thuế VAT (${vatLabel}) vào đơn giá kho!`);
+    if (taxableCount > 0 && nonTaxableCount > 0) {
+      toast.success(
+        `Đã phân bổ VAT vào ${taxableCount} món chịu thuế. ${nonTaxableCount} món KCT giữ nguyên đơn giá gốc!`
+      );
+    } else {
+      toast.success(`Đã phân bổ thuế VAT (${vatLabel}) vào đơn giá kho!`);
+    }
+  };
+
+  // Cập nhật thuế suất của một dòng mặt hàng cụ thể
+  const handleItemTaxRateChange = (index: number, newRate: number) => {
+    const validRate = Math.max(0, newRate);
+    const updatedItems = items.map((item, i) => {
+      if (i === index) {
+        return {
+          ...item,
+          tax_rate: validRate,
+          is_taxable: validRate > 0,
+        };
+      }
+      return item;
+    });
+    setItems(updatedItems);
+
+    const updatedRaw = rawItems.map((raw, i) => {
+      if (i === index) {
+        return {
+          ...raw,
+          tax_rate: validRate,
+          is_taxable: validRate > 0,
+        };
+      }
+      return raw;
+    });
+    setRawItems(updatedRaw);
+
+    // Tính lại tổng tiền thuế VAT từ các dòng chịu thuế
+    const newTaxSum = updatedItems.reduce((sum, it, i) => {
+      const r = it.tax_rate || 0;
+      if (r <= 0) return sum;
+      const rawPrice = updatedRaw[i]?.unit_price || it.unit_price;
+      return sum + Math.round(it.quantity * rawPrice * (r / 100));
+    }, 0);
+
+    setTaxAmount(newTaxSum);
+    setTargetInvoiceTotal(baseSubtotal + newTaxSum);
+    setTaxPercent(baseSubtotal > 0 ? Math.round((newTaxSum / baseSubtotal) * 100) : 0);
+    setVatPreset("items");
+
+    if (isVatAllocated) {
+      applyVatAllocationInternal(updatedItems, updatedRaw, newTaxSum);
+    }
   };
 
   // Hoàn tác về đơn giá gốc trước thuế
@@ -296,7 +434,30 @@ export function InvoiceReviewSplitView({
       const copy = [...prev];
       const current = { ...copy[index], ...patch };
       current.line_total = current.quantity * current.unit_price;
+      if (patch.tax_rate !== undefined) {
+        current.is_taxable = patch.tax_rate > 0;
+      }
       copy[index] = current;
+      return copy;
+    });
+
+    setRawItems((prev) => {
+      const copy = [...prev];
+      if (copy[index]) {
+        const current = { ...copy[index] };
+        if (patch.raw_name !== undefined) current.raw_name = patch.raw_name;
+        if (patch.quantity !== undefined) current.quantity = patch.quantity;
+        if (patch.unit !== undefined) current.unit = patch.unit;
+        if (!isVatAllocated && patch.unit_price !== undefined) {
+          current.unit_price = patch.unit_price;
+        }
+        if (patch.tax_rate !== undefined) {
+          current.tax_rate = patch.tax_rate;
+          current.is_taxable = patch.tax_rate > 0;
+        }
+        current.line_total = current.quantity * current.unit_price;
+        copy[index] = current;
+      }
       return copy;
     });
   };
@@ -402,30 +563,56 @@ export function InvoiceReviewSplitView({
   };
 
   const handleAddItem = () => {
-    setItems((prev) => [
-      ...prev,
-      {
-        raw_name: "Nguyên liệu bổ sung",
-        quantity: 1,
-        unit: "kg",
-        unit_price: 0,
-        line_total: 0,
-        ingredient_id: null,
-        matched_ingredient_name: null,
-        conversion_factor: 1,
-        match_confidence: "unmatched",
-      },
-    ]);
+    const newItem: MatchedInvoiceItem = {
+      raw_name: "Nguyên liệu bổ sung",
+      quantity: 1,
+      unit: "kg",
+      unit_price: 0,
+      line_total: 0,
+      ingredient_id: null,
+      matched_ingredient_name: null,
+      conversion_factor: 1,
+      match_confidence: "unmatched",
+      tax_rate: 0,
+      is_taxable: false,
+    };
+    setItems((prev) => [...prev, newItem]);
+    setRawItems((prev) => [...prev, { ...newItem }]);
   };
 
   const handleDeleteItem = (index: number) => {
     setItems((prev) => prev.filter((_, i) => i !== index));
+    setRawItems((prev) => prev.filter((_, i) => i !== index));
   };
 
   // Calculate totals
   const calculatedTotal = items.reduce((sum, it) => sum + (it.line_total || 0), 0);
   const isTotalMatched = Math.abs(calculatedTotal - targetInvoiceTotal) < 1000;
   const hasUnmatchedItems = items.some((it) => !it.ingredient_id);
+
+  // Phân loại mặt hàng chịu thuế & không chịu thuế
+  const nonTaxableItems = items.filter((it) => (it.tax_rate || 0) === 0);
+  const taxableItems = items.filter((it) => (it.tax_rate || 0) > 0);
+  const nonTaxableItemsCount = nonTaxableItems.length;
+  const taxableItemsCount = taxableItems.length;
+
+  const nonTaxableSubtotal = items.reduce((sum, it, idx) => {
+    if ((it.tax_rate || 0) === 0) {
+      const raw = rawItems[idx] || it;
+      const price = isVatAllocated ? raw.unit_price : it.unit_price;
+      return sum + it.quantity * price;
+    }
+    return sum;
+  }, 0);
+
+  const taxableSubtotal = items.reduce((sum, it, idx) => {
+    if ((it.tax_rate || 0) > 0) {
+      const raw = rawItems[idx] || it;
+      const price = isVatAllocated ? raw.unit_price : it.unit_price;
+      return sum + it.quantity * price;
+    }
+    return sum;
+  }, 0);
 
   // Submit and Approve
   const handleApproveAndCreate = async () => {
@@ -910,7 +1097,7 @@ export function InvoiceReviewSplitView({
               </div>
 
               <div className="border rounded-lg overflow-x-auto shadow-sm bg-card">
-                <table className="min-w-[940px] w-full text-xs text-left border-collapse">
+                <table className="min-w-[1040px] w-full text-xs text-left border-collapse">
                   <thead className="bg-muted/60 border-b">
                     <tr>
                       <th className="p-2.5 w-[180px] min-w-[160px]">Tên trên hóa đơn</th>
@@ -919,9 +1106,12 @@ export function InvoiceReviewSplitView({
                         Số lượng
                       </th>
                       <th className="p-2.5 text-center w-[90px] min-w-[85px]">Đơn vị</th>
-                      <th className="p-2.5 text-right w-[130px] min-w-[125px]">Đơn giá</th>
-                      <th className="p-2.5 text-center w-[80px] min-w-[75px]" title="Hệ số quy đổi về đơn vị gốc của kho">
+                      <th className="p-2.5 text-right w-[125px] min-w-[115px]">Đơn giá</th>
+                      <th className="p-2.5 text-center w-[75px] min-w-[70px]" title="Hệ số quy đổi về đơn vị gốc của kho">
                         Hệ số
+                      </th>
+                      <th className="p-2.5 text-center w-[110px] min-w-[105px]" title="Thuế suất GTGT của từng mặt hàng theo hóa đơn">
+                        Thuế VAT
                       </th>
                       <th className="p-2.5 text-right w-[130px] min-w-[120px]">Thành tiền</th>
                       <th className="p-2.5 w-[44px] min-w-[44px] text-center"></th>
@@ -984,7 +1174,7 @@ export function InvoiceReviewSplitView({
                               className="h-8 w-full min-w-[75px] text-xs text-center px-1.5"
                             />
                           </td>
-                          <td className="p-2 w-[130px] min-w-[125px] text-right">
+                          <td className="p-2 w-[125px] min-w-[115px] text-right">
                             <Input
                               type="number"
                               value={item.unit_price}
@@ -994,7 +1184,7 @@ export function InvoiceReviewSplitView({
                               className="h-8 w-full min-w-[115px] text-xs text-right tabular-nums px-2"
                             />
                           </td>
-                          <td className="p-2 w-[80px] min-w-[75px] text-center">
+                          <td className="p-2 w-[75px] min-w-[70px] text-center">
                             <Input
                               type="number"
                               step="any"
@@ -1008,8 +1198,46 @@ export function InvoiceReviewSplitView({
                               title="1 Đơn vị mua = ? Đơn vị cơ sở của kho"
                             />
                           </td>
+                          <td className="p-2 w-[110px] min-w-[105px] text-center">
+                            <div className="space-y-1 flex flex-col items-center">
+                              <select
+                                value={String(item.tax_rate ?? 0)}
+                                onChange={(e) => handleItemTaxRateChange(idx, Number(e.target.value))}
+                                className={`h-7 w-full text-xs rounded border px-1 font-medium transition-colors cursor-pointer ${
+                                  (item.tax_rate ?? 0) > 0
+                                    ? "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200 font-semibold focus:ring-amber-500"
+                                    : "border-input bg-background text-muted-foreground focus:ring-primary"
+                                }`}
+                              >
+                                <option value="0">KCT (0%)</option>
+                                <option value="5">VAT 5%</option>
+                                <option value="8">VAT 8%</option>
+                                <option value="10">VAT 10%</option>
+                              </select>
+                              <div className="text-[10px] tabular-nums leading-tight">
+                                {(item.tax_rate ?? 0) > 0 ? (
+                                  <span className="text-amber-600 dark:text-amber-400 font-medium">
+                                    +{formatVND(Math.round((rawItems[idx]?.unit_price || item.unit_price) * item.quantity * ((item.tax_rate ?? 0) / 100)))}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground/60">Không thuế</span>
+                                )}
+                              </div>
+                            </div>
+                          </td>
                           <td className="p-2 w-[130px] min-w-[120px] text-right font-semibold tabular-nums whitespace-nowrap">
-                            {formatVND(item.line_total)}
+                            <div>{formatVND(item.line_total)}</div>
+                            {isVatAllocated && (
+                              <div className="text-[10px] font-normal">
+                                {(item.tax_rate ?? 0) > 0 ? (
+                                  <span className="text-emerald-600 dark:text-emerald-400 font-medium">
+                                    Gồm VAT {item.tax_rate}%
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground/70">Giá gốc KCT</span>
+                                )}
+                              </div>
+                            )}
                           </td>
                           <td className="p-2 w-[44px] min-w-[44px] text-center">
                             <Button
@@ -1132,11 +1360,23 @@ export function InvoiceReviewSplitView({
                 <div className="space-y-1">
                   <div className="flex items-center justify-between text-[11px] text-muted-foreground">
                     <span>Mức thuế VAT:</span>
-                    {vatPreset === "custom" && (
+                    {vatPreset === "custom" ? (
                       <span className="text-[10px] text-primary font-medium">Tùy chỉnh số tiền</span>
-                    )}
+                    ) : vatPreset === "items" ? (
+                      <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium">Theo từng mặt hàng</span>
+                    ) : null}
                   </div>
-                  <div className="grid grid-cols-5 gap-1">
+                  <div className="grid grid-cols-6 gap-1">
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant={vatPreset === "items" ? "default" : "outline"}
+                      onClick={() => handleSelectVatPreset("items")}
+                      className={`h-7 text-[11px] px-1 ${vatPreset === "items" ? "bg-emerald-700 hover:bg-emerald-800 text-white font-semibold" : ""}`}
+                      title="Tính thuế tự động theo từng món trong bảng"
+                    >
+                      Từng món
+                    </Button>
                     <Button
                       type="button"
                       size="sm"
@@ -1144,7 +1384,7 @@ export function InvoiceReviewSplitView({
                       onClick={() => handleSelectVatPreset("0")}
                       className={`h-7 text-xs px-1 ${vatPreset === "0" ? "bg-slate-800 dark:bg-slate-200 text-white dark:text-black font-semibold" : ""}`}
                     >
-                      0%
+                      0% (KCT)
                     </Button>
                     <Button
                       type="button"
@@ -1178,7 +1418,7 @@ export function InvoiceReviewSplitView({
                       size="sm"
                       variant={vatPreset === "custom" ? "default" : "outline"}
                       onClick={() => handleSelectVatPreset("custom")}
-                      className={`h-7 text-[11px] px-1 ${vatPreset === "custom" ? "bg-amber-600 hover:bg-amber-700 text-white font-semibold" : ""}`}
+                      className={`h-7 text-[10px] px-1 ${vatPreset === "custom" ? "bg-amber-600 hover:bg-amber-700 text-white font-semibold" : ""}`}
                     >
                       Tùy chỉnh
                     </Button>
@@ -1211,13 +1451,28 @@ export function InvoiceReviewSplitView({
 
                 {/* Detailed breakdown */}
                 <div className="space-y-1 text-xs">
-                  <div className="flex justify-between py-0.5 text-muted-foreground">
-                    <span>Tiền hàng (chưa thuế):</span>
-                    <span className="font-medium text-foreground">{formatVND(baseSubtotal)}</span>
-                  </div>
+                  {nonTaxableItemsCount > 0 && taxableItemsCount > 0 ? (
+                    <>
+                      <div className="flex justify-between py-0.5 text-muted-foreground">
+                        <span>Hàng không thuế (KCT - {nonTaxableItemsCount} món):</span>
+                        <span className="font-medium text-foreground">{formatVND(nonTaxableSubtotal)}</span>
+                      </div>
+                      <div className="flex justify-between py-0.5 text-muted-foreground">
+                        <span>Hàng chịu thuế ({taxableItemsCount} món):</span>
+                        <span className="font-medium text-foreground">{formatVND(taxableSubtotal)}</span>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="flex justify-between py-0.5 text-muted-foreground">
+                      <span>Tiền hàng (chưa thuế):</span>
+                      <span className="font-medium text-foreground">{formatVND(baseSubtotal)}</span>
+                    </div>
+                  )}
 
                   <div className="flex justify-between py-0.5 text-muted-foreground">
-                    <span>Thuế GTGT ({taxPercent > 0 ? `${taxPercent}%` : "VAT"}):</span>
+                    <span>
+                      Tiền thuế GTGT {vatPreset === "items" ? "(Theo từng món)" : taxPercent > 0 ? `(${taxPercent}%)` : "(VAT)"}:
+                    </span>
                     <span className={`font-medium ${taxAmount > 0 ? "text-amber-600 dark:text-amber-400 font-semibold" : "text-foreground"}`}>
                       +{formatVND(taxAmount)}
                     </span>
@@ -1230,7 +1485,9 @@ export function InvoiceReviewSplitView({
 
                   <div className="flex justify-between py-0.5 text-muted-foreground">
                     <span>Tổng tính theo bảng kho:</span>
-                    <span className="font-bold text-foreground">{formatVND(calculatedTotal)}</span>
+                    <span className={`font-bold ${isTotalMatched ? "text-emerald-600 dark:text-emerald-400" : "text-amber-600 dark:text-amber-400"}`}>
+                      {formatVND(calculatedTotal)}
+                    </span>
                   </div>
                 </div>
 
@@ -1240,8 +1497,17 @@ export function InvoiceReviewSplitView({
                     {!isVatAllocated ? (
                       <div className="p-2.5 rounded-md bg-amber-500/10 border border-amber-500/25 space-y-2">
                         <div className="text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                          Đơn giá trong bảng đang là <strong>giá chưa VAT</strong> ({formatVND(calculatedTotal)}).
-                          Tổng hóa đơn là <strong>{formatVND(targetInvoiceTotal)}</strong> (chênh lệch +{formatVND(taxAmount)} thuế VAT).
+                          {taxableItemsCount > 0 && nonTaxableItemsCount > 0 ? (
+                            <>
+                              Hóa đơn gồm <strong>{taxableItemsCount} món chịu thuế</strong> và <strong>{nonTaxableItemsCount} món không thuế (KCT)</strong>.
+                              Bấm phân bổ để tính thuế VAT (+{formatVND(taxAmount)}) vào riêng các món chịu thuế, <strong>giữ nguyên đơn giá gốc</strong> các món không thuế!
+                            </>
+                          ) : (
+                            <>
+                              Đơn giá trong bảng đang là <strong>giá chưa VAT</strong> ({formatVND(calculatedTotal)}).
+                              Tổng hóa đơn là <strong>{formatVND(targetInvoiceTotal)}</strong> (chênh lệch +{formatVND(taxAmount)} thuế VAT).
+                            </>
+                          )}
                         </div>
                         <Button
                           type="button"
@@ -1251,14 +1517,20 @@ export function InvoiceReviewSplitView({
                           className="w-full h-7 text-xs gap-1.5 bg-amber-600 hover:bg-amber-700 text-white font-medium shadow-sm"
                         >
                           <Percent className="size-3" />
-                          Phân bổ thuế (+{formatVND(taxAmount)}) vào đơn giá hàng
+                          {taxableItemsCount > 0 && nonTaxableItemsCount > 0
+                            ? `Phân bổ thuế (+${formatVND(taxAmount)}) vào ${taxableItemsCount} món chịu thuế`
+                            : `Phân bổ thuế (+${formatVND(taxAmount)}) vào đơn giá hàng`}
                         </Button>
                       </div>
                     ) : (
                       <div className="p-2.5 rounded-md bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-between gap-2">
                         <div className="flex items-center gap-1.5 text-xs text-emerald-700 dark:text-emerald-400 font-medium">
                           <CheckCircle2 className="size-4 shrink-0" />
-                          <span>Đã phân bổ VAT vào đơn giá hàng</span>
+                          <span>
+                            {taxableItemsCount > 0 && nonTaxableItemsCount > 0
+                              ? `Đã phân bổ VAT vào ${taxableItemsCount} món chịu thuế`
+                              : "Đã phân bổ VAT vào đơn giá hàng"}
+                          </span>
                         </div>
                         <Button
                           type="button"
@@ -1268,7 +1540,7 @@ export function InvoiceReviewSplitView({
                           className="h-7 text-xs text-muted-foreground hover:text-foreground gap-1"
                         >
                           <Undo2 className="size-3" />
-                          Hoàn tác
+                          Khôi phục giá chưa thuế
                         </Button>
                       </div>
                     )}

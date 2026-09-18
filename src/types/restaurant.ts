@@ -644,6 +644,10 @@ export interface InvoiceParsedItem {
   unit_price: number;
   line_total?: number;
   note?: string | null;
+  /** Thuế suất % của mặt hàng (0 nếu không chịu thuế / KCT, 5, 8, 10 nếu chịu thuế). */
+  tax_rate?: number | null;
+  /** Đánh dấu mặt hàng có chịu thuế GTGT hay không theo hóa đơn. */
+  is_taxable?: boolean | null;
 }
 
 export interface InvoiceParsedData {
@@ -672,6 +676,10 @@ export interface MatchedInvoiceItem {
   matched_ingredient_name: string | null;
   conversion_factor: number;
   match_confidence: "exact" | "high" | "partial" | "unmatched";
+  /** Thuế suất % của mặt hàng (0 = Không chịu thuế / KCT, 5%, 8%, 10%). */
+  tax_rate?: number;
+  /** Đánh dấu mặt hàng chịu thuế. */
+  is_taxable?: boolean;
 }
 
 export interface InvoiceOcrReviewData {

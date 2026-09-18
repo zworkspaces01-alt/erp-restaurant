@@ -27,7 +27,13 @@ CỰC KỲ QUAN TRỌNG:
    - "Thành tiền" (Line total): = SL giao * Đơn giá (vd: 0.5kg Gừng * 30,000 = 15,000đ; 0.1kg Ngò rí * 59,000 = 5,900đ; Măng tây cồ: 0 * 139,000 = 0).
    - TUYỆT ĐỐI KHÔNG lấy Thành tiền làm Đơn giá!
 
-4. TỔNG TIỀN & THUẾ VAT (CỰC KỲ QUAN TRỌNG):
+4. MẶT HÀNG CHỊU THUẾ VÀ KHÔNG CHỊU THUẾ (VAT THEO TỪNG MẶT HÀNG):
+   - Trên một hóa đơn, có thể có cả mặt hàng chịu thuế và không chịu thuế:
+     + MẶT HÀNG KHÔNG CHỊU THUẾ (KCT / 0% VAT): Nông sản tươi sống, rau củ quả thô, thịt cá tươi sống chưa qua chế biến. Ghi thuế suất là 0.
+     + MẶT HÀNG CHỊU THUẾ (5%, 8%, 10% VAT): Hàng chế biến, đồ đóng hộp, bơ sữa đóng gói, dầu ăn, gia vị công nghiệp, đồ uống, bao bì... hoặc dòng có ghi cột thuế suất riêng (vd 5%, 8%, 10%) hoặc có ký hiệu đánh dấu (*).
+   - Trích xuất trường Thuế_suất_% cho từng dòng (0 nếu không chịu thuế, hoặc 5, 8, 10 nếu chịu thuế).
+
+5. TỔNG TIỀN & THUẾ VAT (CỰC KỲ QUAN TRỌNG):
    - "subtotal": Tổng tiền hàng chưa thuế (tổng các dòng thực giao cộng lại).
    - "tax_amount": Tiền thuế GTGT / VAT nếu hóa đơn có ghi riêng hoặc suy ra từ chênh lệch tổng tiền. Nếu không có thì để 0.
    - "tax_percent": Tỷ lệ thuế VAT (% ví dụ 0, 5, 8, 10). Nếu không ghi thì để 0.
@@ -42,7 +48,7 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
   "invoice_number": "Mã phiếu / Số hóa đơn",
   "order_date": "YYYY-MM-DD",
   "items": [
-    ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thành_tiền]
+    ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thành_tiền, Thuế_suất_%]
   ],
   "excluded_items": [],
   "subtotal": 976000,
@@ -63,12 +69,14 @@ function parseJsonSafe(text: string): InvoiceParsedData {
     if (Array.isArray(rawItems)) {
       for (const it of rawItems) {
         if (Array.isArray(it)) {
-          // Dạng mảng tinh gọn: [name, qty, unit, price, total]
+          // Dạng mảng tinh gọn: [name, qty, unit, price, total, tax_rate?]
           const name = (typeof it[0] === "string" ? it[0] : "").trim();
           const qty = typeof it[1] === "number" ? it[1] : (!isNaN(Number(it[1])) && it[1] !== "" && it[1] !== null) ? Number(it[1]) : 0;
           const unit = (typeof it[2] === "string" ? it[2] : "kg").trim() || "kg";
           const price = typeof it[3] === "number" ? it[3] : (!isNaN(Number(it[3])) && it[3] !== "" && it[3] !== null) ? Number(it[3]) : 0;
           const total = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : qty * price;
+          const rawTaxRate = it[5];
+          const taxRate = typeof rawTaxRate === "number" ? rawTaxRate : (!isNaN(Number(rawTaxRate)) && rawTaxRate !== "" && rawTaxRate !== null) ? Number(rawTaxRate) : 0;
 
           items.push({
             raw_name: name,
@@ -77,6 +85,8 @@ function parseJsonSafe(text: string): InvoiceParsedData {
             unit_price: price,
             line_total: total,
             note: null,
+            tax_rate: Math.max(0, taxRate),
+            is_taxable: taxRate > 0,
           });
         } else if (it && typeof it === "object") {
           const itemObj = it as Record<string, unknown>;
@@ -90,6 +100,17 @@ function parseJsonSafe(text: string): InvoiceParsedData {
           const rawTotalVal = itemObj.line_total !== undefined ? itemObj.line_total : itemObj.total;
           const total = typeof rawTotalVal === "number" ? rawTotalVal : (!isNaN(Number(rawTotalVal)) && rawTotalVal !== "" && rawTotalVal !== null) ? Number(rawTotalVal) : qty * price;
 
+          const rawTaxVal =
+            itemObj.tax_rate !== undefined
+              ? itemObj.tax_rate
+              : itemObj.tax_percent !== undefined
+              ? itemObj.tax_percent
+              : itemObj.vat !== undefined
+              ? itemObj.vat
+              : itemObj.tax;
+          const taxRate = typeof rawTaxVal === "number" ? rawTaxVal : (!isNaN(Number(rawTaxVal)) && rawTaxVal !== "" && rawTaxVal !== null) ? Number(rawTaxVal) : 0;
+          const isTaxable = itemObj.is_taxable !== undefined && itemObj.is_taxable !== null ? Boolean(itemObj.is_taxable) : taxRate > 0;
+
           items.push({
             raw_name: name,
             quantity: qty,
@@ -97,6 +118,8 @@ function parseJsonSafe(text: string): InvoiceParsedData {
             unit_price: price,
             line_total: total,
             note: (typeof itemObj.note === "string" ? itemObj.note : null) || null,
+            tax_rate: Math.max(0, taxRate),
+            is_taxable: isTaxable,
           });
         }
       }
@@ -117,6 +140,16 @@ function parseJsonSafe(text: string): InvoiceParsedData {
     if (taxAmount <= 0 && totalAmount > subtotal) {
       taxAmount = totalAmount - subtotal;
     }
+
+    // Nếu có taxAmount nhưng các dòng chưa có tax_rate, tính thuế các dòng chịu thuế
+    const itemTaxSum = items.reduce((sum, it) => {
+      const r = it.tax_rate || 0;
+      return r > 0 ? sum + Math.round((it.line_total || 0) * (r / 100)) : sum;
+    }, 0);
+    if (taxAmount <= 0 && itemTaxSum > 0) {
+      taxAmount = itemTaxSum;
+    }
+
     if (taxPercent <= 0 && subtotal > 0 && taxAmount > 0) {
       taxPercent = Math.round((taxAmount / subtotal) * 100);
     }
@@ -246,7 +279,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kế toán kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) CHỈ đưa vào excluded_items nếu THỰC SỰ CÓ NÉT BÚT MỰC GẠCH ĐÈ LÊN DÒNG HÀNG TRONG BẢNG; nếu không có gạch tay thì để mảng rỗng []. 3) Lấy số lượng theo cột SL GIAO (thực giao), lấy đơn giá 1 ĐVT (không nhầm với thành tiền). 4) total_amount là tổng thành tiền thực giao của các dòng trên phiếu.",
+            "Bạn là chuyên gia OCR và kế toán kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) CHỈ đưa vào excluded_items nếu THỰC SỰ CÓ NÉT BÚT MỰC GẠCH ĐÈ LÊN DÒNG HÀNG TRONG BẢNG; nếu không có gạch tay thì để mảng rỗng []. 3) Lấy số lượng theo cột SL GIAO (thực giao), lấy đơn giá 1 ĐVT (không nhầm với thành tiền). 4) Trích xuất thuế suất VAT % từng dòng (0 nếu không chịu thuế như rau củ thịt cá tươi sống; 5, 8, 10 nếu là hàng chế biến/có thuế). 5) total_amount là tổng thanh toán thực tế của hóa đơn.",
         },
         {
           role: "user",
@@ -441,8 +474,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
 }> = [
   {
     id: "rau-cu-qua-da-lat",
-    name: "Hóa đơn Nông Sản & Rau Củ Tươi",
-    description: "Nhà cung cấp Rau Sạch Đà Lạt Mart (Xà lách, cà chua bi, chanh vàng, dưa chuột...)",
+    name: "Hóa đơn Nông Sản & Rau Củ Tươi (Có & Không Thuế)",
+    description: "Nhà cung cấp Rau Sạch Đà Lạt Mart (Rau củ tươi không thuế, dầu Oliu chịu thuế 8%)",
     supplierName: "Công ty TNHH Rau Sạch Đà Lạt Mart",
     data: {
       supplier_name: "Công ty TNHH Rau Sạch Đà Lạt Mart",
@@ -459,6 +492,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 32000,
           line_total: 480000,
           note: "Hàng loại 1 chọn lọc",
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Chanh vàng không hạt",
@@ -467,6 +502,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 45000,
           line_total: 450000,
           note: "Tươi mọng nước",
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Cà chua bi Cherry đỏ",
@@ -474,6 +511,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit: "kg",
           unit_price: 38000,
           line_total: 304000,
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Dầu Oliu Extra Virgin nguyên chất",
@@ -482,12 +521,14 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 185000,
           line_total: 740000,
           note: "Chai 1 lít",
+          tax_rate: 8,
+          is_taxable: true,
         },
       ],
       subtotal: 1974000,
       tax_percent: 0,
-      tax_amount: 0,
-      total_amount: 1974000,
+      tax_amount: 59200, // 740,000 * 8%
+      total_amount: 2033200,
       confidence_score: 0.98,
     },
   },
@@ -511,6 +552,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 125000,
           line_total: 1250000,
           note: "Gói 500g",
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Sữa tươi thanh trùng Dalat Milk không đường",
@@ -519,6 +562,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 34000,
           line_total: 816000,
           note: "Hộp 950ml",
+          tax_rate: 8,
+          is_taxable: true,
         },
         {
           raw_name: "Kem béo thực vật Rich's Non-Dairy Creamer",
@@ -527,6 +572,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 28500,
           line_total: 342000,
           note: "Hộp 454g",
+          tax_rate: 8,
+          is_taxable: true,
         },
         {
           raw_name: "Đường cát trắng Biên Hòa Pure",
@@ -534,19 +581,21 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit: "kg",
           unit_price: 22000,
           line_total: 440000,
+          tax_rate: 8,
+          is_taxable: true,
         },
       ],
       subtotal: 2848000,
-      tax_percent: 8,
-      tax_amount: 227840,
-      total_amount: 3075840,
+      tax_percent: 0,
+      tax_amount: 127840, // (816000+342000+440000)*8% = 1598000*8% = 127840
+      total_amount: 2975840,
       confidence_score: 0.97,
     },
   },
   {
     id: "thit-hai-san",
-    name: "Hóa đơn Thực Phẩm Thịt Bò & Hải Sản",
-    description: "Đại lý Thực phẩm Sạch Phúc Thịnh (Thịt bò thăn, Ức gà phi lê, Tôm sú...)",
+    name: "Hóa đơn Thực Phẩm Thịt Bò & Hải Sản Tươi Sống",
+    description: "Đại lý Thực phẩm Sạch Phúc Thịnh (Thịt bò thăn, Ức gà phi lê, Tôm sú - KCT)",
     supplierName: "Đại lý Thực Phẩm Sạch Phúc Thịnh",
     data: {
       supplier_name: "Đại lý Thực Phẩm Sạch Phúc Thịnh",
@@ -563,6 +612,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit_price: 260000,
           line_total: 3120000,
           note: "Hàng mát bảo quản 2-4 độ C",
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Ức gà phi lê CP tươi",
@@ -570,6 +621,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit: "kg",
           unit_price: 75000,
           line_total: 1500000,
+          tax_rate: 0,
+          is_taxable: false,
         },
         {
           raw_name: "Tôm sú tươi sống size 20-25 con/kg",
@@ -577,6 +630,8 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           unit: "kg",
           unit_price: 320000,
           line_total: 1600000,
+          tax_rate: 0,
+          is_taxable: false,
         },
       ],
       subtotal: 6220000,
@@ -740,6 +795,15 @@ export function mergeMultiPageInvoiceData(pages: InvoiceParsedData[]): InvoicePa
   // Tổng hợp thuế VAT từ các trang
   const explicitTaxPercent = pages.find((p) => (p.tax_percent || 0) > 0)?.tax_percent || 0;
   let explicitTaxAmount = pages.reduce((sum, p) => sum + (p.tax_amount || 0), 0);
+
+  // Tính thuế từ các dòng mặt hàng chịu thuế nếu có
+  const itemsTaxSum = allItems.reduce((acc, it) => {
+    const rate = it.tax_rate || 0;
+    return rate > 0 ? acc + Math.round((it.line_total || 0) * (rate / 100)) : acc;
+  }, 0);
+  if (explicitTaxAmount <= 0 && itemsTaxSum > 0) {
+    explicitTaxAmount = itemsTaxSum;
+  }
 
   // Nếu chưa có tax_amount nhưng explicitGrandTotal lớn hơn tổng tiền hàng (subtotal)
   if (explicitTaxAmount <= 0 && explicitGrandTotal > calculatedItemsTotal) {

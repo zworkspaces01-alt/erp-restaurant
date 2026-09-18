@@ -226,6 +226,14 @@ export function matchItemWithIngredient(
     }
   }
 
+  const taxRate =
+    typeof item.tax_rate === "number" && !isNaN(item.tax_rate)
+      ? Math.max(0, item.tax_rate)
+      : item.is_taxable
+      ? 8
+      : 0;
+  const isTaxable = item.is_taxable !== undefined && item.is_taxable !== null ? Boolean(item.is_taxable) : taxRate > 0;
+
   if (!bestIng || bestScore < 0.4) {
     return {
       raw_name: item.raw_name,
@@ -237,6 +245,8 @@ export function matchItemWithIngredient(
       matched_ingredient_name: null,
       conversion_factor: 1,
       match_confidence: "unmatched",
+      tax_rate: taxRate,
+      is_taxable: isTaxable,
     };
   }
 
@@ -273,6 +283,8 @@ export function matchItemWithIngredient(
     matched_ingredient_name: bestIng.name,
     conversion_factor: conversionFactor,
     match_confidence: confidence,
+    tax_rate: taxRate,
+    is_taxable: isTaxable,
   };
 }
 
@@ -296,7 +308,14 @@ export function matchInvoiceData(
 
   const subtotal =
     parsed.subtotal ?? matchedItems.reduce((sum, it) => sum + (it.line_total || 0), 0);
-  const taxAmount = parsed.tax_amount ?? 0;
+
+  // Tính tiền thuế từ các dòng mặt hàng chịu thuế (nếu có)
+  const itemTaxSum = matchedItems.reduce((sum, it) => {
+    const rate = it.tax_rate || 0;
+    return rate > 0 ? sum + Math.round((it.line_total || 0) * (rate / 100)) : sum;
+  }, 0);
+
+  const taxAmount = parsed.tax_amount && parsed.tax_amount > 0 ? parsed.tax_amount : itemTaxSum;
   const totalAmount = parsed.total_amount ?? subtotal + taxAmount;
 
   return {
