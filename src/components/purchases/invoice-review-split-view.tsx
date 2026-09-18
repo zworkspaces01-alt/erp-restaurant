@@ -992,6 +992,7 @@ export function InvoiceReviewSplitView({
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-zinc-300 font-semibold">
+                      <th className="py-1 text-center w-8 text-zinc-500">STT</th>
                       <th className="py-1">Mặt hàng</th>
                       <th className="py-1 text-center">SL</th>
                       <th className="py-1 text-right">Đơn giá</th>
@@ -1001,6 +1002,7 @@ export function InvoiceReviewSplitView({
                   <tbody>
                     {reviewData.items.map((it, idx) => (
                       <tr key={idx} className="border-b border-zinc-100">
+                        <td className="py-1.5 text-center text-zinc-400 font-mono">{idx + 1}</td>
                         <td className="py-1.5">{it.raw_name}</td>
                         <td className="py-1.5 text-center">
                           {it.quantity} {it.unit}
@@ -1208,9 +1210,12 @@ export function InvoiceReviewSplitView({
               </div>
 
               <div className="border rounded-lg overflow-x-auto shadow-sm bg-card">
-                <table className="min-w-[1040px] w-full text-xs text-left border-collapse">
+                <table className="min-w-[1080px] w-full text-xs text-left border-collapse">
                   <thead className="bg-muted/60 border-b">
                     <tr>
+                      <th className="p-2.5 text-center w-[46px] min-w-[42px] text-muted-foreground font-semibold">
+                        STT
+                      </th>
                       <th className="p-2.5 w-[180px] min-w-[160px]">Tên trên hóa đơn</th>
                       <th className="p-2.5 w-[220px] min-w-[190px]">Nguyên liệu trong kho</th>
                       <th className="p-2.5 text-center w-[100px] min-w-[95px] font-bold text-emerald-700 dark:text-emerald-400 bg-emerald-500/10 border-x border-emerald-500/20">
@@ -1236,6 +1241,9 @@ export function InvoiceReviewSplitView({
                           key={idx}
                           className={!isMatched ? "bg-amber-500/10 dark:bg-amber-950/20" : undefined}
                         >
+                          <td className="p-2 text-center w-[46px] min-w-[42px] font-mono text-xs font-semibold text-muted-foreground/80 select-none">
+                            {idx + 1}
+                          </td>
                           <td className="p-2 w-[180px] min-w-[160px]">
                             <Input
                               value={item.raw_name}

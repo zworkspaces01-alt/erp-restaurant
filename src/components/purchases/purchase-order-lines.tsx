@@ -109,6 +109,7 @@ export function PurchaseOrderLines({
           <Table>
             <TableHeader>
               <TableRow>
+                <TableHead className="w-12 text-center">STT</TableHead>
                 <TableHead>Nguyên liệu</TableHead>
                 <TableHead className="text-right">Số lượng</TableHead>
                 <TableHead className="text-right">Đơn giá</TableHead>
@@ -119,8 +120,11 @@ export function PurchaseOrderLines({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {items.map((item) => (
+              {items.map((item, idx) => (
                 <TableRow key={item.id}>
+                  <TableCell className="text-center font-mono text-xs text-muted-foreground">
+                    {idx + 1}
+                  </TableCell>
                   <TableCell>
                     <Link
                       href={`/inventory/${item.ingredient_id}`}
