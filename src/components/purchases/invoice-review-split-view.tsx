@@ -256,45 +256,76 @@ export function InvoiceReviewSplitView({
   const handleSelectVatPreset = (preset: "items" | "0" | "5" | "8" | "10" | "custom") => {
     setVatPreset(preset);
     if (preset === "items") {
-      const newTaxSum = items.reduce((sum, it, i) => {
+      // Mỗi món áp dụng đúng thuế suất của từng món
+      const updated = items.map((it, i) => {
+        const raw = rawItems[i] || it;
+        const r = it.tax_rate || 0;
+        const price = r > 0 ? Math.round(raw.unit_price * (1 + r / 100)) : raw.unit_price;
+        const lineTotal = it.quantity * price;
+        return {
+          ...it,
+          unit_price: price,
+          line_total: lineTotal,
+        };
+      });
+      setItems(updated);
+
+      const newTaxSum = updated.reduce((sum, it, i) => {
         const r = it.tax_rate || 0;
         if (r <= 0) return sum;
         const rawPrice = rawItems[i]?.unit_price || it.unit_price;
         return sum + Math.round(it.quantity * rawPrice * (r / 100));
       }, 0);
+
+      const newTotal = updated.reduce((sum, it) => sum + (it.line_total || 0), 0);
       setTaxAmount(newTaxSum);
-      setTargetInvoiceTotal(baseSubtotal + newTaxSum);
+      setTargetInvoiceTotal(newTotal);
       setTaxPercent(baseSubtotal > 0 ? Math.round((newTaxSum / baseSubtotal) * 100) : 0);
+      setIsVatAllocated(true);
       setShowCustomTaxInput(false);
-      if (isVatAllocated) {
-        applyVatAllocationInternal(items, rawItems, newTaxSum);
-      }
     } else if (preset === "0") {
-      const updated = items.map((it) => ({ ...it, tax_rate: 0, is_taxable: false }));
+      // Đưa toàn bộ về giá gốc chưa VAT (KCT 0%)
+      const updated = items.map((it, i) => {
+        const raw = rawItems[i] || it;
+        return {
+          ...it,
+          tax_rate: 0,
+          is_taxable: false,
+          unit_price: raw.unit_price,
+          line_total: it.quantity * raw.unit_price,
+        };
+      });
       const updatedRaw = rawItems.map((it) => ({ ...it, tax_rate: 0, is_taxable: false }));
       setItems(updated);
       setRawItems(updatedRaw);
       setTaxPercent(0);
       setTaxAmount(0);
       setTargetInvoiceTotal(baseSubtotal);
+      setIsVatAllocated(false);
       setShowCustomTaxInput(false);
-      if (isVatAllocated) {
-        handleRevertVat();
-      }
     } else if (preset === "5" || preset === "8" || preset === "10") {
       const pct = Number(preset);
-      const updated = items.map((it) => ({ ...it, tax_rate: pct, is_taxable: true }));
+      const updated = items.map((it, i) => {
+        const raw = rawItems[i] || it;
+        const newPrice = Math.round(raw.unit_price * (1 + pct / 100));
+        return {
+          ...it,
+          tax_rate: pct,
+          is_taxable: true,
+          unit_price: newPrice,
+          line_total: it.quantity * newPrice,
+        };
+      });
       const updatedRaw = rawItems.map((it) => ({ ...it, tax_rate: pct, is_taxable: true }));
       setItems(updated);
       setRawItems(updatedRaw);
-      const computedTax = Math.round(baseSubtotal * (pct / 100));
+      const newTotal = updated.reduce((sum, it) => sum + (it.line_total || 0), 0);
+      const computedTax = Math.max(0, newTotal - baseSubtotal);
       setTaxPercent(pct);
       setTaxAmount(computedTax);
-      setTargetInvoiceTotal(baseSubtotal + computedTax);
+      setTargetInvoiceTotal(newTotal);
+      setIsVatAllocated(true);
       setShowCustomTaxInput(false);
-      if (isVatAllocated) {
-        applyVatAllocationInternal(updated, updatedRaw, computedTax);
-      }
     } else {
       setShowCustomTaxInput(true);
     }
@@ -437,18 +468,8 @@ export function InvoiceReviewSplitView({
   // Cập nhật thuế suất của một dòng mặt hàng cụ thể
   const handleItemTaxRateChange = (index: number, newRate: number) => {
     const validRate = Math.max(0, newRate);
-    const updatedItems = items.map((item, i) => {
-      if (i === index) {
-        return {
-          ...item,
-          tax_rate: validRate,
-          is_taxable: validRate > 0,
-        };
-      }
-      return item;
-    });
-    setItems(updatedItems);
 
+    // Cập nhật thuế suất trong rawItems
     const updatedRaw = rawItems.map((raw, i) => {
       if (i === index) {
         return {
@@ -461,7 +482,28 @@ export function InvoiceReviewSplitView({
     });
     setRawItems(updatedRaw);
 
-    // Tính lại tổng tiền thuế VAT từ các dòng chịu thuế
+    // Nhảy ngay số tiền của từng món:
+    // Dòng chịu thuế r% => Đơn giá sau thuế = round(Đơn giá gốc * (1 + r / 100))
+    // Dòng không chịu thuế (0%) => Đơn giá giữ nguyên giá gốc
+    // Thành tiền = Số lượng * Đơn giá sau thuế
+    const updatedItems = items.map((item, i) => {
+      const raw = updatedRaw[i] || item;
+      const rate = i === index ? validRate : (item.tax_rate || 0);
+      const isTaxableRow = rate > 0;
+      const unitPrice = isTaxableRow ? Math.round(raw.unit_price * (1 + rate / 100)) : raw.unit_price;
+      const lineTotal = item.quantity * unitPrice;
+
+      return {
+        ...item,
+        tax_rate: rate,
+        is_taxable: isTaxableRow,
+        unit_price: unitPrice,
+        line_total: lineTotal,
+      };
+    });
+    setItems(updatedItems);
+
+    // Tính lại tổng tiền thuế VAT và tổng hóa đơn mới
     const newTaxSum = updatedItems.reduce((sum, it, i) => {
       const r = it.tax_rate || 0;
       if (r <= 0) return sum;
@@ -469,14 +511,13 @@ export function InvoiceReviewSplitView({
       return sum + Math.round(it.quantity * rawPrice * (r / 100));
     }, 0);
 
+    const newDeliveredTotal = updatedItems.reduce((sum, it) => sum + (it.line_total || 0), 0);
+
     setTaxAmount(newTaxSum);
-    setTargetInvoiceTotal(baseSubtotal + newTaxSum);
+    setTargetInvoiceTotal(newDeliveredTotal);
     setTaxPercent(baseSubtotal > 0 ? Math.round((newTaxSum / baseSubtotal) * 100) : 0);
     setVatPreset("items");
-
-    if (isVatAllocated) {
-      applyVatAllocationInternal(updatedItems, updatedRaw, newTaxSum);
-    }
+    setIsVatAllocated(true);
   };
 
   // Hoàn tác về đơn giá gốc trước thuế
@@ -539,8 +580,11 @@ export function InvoiceReviewSplitView({
         if (patch.raw_name !== undefined) current.raw_name = patch.raw_name;
         if (patch.quantity !== undefined) current.quantity = patch.quantity;
         if (patch.unit !== undefined) current.unit = patch.unit;
-        if (!isVatAllocated && patch.unit_price !== undefined) {
-          current.unit_price = patch.unit_price;
+        if (patch.unit_price !== undefined) {
+          const rate = current.tax_rate || 0;
+          current.unit_price = isVatAllocated && rate > 0
+            ? Math.round(patch.unit_price / (1 + rate / 100))
+            : patch.unit_price;
         }
         if (patch.tax_rate !== undefined) {
           current.tax_rate = patch.tax_rate;
