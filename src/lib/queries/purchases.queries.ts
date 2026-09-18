@@ -272,11 +272,31 @@ function mapPo(r: RawPoRow): PurchaseOrderRow {
   };
 }
 
-export async function getPurchaseOrders(): Promise<PurchaseOrderRow[]> {
+export interface PurchaseOrdersFilter {
+  from?: string;
+  to?: string;
+  supplierId?: string;
+  status?: PoPaymentStatus;
+}
+
+export async function getPurchaseOrders(filter?: PurchaseOrdersFilter): Promise<PurchaseOrderRow[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("v_purchase_orders_summary")
-    .select(PO_COLUMNS)
+  let query = supabase.from("v_purchase_orders_summary").select(PO_COLUMNS);
+
+  if (filter?.from) {
+    query = query.gte("order_date", filter.from);
+  }
+  if (filter?.to) {
+    query = query.lte("order_date", filter.to);
+  }
+  if (filter?.supplierId) {
+    query = query.eq("supplier_id", filter.supplierId);
+  }
+  if (filter?.status) {
+    query = query.eq("payment_status", filter.status);
+  }
+
+  const { data, error } = await query
     .order("order_date", { ascending: false })
     .order("created_at", { ascending: false });
 
