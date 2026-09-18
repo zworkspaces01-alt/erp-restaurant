@@ -14,6 +14,11 @@ Nhiệm vụ: Trích xuất chính xác thông tin biên bản giao nhận / hó
 CỰC KỲ QUAN TRỌNG:
 1. MÓN GẠCH BỎ (CANCELLED / STRIKETHROUGH):
    - CHỈ coi một dòng là bị gạch bỏ nếu THỰC SỰ CÓ NÉT BÚT MỰC VIẾT TAY GẠCH ĐÈ LÊN TÊN/DÒNG ĐÓ TRONG BẢNG.
+   - Nếu có dòng bị gạch bỏ bằng bút bi mực (ví dụ gạch ngang hủy món không giao):
+     + Đưa tên các món bị gạch vào "excluded_items".
+     + KHÔNG đưa các món này vào "items".
+     + "subtotal" CHỈ tính tổng các dòng thực nhận (không bị gạch).
+     + "total_amount": Nếu chân phiếu in sẵn tổng tiền gồm cả món gạch, hãy LẤY TỔNG THỰC TẾ GIAO (trừ tiền các món gạch ra).
    - Nếu trong bảng KHÔNG CÓ NÉT BÚT VIẾT TAY GẠCH XÓA DÒNG HÀNG thì đặt "excluded_items": []. TUYỆT ĐỐI KHÔNG TỰ BỊA RA MÓN GẠCH!
    - Dấu tích chữ V, chữ ký người nhận hoặc hình vẽ ở góc phiếu KHÔNG PHẢI là gạch bỏ mặt hàng.
 
@@ -33,11 +38,17 @@ CỰC KỲ QUAN TRỌNG:
      + MẶT HÀNG CHỊU THUẾ (5%, 8%, 10% VAT): Hàng chế biến, đồ đóng hộp, bơ sữa đóng gói, dầu ăn, gia vị công nghiệp, đồ uống, bao bì... hoặc dòng có ghi cột thuế suất riêng (vd 5%, 8%, 10%) hoặc có ký hiệu đánh dấu (*).
    - Trích xuất trường Thuế_suất_% cho từng dòng (0 nếu không chịu thuế, hoặc 5, 8, 10 nếu chịu thuế).
 
-5. TỔNG TIỀN & THUẾ VAT (CỰC KỲ QUAN TRỌNG):
-   - "subtotal": Tổng tiền hàng chưa thuế (tổng các dòng thực giao cộng lại).
-   - "tax_amount": Tiền thuế GTGT / VAT nếu hóa đơn có ghi riêng hoặc suy ra từ chênh lệch tổng tiền. Nếu không có thì để 0.
-   - "tax_percent": Tỷ lệ thuế VAT (% ví dụ 0, 5, 8, 10). Nếu không ghi thì để 0.
-   - "total_amount": BẮT BUỘC ĐỌC ĐÚNG Ô TỔNG TIỀN THANH TOÁN (ví dụ ô "TỔNG TIỀN (VND)" ở góc trên bên trái phiếu giao hàng Kamereo, hoặc dòng "Tổng cộng thanh toán" ở cuối phiếu). Ví dụ phiếu ghi 1,021,090đ thì total_amount PHẢI LÀ 1021090 (chênh lệch so với subtotal 976,000đ chính là tiền thuế VAT 45,090đ).
+5. HÓA ĐƠN CÓ 2 HỆ THỐNG CỘT GIÁ (TRƯỚC THUẾ VÀ SAU THUẾ - VÍ DỤ SIM BA, METRO...):
+   - Một số hóa đơn in cùng lúc: "Đơn giá (- VAT)", "Thành tiền (- VAT)", "VAT %" và "Đơn giá (+ VAT)", "Thành tiền (+ VAT)".
+   - QUY TẮC: Lấy "Đơn giá (- VAT)" làm Đơn_giá_1_đơn_vị và đọc đúng cột "VAT %" của từng dòng.
+   - KIỂM TRA SỐ HỌC BẮT BUỘC: SL * Đơn giá = Thành tiền. Nếu trên phiếu có nét bút mực xanh quẹt đè lên số in sẵn (ví dụ máy in 4,00 nhưng bị quẹt bút bi trông giống số 1 thành 14, máy in 2,00 trông giống 12):
+     -> BẮT BUỘC lấy Thành tiền / Đơn giá (138.000 / 34.500 = 4; 600.000 / 300.000 = 2) để lấy đúng số lượng in máy, TUYỆT ĐỐI KHÔNG đọc nhầm nét quẹt bút thành 14 hay 12!
+
+6. TỔNG TIỀN & THUẾ VAT:
+   - "subtotal": Tổng tiền hàng chưa thuế của các dòng thực giao.
+   - "tax_amount": Tiền thuế GTGT / VAT (tổng thuế các dòng chịu thuế hoặc ghi riêng ở chân phiếu).
+   - "tax_percent": Tỷ lệ thuế VAT chung nếu có. Nếu không thì để 0.
+   - "total_amount": BẮT BUỘC đọc đúng ô tổng tiền thanh toán thực tế cuối cùng (sau thuế và sau khi trừ các món gạch).
 
 Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
 {
@@ -71,12 +82,20 @@ function parseJsonSafe(text: string): InvoiceParsedData {
         if (Array.isArray(it)) {
           // Dạng mảng tinh gọn: [name, qty, unit, price, total, tax_rate?]
           const name = (typeof it[0] === "string" ? it[0] : "").trim();
-          const qty = typeof it[1] === "number" ? it[1] : (!isNaN(Number(it[1])) && it[1] !== "" && it[1] !== null) ? Number(it[1]) : 0;
+          let qty = typeof it[1] === "number" ? it[1] : (!isNaN(Number(it[1])) && it[1] !== "" && it[1] !== null) ? Number(it[1]) : 0;
           const unit = (typeof it[2] === "string" ? it[2] : "kg").trim() || "kg";
           const price = typeof it[3] === "number" ? it[3] : (!isNaN(Number(it[3])) && it[3] !== "" && it[3] !== null) ? Number(it[3]) : 0;
           const total = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : qty * price;
           const rawTaxRate = it[5];
           const taxRate = typeof rawTaxRate === "number" ? rawTaxRate : (!isNaN(Number(rawTaxRate)) && rawTaxRate !== "" && rawTaxRate !== null) ? Number(rawTaxRate) : 0;
+
+          // Kiểm tra và sửa sai số học nếu nét bút bi quẹt đè lên số lượng (ví dụ in 4 nhưng trông như 14, in 2 trông như 12)
+          if (price > 0 && total > 0 && Math.abs(qty * price - total) > 500) {
+            const expectedQty = Math.round((total / price) * 1000) / 1000;
+            if (expectedQty > 0) {
+              qty = expectedQty;
+            }
+          }
 
           items.push({
             raw_name: name,
@@ -93,12 +112,20 @@ function parseJsonSafe(text: string): InvoiceParsedData {
           const name = (typeof itemObj.raw_name === "string" ? itemObj.raw_name : typeof itemObj.name === "string" ? itemObj.name : "").trim();
           if (!name) continue;
           const rawQtyVal = itemObj.quantity !== undefined ? itemObj.quantity : itemObj.qty;
-          const qty = typeof rawQtyVal === "number" ? rawQtyVal : (!isNaN(Number(rawQtyVal)) && rawQtyVal !== "" && rawQtyVal !== null) ? Number(rawQtyVal) : 0;
+          let qty = typeof rawQtyVal === "number" ? rawQtyVal : (!isNaN(Number(rawQtyVal)) && rawQtyVal !== "" && rawQtyVal !== null) ? Number(rawQtyVal) : 0;
           const unit = (typeof itemObj.unit === "string" ? itemObj.unit : "kg").trim() || "kg";
           const rawPriceVal = itemObj.unit_price !== undefined ? itemObj.unit_price : itemObj.price;
           const price = typeof rawPriceVal === "number" ? rawPriceVal : (!isNaN(Number(rawPriceVal)) && rawPriceVal !== "" && rawPriceVal !== null) ? Number(rawPriceVal) : 0;
           const rawTotalVal = itemObj.line_total !== undefined ? itemObj.line_total : itemObj.total;
           const total = typeof rawTotalVal === "number" ? rawTotalVal : (!isNaN(Number(rawTotalVal)) && rawTotalVal !== "" && rawTotalVal !== null) ? Number(rawTotalVal) : qty * price;
+
+          // Kiểm tra và sửa sai số học nếu nét bút bi quẹt đè lên số lượng
+          if (price > 0 && total > 0 && Math.abs(qty * price - total) > 500) {
+            const expectedQty = Math.round((total / price) * 1000) / 1000;
+            if (expectedQty > 0) {
+              qty = expectedQty;
+            }
+          }
 
           const rawTaxVal =
             itemObj.tax_rate !== undefined
@@ -135,19 +162,25 @@ function parseJsonSafe(text: string): InvoiceParsedData {
     let taxAmount = Number(raw.tax_amount) || 0;
     let taxPercent = Number(raw.tax_percent) || 0;
     const rawTotalAmount = Number(raw.total_amount) || 0;
-    const totalAmount = rawTotalAmount > 0 ? rawTotalAmount : subtotal + taxAmount;
 
-    if (taxAmount <= 0 && totalAmount > subtotal) {
-      taxAmount = totalAmount - subtotal;
-    }
-
-    // Nếu có taxAmount nhưng các dòng chưa có tax_rate, tính thuế các dòng chịu thuế
+    // Tính tổng tiền thuế từ các dòng mặt hàng có thuế
     const itemTaxSum = items.reduce((sum, it) => {
       const r = it.tax_rate || 0;
       return r > 0 ? sum + Math.round((it.line_total || 0) * (r / 100)) : sum;
     }, 0);
     if (taxAmount <= 0 && itemTaxSum > 0) {
       taxAmount = itemTaxSum;
+    }
+
+    let totalAmount = rawTotalAmount > 0 ? rawTotalAmount : subtotal + taxAmount;
+
+    // Nếu hóa đơn có món bị gạch bỏ và tổng in máy cao hơn nhiều so với tổng hàng thực nhận + thuế
+    // (do tổng in chân phiếu đã bao gồm cả các món bị gạch bỏ)
+    if (excluded_items.length > 0 && rawTotalAmount > (calculatedSubtotal + taxAmount) + 1000) {
+      // Tự động điều chỉnh tổng hóa đơn theo số tiền hàng thực nhận
+      totalAmount = calculatedSubtotal + taxAmount;
+    } else if (taxAmount <= 0 && totalAmount > subtotal) {
+      taxAmount = totalAmount - subtotal;
     }
 
     if (taxPercent <= 0 && subtotal > 0 && taxAmount > 0) {
@@ -639,6 +672,184 @@ export const SAMPLE_DEMO_INVOICES: Array<{
       tax_amount: 0,
       total_amount: 6220000,
       confidence_score: 0.96,
+    },
+  },
+  {
+    id: "simba-food",
+    name: "Phiếu Giao Hàng SIM BA (Thuế Hỗn Hợp + Món Gạch Bỏ)",
+    description: "Công ty CP Thương mại SIM BA (Đậu nành, trứng cá, rong biển 8% VAT, trứng gà 0% VAT, kèm 2 món gạch bỏ)",
+    supplierName: "Công ty Cổ phần Thương mại SIM BA",
+    data: {
+      supplier_name: "Công ty Cổ phần Thương mại SIM BA",
+      supplier_tax_code: "0303123890",
+      supplier_phone: "0354010285",
+      supplier_address: "968 Ba Tháng Hai, P. Phú Thọ, TP. Hồ Chí Minh / Kho SG_K032 Bạch Đằng, P. Hồng Hà, Hà Nội",
+      invoice_number: "26413820",
+      order_date: "2026-09-04",
+      items: [
+        {
+          raw_name: "Trứng gà tươi (30 quả/khay)",
+          quantity: 1,
+          unit: "Khay",
+          unit_price: 84000,
+          line_total: 84000,
+          tax_rate: 0,
+          is_taxable: false,
+        },
+        {
+          raw_name: "Đậu nành luộc đông lạnh Edamame 400g",
+          quantity: 4,
+          unit: "Gói",
+          unit_price: 34500,
+          line_total: 138000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Trứng cá chế biến đông lạnh Tobiko Orange 500g",
+          quantity: 1,
+          unit: "Hộp",
+          unit_price: 440000,
+          line_total: 440000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Trứng cá tuyết chế biến Yamaya 500g",
+          quantity: 1,
+          unit: "Gói",
+          unit_price: 280000,
+          line_total: 280000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Mù tạt 505 Nama Wasabi Kaneku",
+          quantity: 2,
+          unit: "Gói",
+          unit_price: 300000,
+          line_total: 600000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Rong biển đỏ ướp muối 500g",
+          quantity: 1,
+          unit: "Gói",
+          unit_price: 230000,
+          line_total: 230000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Rong biển xanh ướp muối 500g",
+          quantity: 1,
+          unit: "Gói",
+          unit_price: 230000,
+          line_total: 230000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Trứng gà Ise - Vfood Vitamin E (hộp 10 quả)",
+          quantity: 1,
+          unit: "Hộp",
+          unit_price: 48000,
+          line_total: 48000,
+          tax_rate: 0,
+          is_taxable: false,
+        },
+        {
+          raw_name: "Gừng chế biến Menyo Sushigari Pink 1.5Kg",
+          quantity: 2,
+          unit: "Gói",
+          unit_price: 85000,
+          line_total: 170000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Cá trứng đông lạnh Frozen Capelin Shisamo",
+          quantity: 2,
+          unit: "Khay",
+          unit_price: 70000,
+          line_total: 140000,
+          tax_rate: 0,
+          is_taxable: false,
+        },
+        {
+          raw_name: "Bột khoai tây KATAKURIKO",
+          quantity: 1,
+          unit: "Túi",
+          unit_price: 35000,
+          line_total: 35000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Vây cá đuối 250g",
+          quantity: 1,
+          unit: "Gói",
+          unit_price: 145000,
+          line_total: 145000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Rong biển nướng cắt sợi Kizami Nori",
+          quantity: 1,
+          unit: "Túi",
+          unit_price: 115000,
+          line_total: 115000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Nước tương Higashimaru Usukuchi Shoyu 1.8L",
+          quantity: 1,
+          unit: "Chai",
+          unit_price: 170000,
+          line_total: 170000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Súp Soba Tsuyu Sauce (Somi Shokuhin) 1.8L",
+          quantity: 1,
+          unit: "Chai",
+          unit_price: 340000,
+          line_total: 340000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Xốt Yakiniku No Tare Deluxe (Somi Shokuhin) 2 kg",
+          quantity: 1,
+          unit: "Hộp",
+          unit_price: 345000,
+          line_total: 345000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+        {
+          raw_name: "Nước xốt Yakiniku sauce 2kg",
+          quantity: 1,
+          unit: "Chai",
+          unit_price: 640000,
+          line_total: 640000,
+          tax_rate: 8,
+          is_taxable: true,
+        },
+      ],
+      excluded_items: [
+        "Hạt bạch quả đông lạnh FROZEN GINKGO (KARATSUKI GINNAN)",
+        "Vỏ tắc Nhật: Kizami Yuzu (Khô) 250g",
+      ],
+      subtotal: 4150000,
+      tax_percent: 8,
+      tax_amount: 310240,
+      total_amount: 4460240, // Đã trừ 580.000đ của 2 món gạch bỏ
+      confidence_score: 0.99,
     },
   },
 ];

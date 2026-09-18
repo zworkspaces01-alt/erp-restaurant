@@ -73,44 +73,11 @@ export function InvoiceReviewSplitView({
   const [supplierId, setSupplierId] = useState<string>(reviewData.supplier_id || "");
   const [invoiceNumber, setInvoiceNumber] = useState<string>(reviewData.invoice_number || "");
   const [orderDate, setOrderDate] = useState<string>(reviewData.order_date);
-  const [note, setNote] = useState<string>(
-    `Nhập tự động qua AI OCR (${modelUsed}). Hóa đơn: ${reviewData.invoice_number || "—"}`
-  );
-  const [items, setItems] = useState<MatchedInvoiceItem[]>(reviewData.items);
   const [excludedItems, setExcludedItems] = useState<string[]>(() => reviewData.excluded_items || []);
   const [paidNow, setPaidNow] = useState<number>(0);
   const [paidMethod, setPaidMethod] = useState<PaymentMethod>("cash");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
-
-  // Khôi phục món bị gạch tay khi NCC giao bổ sung
-  const handleRestoreExcludedItem = (itemName: string) => {
-    const foundRaw = reviewData.raw_extracted?.items?.find((it) =>
-      it.raw_name?.toLowerCase().includes(itemName.toLowerCase()) ||
-      itemName.toLowerCase().includes(it.raw_name?.toLowerCase() || "")
-    );
-
-    const defaultQty = foundRaw?.quantity && foundRaw.quantity > 0 ? foundRaw.quantity : 1;
-    const defaultPrice = foundRaw?.unit_price && foundRaw.unit_price > 0 ? foundRaw.unit_price : 0;
-
-    const restoredItem: MatchedInvoiceItem = {
-      raw_name: itemName,
-      quantity: defaultQty,
-      unit: foundRaw?.unit || "kg",
-      unit_price: defaultPrice,
-      line_total: defaultQty * defaultPrice,
-      ingredient_id: null,
-      matched_ingredient_name: null,
-      conversion_factor: 1,
-      match_confidence: "unmatched",
-    };
-
-    setItems((prev) => [...prev, restoredItem]);
-    setExcludedItems((prev) => prev.filter((name) => name !== itemName));
-    toast.success(
-      `Đã khôi phục món "${itemName}" vào danh sách nhập kho. Bạn có thể kiểm tra lại số lượng và đơn giá!`
-    );
-  };
 
   // VAT & Pricing Reconciliation States
   const [rawItems, setRawItems] = useState<MatchedInvoiceItem[]>(() =>
@@ -142,13 +109,88 @@ export function InvoiceReviewSplitView({
   );
 
   const hasItemTax = reviewData.items.some((it) => (it.tax_rate ?? 0) > 0);
+  const shouldAutoAllocateVat = initialTaxAmount > 0;
+
+  // Tính toán items ban đầu (Tự động phân bổ thuế VAT vào mặt hàng chịu thuế nếu hóa đơn có VAT)
+  const [items, setItems] = useState<MatchedInvoiceItem[]>(() => {
+    const initialRaw = reviewData.items.map((it) => ({
+      ...it,
+      tax_rate: typeof it.tax_rate === "number" ? it.tax_rate : (it.is_taxable ? (reviewData.raw_extracted?.tax_percent || 8) : 0),
+      is_taxable: (it.tax_rate ?? 0) > 0 || Boolean(it.is_taxable),
+    }));
+
+    if (!shouldAutoAllocateVat) {
+      return initialRaw;
+    }
+
+    const currentBaseSubtotal = initialRaw.reduce((sum, it) => sum + (it.line_total || 0), 0);
+    const taxableBaseSum = initialRaw.reduce((sum, it) => {
+      return (it.tax_rate || 0) > 0 ? sum + it.quantity * it.unit_price : sum;
+    }, 0);
+    const hasTaxable = taxableBaseSum > 0;
+    const allocationBase = hasTaxable ? taxableBaseSum : currentBaseSubtotal;
+    const ratio = (allocationBase + initialTaxAmount) / (allocationBase || 1);
+
+    let currentSum = 0;
+    const allocated = initialRaw.map((item) => {
+      const isTaxableRow = hasTaxable ? (item.tax_rate || 0) > 0 : true;
+      if (!isTaxableRow) {
+        const keepPrice = item.unit_price;
+        const lineTotal = item.quantity * keepPrice;
+        currentSum += lineTotal;
+        return { ...item, unit_price: keepPrice, line_total: lineTotal };
+      }
+      const newPrice = Math.round(item.unit_price * ratio);
+      const lineTotal = item.quantity * newPrice;
+      currentSum += lineTotal;
+      return { ...item, unit_price: newPrice, line_total: lineTotal };
+    });
+
+    const targetGrandTotal = currentBaseSubtotal + initialTaxAmount;
+    const diff = targetGrandTotal - currentSum;
+    if (Math.abs(diff) > 0 && Math.abs(diff) < 10000 && allocated.length > 0) {
+      let candidateIdx = -1;
+      let maxTotal = -1;
+      for (let i = 0; i < allocated.length; i++) {
+        const isTaxableRow = hasTaxable ? (allocated[i].tax_rate || 0) > 0 : true;
+        if (isTaxableRow && allocated[i].line_total > maxTotal) {
+          maxTotal = allocated[i].line_total;
+          candidateIdx = i;
+        }
+      }
+      if (candidateIdx !== -1 && allocated[candidateIdx].quantity > 0) {
+        const target = allocated[candidateIdx];
+        const adjustedPrice = Math.round((target.line_total + diff) / target.quantity);
+        target.unit_price = adjustedPrice;
+        target.line_total = target.quantity * adjustedPrice;
+      }
+    }
+    return allocated;
+  });
+
+  const [note, setNote] = useState<string>(() => {
+    const baseNote = `Nhập tự động qua AI OCR (${modelUsed}). Hóa đơn: ${reviewData.invoice_number || "—"}`;
+    return shouldAutoAllocateVat ? `${baseNote} [Đã gồm VAT]`.trim() : baseNote;
+  });
+
+  // Xác định mục tiêu tổng tiền hóa đơn:
+  // Nếu hóa đơn có món gạch bỏ và tổng in máy cao hơn tổng hàng thực nhận, tự động lấy tổng hàng thực nhận
+  const initialTargetTotal = (() => {
+    const rawDeliveredExpected = baseSubtotal + initialTaxAmount;
+    if (
+      reviewData.excluded_items &&
+      reviewData.excluded_items.length > 0 &&
+      reviewData.total_amount > rawDeliveredExpected + 1000
+    ) {
+      return rawDeliveredExpected;
+    }
+    return reviewData.total_amount > 0 ? reviewData.total_amount : rawDeliveredExpected;
+  })();
 
   const [taxPercent, setTaxPercent] = useState<number>(initialTaxPercent);
   const [taxAmount, setTaxAmount] = useState<number>(initialTaxAmount);
-  const [targetInvoiceTotal, setTargetInvoiceTotal] = useState<number>(
-    reviewData.total_amount > 0 ? reviewData.total_amount : baseSubtotal + initialTaxAmount
-  );
-  const [isVatAllocated, setIsVatAllocated] = useState<boolean>(false);
+  const [targetInvoiceTotal, setTargetInvoiceTotal] = useState<number>(initialTargetTotal);
+  const [isVatAllocated, setIsVatAllocated] = useState<boolean>(shouldAutoAllocateVat);
   const [vatPreset, setVatPreset] = useState<"items" | "0" | "5" | "8" | "10" | "custom">(() => {
     if (hasItemTax) return "items";
     if (initialTaxPercent === 5) return "5";
@@ -160,6 +202,55 @@ export function InvoiceReviewSplitView({
   const [showCustomTaxInput, setShowCustomTaxInput] = useState<boolean>(
     initialTaxAmount > 0 && initialTaxPercent !== 5 && initialTaxPercent !== 8 && initialTaxPercent !== 10 && !hasItemTax
   );
+
+  // Khôi phục món bị gạch tay khi NCC giao bổ sung
+  const handleRestoreExcludedItem = (itemName: string) => {
+    const foundRaw = reviewData.raw_extracted?.items?.find((it) =>
+      it.raw_name?.toLowerCase().includes(itemName.toLowerCase()) ||
+      itemName.toLowerCase().includes(it.raw_name?.toLowerCase() || "")
+    );
+
+    const defaultQty = foundRaw?.quantity && foundRaw.quantity > 0 ? foundRaw.quantity : 1;
+    const defaultPrice = foundRaw?.unit_price && foundRaw.unit_price > 0 ? foundRaw.unit_price : 0;
+    const defaultTaxRate = typeof foundRaw?.tax_rate === "number" ? foundRaw.tax_rate : (foundRaw?.is_taxable ? 8 : 0);
+
+    const restoredItem: MatchedInvoiceItem = {
+      raw_name: itemName,
+      quantity: defaultQty,
+      unit: foundRaw?.unit || "kg",
+      unit_price: defaultPrice,
+      line_total: defaultQty * defaultPrice,
+      ingredient_id: null,
+      matched_ingredient_name: null,
+      conversion_factor: 1,
+      match_confidence: "unmatched",
+      tax_rate: defaultTaxRate,
+      is_taxable: defaultTaxRate > 0,
+    };
+
+    const updatedRaw = [...rawItems, restoredItem];
+    setRawItems(updatedRaw);
+
+    const addedAmount = defaultQty * defaultPrice;
+    const addedTax = defaultTaxRate > 0 ? Math.round(addedAmount * (defaultTaxRate / 100)) : 0;
+    const newTaxTotal = taxAmount + addedTax;
+
+    setTaxAmount(newTaxTotal);
+    setTargetInvoiceTotal((prev) => prev + addedAmount + addedTax);
+
+    if (isVatAllocated) {
+      const updatedItems = [...items, restoredItem];
+      setItems(updatedItems);
+      applyVatAllocationInternal(updatedItems, updatedRaw, newTaxTotal);
+    } else {
+      setItems((prev) => [...prev, restoredItem]);
+    }
+
+    setExcludedItems((prev) => prev.filter((name) => name !== itemName));
+    toast.success(
+      `Đã khôi phục món "${itemName}" (+${formatVND(addedAmount + addedTax)}). Tổng tiền đã tự động cập nhật khớp!`
+    );
+  };
 
   // Áp dụng mức VAT định sẵn hoặc tùy chỉnh
   const handleSelectVatPreset = (preset: "items" | "0" | "5" | "8" | "10" | "custom") => {
@@ -581,14 +672,34 @@ export function InvoiceReviewSplitView({
   };
 
   const handleDeleteItem = (index: number) => {
+    const itemToDelete = items[index];
+    const amount = itemToDelete?.line_total || 0;
+    const r = itemToDelete?.tax_rate || 0;
+    const itemTax = !isVatAllocated && r > 0 ? Math.round(amount * (r / 100)) : 0;
+
     setItems((prev) => prev.filter((_, i) => i !== index));
     setRawItems((prev) => prev.filter((_, i) => i !== index));
+
+    // Đồng bộ giảm tổng hóa đơn theo món bị xóa để không bị lệch tiền
+    setTargetInvoiceTotal((prev) => Math.max(0, prev - amount - itemTax));
+    if (itemTax > 0) {
+      setTaxAmount((prev) => Math.max(0, prev - itemTax));
+    }
   };
 
   // Calculate totals
   const calculatedTotal = items.reduce((sum, it) => sum + (it.line_total || 0), 0);
-  const isTotalMatched = Math.abs(calculatedTotal - targetInvoiceTotal) < 1000;
+  // Nếu đã phân bổ VAT thì so sánh calculatedTotal với targetInvoiceTotal.
+  // Nếu chưa phân bổ VAT (giá trước thuế) thì tổng thanh toán là calculatedTotal + taxAmount.
+  const effectivePayableTotal = isVatAllocated ? calculatedTotal : calculatedTotal + taxAmount;
+  const isTotalMatched = Math.abs(effectivePayableTotal - targetInvoiceTotal) < 1000;
   const hasUnmatchedItems = items.some((it) => !it.ingredient_id);
+
+  // Nút 1-click tự động khớp tiền theo danh sách món thực nhận
+  const handleAutoReconcileTotal = () => {
+    setTargetInvoiceTotal(effectivePayableTotal);
+    toast.success(`Đã cập nhật tổng hóa đơn thành ${formatVND(effectivePayableTotal)} (Khớp 100%)!`);
+  };
 
   // Phân loại mặt hàng chịu thuế & không chịu thuế
   const nonTaxableItems = items.filter((it) => (it.tax_rate || 0) === 0);
@@ -961,7 +1072,7 @@ export function InvoiceReviewSplitView({
                       AI đã nhận diện và tự động loại bỏ {excludedItems.length} mặt hàng bị gạch tay trên hóa đơn (hàng hủy / không nhận):
                     </p>
                     <p className="text-[11px] text-muted-foreground">
-                      Nếu nhà cung cấp đã giao bổ sung món này đợt này, bạn có thể bấm <strong>Khôi phục</strong> để đưa vào phiếu nhập kho:
+                      Hệ thống đã tự động trừ tiền các món này khỏi tổng thanh toán. Nếu nhà cung cấp đã giao bổ sung món này đợt này, bạn có thể bấm <strong>Khôi phục</strong> để tự động cộng bù vào phiếu nhập kho:
                     </p>
                   </div>
                 </div>
@@ -1551,13 +1662,25 @@ export function InvoiceReviewSplitView({
                 <div className="pt-1">
                   {isTotalMatched ? (
                     <div className="flex items-center gap-1.5 text-xs text-emerald-600 dark:text-emerald-400 font-medium">
-                      <CheckCircle2 className="size-4" />
-                      Số tiền khớp hoàn toàn với hóa đơn
+                      <CheckCircle2 className="size-4 shrink-0" />
+                      <span>Số tiền khớp hoàn toàn với hóa đơn ({formatVND(targetInvoiceTotal)})</span>
                     </div>
                   ) : (
-                    <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400 font-medium">
-                      <AlertTriangle className="size-4" />
-                      Lệch {formatVND(Math.abs(calculatedTotal - targetInvoiceTotal))} so với hóa đơn
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-amber-700 dark:text-amber-300 font-medium bg-amber-500/10 border border-amber-500/30 px-2.5 py-1.5 rounded-lg">
+                      <div className="flex items-center gap-1.5">
+                        <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                        <span>Lệch {formatVND(Math.abs(effectivePayableTotal - targetInvoiceTotal))} so với hóa đơn</span>
+                      </div>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleAutoReconcileTotal}
+                        className="h-6 text-[11px] px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-800 dark:text-amber-200 border-amber-500/40 gap-1 font-semibold shadow-none"
+                      >
+                        <Sparkles className="size-3 text-amber-600 dark:text-amber-400" />
+                        Khớp nhanh theo hàng thực nhận
+                      </Button>
                     </div>
                   )}
 
