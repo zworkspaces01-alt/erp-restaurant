@@ -8,6 +8,9 @@ import { DataTable, DataTableColumnHeader, Money, StatusBadge } from "@/componen
 import type { DataTableFilter } from "@/components/shared";
 import { poStatusTone } from "@/components/purchases/po-status";
 import { formatDate } from "@/lib/format";
+import { History } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { PoAuditHistoryDialog } from "@/components/purchases/po-audit-history-dialog";
 import {
   PO_PAYMENT_STATUS_LABELS,
   PO_PAYMENT_STATUS_OPTIONS,
@@ -125,6 +128,28 @@ const baseColumns: ColumnDef<PurchaseOrderRow>[] = [
         <StatusBadge tone={poStatusTone(row.original.payment_status)} dot>
           {PO_PAYMENT_STATUS_LABELS[row.original.payment_status]}
         </StatusBadge>
+      </div>
+    ),
+  },
+  {
+    id: "history_action",
+    header: () => <span className="sr-only">Lịch sử</span>,
+    cell: ({ row }) => (
+      <div className="flex items-center justify-end" onClick={(e) => e.stopPropagation()}>
+        <PoAuditHistoryDialog
+          purchaseOrderId={row.original.id}
+          poNumber={row.original.po_number}
+          trigger={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="size-7 text-muted-foreground hover:text-foreground"
+              title="Lịch sử thay đổi phiếu này"
+            >
+              <History className="size-3.5" />
+            </Button>
+          }
+        />
       </div>
     ),
   },

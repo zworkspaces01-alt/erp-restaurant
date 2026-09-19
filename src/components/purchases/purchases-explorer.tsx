@@ -12,12 +12,16 @@ import {
   ExternalLink,
   FileText,
   Filter,
+  History,
   Plus,
   RotateCcw,
   Search,
+  Trash2,
   Wallet,
   X,
 } from "lucide-react";
+import { PurchasesTrashView } from "./purchases-trash-view";
+import { PurchasesAuditLogView } from "./purchases-audit-log-view";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
@@ -80,6 +84,13 @@ export function PurchasesExplorer({
   const lastMonthStart = `${lastMonthYear}-${lastMonthStr}-01`;
   const lastMonthEndDay = new Date(lastMonthYear, lastMonthNum, 0).getDate();
   const lastMonthEnd = `${lastMonthYear}-${lastMonthStr}-${String(lastMonthEndDay).padStart(2, "0")}`;
+
+  // Active tab state (orders, trash, audit)
+  const [activeTab, setActiveTab] = useState<"orders" | "trash" | "audit">(() => {
+    const tab = searchParams.get("tab");
+    if (tab === "trash" || tab === "audit") return tab;
+    return "orders";
+  });
 
   // Initial states from props or URL
   const [selectedSupplierId, setSelectedSupplierId] = useState<string>(() => {
@@ -336,9 +347,51 @@ export function PurchasesExplorer({
 
   return (
     <div className="space-y-5">
-      {/* 1. Multi-Filter Control Center */}
-      <Card className="border-border/80 shadow-xs">
-        <CardContent className="p-4 space-y-3.5">
+      {/* Top Tabs Navigation */}
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-3">
+        <div className="flex items-center gap-1.5 p-1 bg-muted/60 rounded-xl border">
+          <Button
+            type="button"
+            variant={activeTab === "orders" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("orders")}
+            className="h-8 text-xs gap-1.5 rounded-lg font-medium shadow-none"
+          >
+            <FileText className="size-3.5" />
+            Phiếu nhập ({orders.length})
+          </Button>
+          <Button
+            type="button"
+            variant={activeTab === "trash" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("trash")}
+            className="h-8 text-xs gap-1.5 rounded-lg font-medium shadow-none hover:text-destructive"
+          >
+            <Trash2 className="size-3.5 text-destructive" />
+            Thùng rác & Khôi phục
+          </Button>
+          <Button
+            type="button"
+            variant={activeTab === "audit" ? "default" : "ghost"}
+            size="sm"
+            onClick={() => setActiveTab("audit")}
+            className="h-8 text-xs gap-1.5 rounded-lg font-medium shadow-none"
+          >
+            <History className="size-3.5 text-primary" />
+            Nhật ký sửa xóa
+          </Button>
+        </div>
+      </div>
+
+      {activeTab === "trash" ? (
+        <PurchasesTrashView />
+      ) : activeTab === "audit" ? (
+        <PurchasesAuditLogView />
+      ) : (
+        <>
+          {/* 1. Multi-Filter Control Center */}
+          <Card className="border-border/80 shadow-xs">
+            <CardContent className="p-4 space-y-3.5">
           {/* Main Controls: Search, Supplier, Status */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-2.5 items-center">
             {/* Search Input */}
@@ -696,6 +749,8 @@ export function PurchasesExplorer({
             : "Chưa có phiếu nhập nào trong hệ thống."
         }
       />
+        </>
+      )}
     </div>
   );
 }

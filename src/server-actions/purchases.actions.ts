@@ -2,8 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
-import { requireAuth } from "@/lib/auth";
+import { requireAuth, getCurrentUserWithRole } from "@/lib/auth";
 import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
+import {
+  logPoAction,
+  getPoAuditLogs,
+  getDeletedPoSnapshots,
+  markPoRestored,
+  type PoAuditSnapshot,
+  type PurchaseOrderAuditLog,
+} from "@/lib/purchases/po-audit-service";
 import type { Json } from "@/types/database";
 import { fail, failZod, ok, type ActionResult } from "@/types/actions";
 import {
@@ -429,6 +437,32 @@ export async function createPurchaseOrder(
 
   if (error || !data) return fail(parseDbError(error));
 
+  // Ghi nhật ký tạo phiếu nhập
+  try {
+    const userSession = await getCurrentUserWithRole().catch(() => null);
+    const { data: createdPo } = await supabase
+      .from("purchase_orders")
+      .select("po_number, suppliers(name)")
+      .eq("id", data)
+      .maybeSingle();
+
+    const supplierName = (createdPo?.suppliers as { name?: string } | null)?.name || null;
+    await logPoAction(supabase, {
+      purchase_order_id: data,
+      po_number: createdPo?.po_number || data.slice(0, 8),
+      supplier_id: parsed.data.supplier_id,
+      supplier_name: supplierName,
+      action: "created",
+      performed_by: userSession?.user.id,
+      performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+      details: {
+        summary: `Tạo phiếu nhập mới gồm ${items.length} mặt hàng`,
+      },
+    });
+  } catch (auditErr) {
+    console.warn("Could not log createPurchaseOrder audit:", auditErr);
+  }
+
   revalidatePurchaseScope(
     parsed.data.supplier_id,
     data,
@@ -470,6 +504,14 @@ export async function updatePurchaseOrderMeta(
   if (Object.keys(patch).length === 0) return ok({ id });
 
   const supabase = await createClient();
+
+  // Đọc thông tin cũ để ghi diff
+  const { data: oldPo } = await supabase
+    .from("purchase_orders")
+    .select("po_number, order_date, due_date, invoice_number, invoice_image_url, note, supplier_id, suppliers(name)")
+    .eq("id", id)
+    .maybeSingle();
+
   const { data, error } = await supabase
     .from("purchase_orders")
     .update(patch)
@@ -479,6 +521,49 @@ export async function updatePurchaseOrderMeta(
 
   if (error) return fail(parseDbError(error));
   if (!data) return fail("Không tìm thấy phiếu nhập.");
+
+  // Ghi nhật ký thay đổi
+  try {
+    const userSession = await getCurrentUserWithRole().catch(() => null);
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    if (patch.order_date !== undefined && oldPo?.order_date !== patch.order_date) {
+      changes["Ngày nhập"] = { from: oldPo?.order_date, to: patch.order_date };
+    }
+    if (patch.due_date !== undefined && oldPo?.due_date !== patch.due_date) {
+      changes["Hạn thanh toán"] = { from: oldPo?.due_date, to: patch.due_date };
+    }
+    if (patch.invoice_number !== undefined && oldPo?.invoice_number !== patch.invoice_number) {
+      changes["Số hóa đơn"] = { from: oldPo?.invoice_number, to: patch.invoice_number };
+    }
+    if (patch.note !== undefined && oldPo?.note !== patch.note) {
+      changes["Ghi chú"] = { from: oldPo?.note, to: patch.note };
+    }
+    if (patch.invoice_image_url !== undefined && oldPo?.invoice_image_url !== patch.invoice_image_url) {
+      changes["Ảnh hóa đơn"] = {
+        from: oldPo?.invoice_image_url ? "Có ảnh" : "Không có",
+        to: patch.invoice_image_url ? "Có ảnh mới" : "Đã gỡ",
+      };
+    }
+
+    if (Object.keys(changes).length > 0) {
+      const supplierName = (oldPo?.suppliers as { name?: string } | null)?.name || null;
+      await logPoAction(supabase, {
+        purchase_order_id: id,
+        po_number: oldPo?.po_number || id.slice(0, 8),
+        supplier_id: data.supplier_id,
+        supplier_name: supplierName,
+        action: "updated",
+        performed_by: userSession?.user.id,
+        performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+        details: {
+          summary: `Chỉnh sửa thông tin: ${Object.keys(changes).join(", ")}`,
+          changes,
+        },
+      });
+    }
+  } catch (auditErr) {
+    console.warn("Could not log updatePurchaseOrderMeta audit:", auditErr);
+  }
 
   revalidatePurchaseScope(data.supplier_id, id);
   return ok({ id });
@@ -497,7 +582,7 @@ export async function addPurchaseOrderLine(
   const supabase = await createClient();
   const { data: po, error: poError } = await supabase
     .from("purchase_orders")
-    .select("supplier_id")
+    .select("supplier_id, po_number, suppliers(name)")
     .eq("id", purchaseOrderId)
     .maybeSingle();
   if (poError) return fail(parseDbError(poError));
@@ -506,11 +591,14 @@ export async function addPurchaseOrderLine(
   // `conversion_factor`/`unit` được snapshot từ nguyên liệu khi form không ghi đè.
   const { data: ingredient, error: ingredientError } = await supabase
     .from("ingredients")
-    .select("conversion_factor, import_unit, base_unit")
+    .select("name, conversion_factor, import_unit, base_unit")
     .eq("id", parsed.data.ingredient_id)
     .maybeSingle();
   if (ingredientError) return fail(parseDbError(ingredientError));
   if (!ingredient) return fail("Không tìm thấy nguyên liệu.");
+
+  const unit = parsed.data.unit ?? ingredient.import_unit ?? ingredient.base_unit;
+  const factor = parsed.data.conversion_factor ?? ingredient.conversion_factor ?? 1;
 
   const { data, error } = await supabase
     .from("purchase_order_items")
@@ -519,13 +607,41 @@ export async function addPurchaseOrderLine(
       ingredient_id: parsed.data.ingredient_id,
       quantity: parsed.data.quantity,
       unit_price: parsed.data.unit_price,
-      conversion_factor: parsed.data.conversion_factor ?? ingredient.conversion_factor ?? 1,
-      unit: parsed.data.unit ?? ingredient.import_unit ?? ingredient.base_unit,
+      conversion_factor: factor,
+      unit: unit,
     })
     .select("id")
     .single();
 
   if (error || !data) return fail(parseDbError(error));
+
+  // Ghi nhật ký thêm dòng
+  try {
+    const userSession = await getCurrentUserWithRole().catch(() => null);
+    const supplierName = (po.suppliers as { name?: string } | null)?.name || null;
+    const lineTotal = Number(parsed.data.quantity) * Number(parsed.data.unit_price);
+    await logPoAction(supabase, {
+      purchase_order_id: purchaseOrderId,
+      po_number: po.po_number || purchaseOrderId.slice(0, 8),
+      supplier_id: po.supplier_id,
+      supplier_name: supplierName,
+      action: "line_added",
+      performed_by: userSession?.user.id,
+      performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+      details: {
+        summary: `Thêm món: ${ingredient.name} (x${parsed.data.quantity} ${unit})`,
+        item: {
+          name: ingredient.name,
+          quantity: Number(parsed.data.quantity),
+          unit: unit || "",
+          unit_price: Number(parsed.data.unit_price),
+          line_total: lineTotal,
+        },
+      },
+    });
+  } catch (auditErr) {
+    console.warn("Could not log addPurchaseOrderLine audit:", auditErr);
+  }
 
   revalidatePurchaseScope(po.supplier_id, purchaseOrderId, [parsed.data.ingredient_id]);
   return ok({ id: data.id });
@@ -538,7 +654,16 @@ export async function deletePurchaseOrderLine(
   const supabase = await createClient();
   const { data: line, error: lookupError } = await supabase
     .from("purchase_order_items")
-    .select("purchase_order_id, ingredient_id, purchase_orders(supplier_id)")
+    .select(`
+      purchase_order_id,
+      ingredient_id,
+      quantity,
+      unit_price,
+      line_total,
+      unit,
+      ingredients(name),
+      purchase_orders(po_number, supplier_id, suppliers(name))
+    `)
     .eq("id", lineId)
     .maybeSingle();
 
@@ -554,17 +679,73 @@ export async function deletePurchaseOrderLine(
   if (error) return fail(parseDbError(error));
   if (!deleted) return fail("Không tìm thấy dòng nhập.");
 
-  revalidatePurchaseScope(line.purchase_orders?.supplier_id, line.purchase_order_id, [
-    line.ingredient_id,
-  ]);
+  // Ghi nhật ký xóa dòng
+  try {
+    const userSession = await getCurrentUserWithRole().catch(() => null);
+    const poInfo = line.purchase_orders as {
+      po_number?: string;
+      supplier_id?: string;
+      suppliers?: { name?: string };
+    } | null;
+    const ingName = (line.ingredients as { name?: string } | null)?.name || "Nguyên liệu";
+
+    await logPoAction(supabase, {
+      purchase_order_id: line.purchase_order_id,
+      po_number: poInfo?.po_number || line.purchase_order_id.slice(0, 8),
+      supplier_id: poInfo?.supplier_id || null,
+      supplier_name: poInfo?.suppliers?.name || null,
+      action: "line_deleted",
+      performed_by: userSession?.user.id,
+      performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+      details: {
+        summary: `Xóa món: ${ingName} (x${line.quantity} ${line.unit || ""})`,
+        item: {
+          name: ingName,
+          quantity: Number(line.quantity),
+          unit: line.unit || "",
+          unit_price: Number(line.unit_price),
+          line_total: Number(line.line_total),
+        },
+      },
+    });
+  } catch (auditErr) {
+    console.warn("Could not log deletePurchaseOrderLine audit:", auditErr);
+  }
+
+  const poInfo = line.purchase_orders as { supplier_id?: string } | null;
+  revalidatePurchaseScope(poInfo?.supplier_id, line.purchase_order_id, [line.ingredient_id]);
   return ok({ id: lineId });
 }
 
-export async function deletePurchaseOrder(id: string): Promise<ActionResult<{ id: string }>> {
+export async function deletePurchaseOrder(
+  id: string,
+  reason?: string
+): Promise<ActionResult<{ id: string }>> {
   const supabase = await createClient();
   const { data: po, error: lookupError } = await supabase
     .from("purchase_orders")
-    .select("supplier_id, paid_amount, purchase_order_items(ingredient_id)")
+    .select(`
+      id,
+      po_number,
+      supplier_id,
+      order_date,
+      due_date,
+      total_amount,
+      paid_amount,
+      invoice_number,
+      invoice_image_url,
+      note,
+      suppliers(name),
+      purchase_order_items(
+        ingredient_id,
+        quantity,
+        unit,
+        conversion_factor,
+        unit_price,
+        line_total,
+        ingredients(name)
+      )
+    `)
     .eq("id", id)
     .maybeSingle();
 
@@ -574,19 +755,188 @@ export async function deletePurchaseOrder(id: string): Promise<ActionResult<{ id
     return fail("Phiếu nhập đã có thanh toán. Hãy hoàn tác phiếu chi trước khi xóa.");
   }
 
+  // Chuẩn bị snapshot sao lưu toàn diện trước khi xóa để hỗ trợ khôi phục (Restore)
+  const userSession = await getCurrentUserWithRole().catch(() => null);
+  const supplierName = (po.suppliers as { name?: string } | null)?.name || "Nhà cung cấp";
+  type PoItemRow = {
+    ingredient_id: string;
+    quantity: number;
+    unit?: string | null;
+    conversion_factor?: number | null;
+    unit_price: number;
+    line_total: number;
+    ingredients?: { name?: string | null } | null;
+  };
+  const itemsSnapshot = ((po.purchase_order_items || []) as unknown as PoItemRow[]).map((it) => ({
+    ingredient_id: it.ingredient_id,
+    ingredient_name: it.ingredients?.name || "Nguyên liệu",
+    quantity: Number(it.quantity),
+    unit: it.unit || "",
+    conversion_factor: it.conversion_factor ? Number(it.conversion_factor) : 1,
+    unit_price: Number(it.unit_price),
+    line_total: Number(it.line_total),
+  }));
+
+  const poNumber = po.po_number || po.id.slice(0, 8);
+  const snapshot: PoAuditSnapshot = {
+    id: po.id,
+    po_number: poNumber,
+    supplier_id: po.supplier_id,
+    supplier_name: supplierName,
+    order_date: po.order_date,
+    due_date: po.due_date,
+    total_amount: Number(po.total_amount),
+    invoice_number: po.invoice_number,
+    invoice_image_url: po.invoice_image_url,
+    note: po.note,
+    items: itemsSnapshot,
+    deleted_at: new Date().toISOString(),
+    deleted_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+    delete_reason: reason || "Người dùng xóa",
+  };
+
+  // Lưu snapshot vào nhật ký kiểm toán & thùng rác
+  try {
+    await logPoAction(supabase, {
+      purchase_order_id: po.id,
+      po_number: poNumber,
+      supplier_id: po.supplier_id,
+      supplier_name: supplierName,
+      action: "deleted",
+      performed_by: userSession?.user.id,
+      performed_by_name: snapshot.deleted_by_name,
+      details: {
+        summary: `Xóa phiếu nhập ${poNumber} (${itemsSnapshot.length} mặt hàng, ${Number(po.total_amount).toLocaleString("vi-VN")} đ)`,
+        reason: reason || "Người dùng xóa",
+      },
+      snapshot,
+      is_restored: false,
+    });
+  } catch (auditErr) {
+    console.warn("Could not log deletePurchaseOrder snapshot:", auditErr);
+  }
+
+  // Thực hiện xóa (database trigger sẽ tự động trừ tồn kho và giảm công nợ)
   const { data: deleted, error } = await supabase
     .from("purchase_orders")
     .delete()
     .eq("id", id)
     .select("id")
     .maybeSingle();
+
   if (error) return fail(parseDbError(error));
   if (!deleted) return fail("Không tìm thấy phiếu nhập.");
 
   revalidatePurchaseScope(
     po.supplier_id,
     id,
-    (po.purchase_order_items ?? []).map((it) => it.ingredient_id)
+    itemsSnapshot.map((it) => it.ingredient_id)
   );
   return ok({ id });
+}
+
+/**
+ * Khôi phục phiếu nhập đã xóa từ Snapshot trong Thùng rác
+ * Sử dụng RPC create_purchase_order để trigger DB tự động cộng lại tồn kho & công nợ nhà cung cấp
+ */
+export async function restorePurchaseOrderAction(
+  auditLogId: string
+): Promise<ActionResult<{ id: string; poNumber: string }>> {
+  const { authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền khôi phục phiếu nhập đã xóa.");
+  }
+
+  const supabase = await createClient();
+
+  // Lấy snapshot từ audit logs (thùng rác)
+  let snapshot: PoAuditSnapshot | null = null;
+  const deletedList = await getDeletedPoSnapshots(supabase);
+  const found = deletedList.find((l) => l.id === auditLogId || l.snapshot?.id === auditLogId);
+  if (found) {
+    if (found.is_restored) {
+      return fail("Phiếu nhập này đã được khôi phục trước đó.");
+    }
+    snapshot = found.snapshot || null;
+  }
+
+  if (!snapshot || !snapshot.items || snapshot.items.length === 0) {
+    return fail("Không tìm thấy bản sao lưu (snapshot) hợp lệ của phiếu nhập cần khôi phục.");
+  }
+
+  // Tái tạo mảng items cho create_purchase_order RPC
+  const items: CreatePurchaseOrderItemPayload[] = snapshot.items.map((it) => ({
+    ingredient_id: it.ingredient_id,
+    quantity: it.quantity,
+    unit_price: it.unit_price,
+    ...(it.conversion_factor ? { conversion_factor: it.conversion_factor } : {}),
+    ...(it.unit ? { unit: it.unit } : {}),
+  }));
+
+  const restoreNote = snapshot.note
+    ? `${snapshot.note}\n[Đã khôi phục từ phiếu ${snapshot.po_number} bị xóa lúc ${new Date(snapshot.deleted_at).toLocaleString("vi-VN")}]`
+    : `[Đã khôi phục từ phiếu ${snapshot.po_number} bị xóa lúc ${new Date(snapshot.deleted_at).toLocaleString("vi-VN")}]`;
+
+  const args = {
+    p_supplier_id: snapshot.supplier_id,
+    p_order_date: snapshot.order_date,
+    p_due_date: snapshot.due_date ?? null,
+    p_invoice_number: snapshot.invoice_number ? `${snapshot.invoice_number} (Khôi phục)` : null,
+    p_note: restoreNote,
+    p_items: items as unknown as Json,
+    p_paid_now: 0,
+    p_paid_method: "cash",
+    p_invoice_image_url: snapshot.invoice_image_url ?? null,
+  } as unknown as FunctionArgs<"create_purchase_order">;
+
+  const { data: newPoId, error } = await supabase.rpc("create_purchase_order", args);
+  if (error || !newPoId) {
+    return fail(`Không thể tái tạo phiếu nhập: ${parseDbError(error)}`);
+  }
+
+  // Đánh dấu bản ghi đã khôi phục
+  await markPoRestored(supabase, auditLogId);
+
+  // Ghi log hành động khôi phục
+  const userSession = await getCurrentUserWithRole().catch(() => null);
+  await logPoAction(supabase, {
+    purchase_order_id: newPoId,
+    po_number: snapshot.po_number,
+    supplier_id: snapshot.supplier_id,
+    supplier_name: snapshot.supplier_name,
+    action: "restored",
+    performed_by: userSession?.user.id,
+    performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+    details: {
+      summary: `Khôi phục thành công phiếu nhập ${snapshot.po_number}. Tồn kho và công nợ đã được cộng lại đầy đủ.`,
+      reason: `Khôi phục từ bản lưu trữ xóa ngày ${new Date(snapshot.deleted_at).toLocaleDateString("vi-VN")}`,
+    },
+  });
+
+  revalidatePurchaseScope(
+    snapshot.supplier_id,
+    newPoId,
+    items.map((it) => it.ingredient_id)
+  );
+
+  return ok({ id: newPoId, poNumber: snapshot.po_number });
+}
+
+/**
+ * Lấy lịch sử sửa/xóa/khôi phục cho phiếu nhập (hoặc toàn bộ)
+ */
+export async function getPurchaseOrderAuditLogsAction(
+  poId?: string,
+  poNumber?: string
+): Promise<PurchaseOrderAuditLog[]> {
+  const supabase = await createClient();
+  return getPoAuditLogs(supabase, { poId, poNumber, limit: 100 });
+}
+
+/**
+ * Lấy danh sách phiếu nhập trong Thùng rác (đã xóa, chưa khôi phục)
+ */
+export async function getDeletedPurchaseOrdersAction(): Promise<PurchaseOrderAuditLog[]> {
+  const supabase = await createClient();
+  return getDeletedPoSnapshots(supabase);
 }
