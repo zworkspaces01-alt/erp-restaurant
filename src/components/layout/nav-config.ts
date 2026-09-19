@@ -8,6 +8,7 @@ import {
   Package,
   Receipt,
   ShoppingCart,
+  Sparkles,
   Truck,
   UserCheck,
   Users,
@@ -39,7 +40,10 @@ export interface NavGroup {
 export const NAV_GROUPS: NavGroup[] = [
   {
     title: "Tổng quan",
-    items: [{ title: "Bảng điều khiển", href: "/dashboard", icon: LayoutDashboard }],
+    items: [
+      { title: "Bảng điều khiển", href: "/dashboard", icon: LayoutDashboard },
+      { title: "Trợ lý AI Truy vấn", href: "/ai-assistant", icon: Sparkles },
+    ],
   },
   {
     title: "Vận hành",

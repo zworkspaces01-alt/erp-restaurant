@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Plus } from "lucide-react";
+import { Plus, Sparkles } from "lucide-react";
 import { Forbidden, PageHeader } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { PurchasesExplorer } from "@/components/purchases/purchases-explorer";
@@ -47,6 +47,12 @@ export default async function PurchasesPage({ searchParams }: PageProps) {
         description="Quản lý và thống kê nhập kho theo nhà cung cấp: tổng tiền nhập, số đã thanh toán, còn nợ và số lượng hóa đơn."
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            <Button asChild size="sm" variant="outline" className="gap-1.5 border-primary/25 bg-primary/5 hover:bg-primary/10 text-primary">
+              <Link href="/ai-assistant">
+                <Sparkles className="size-4" />
+                Hỏi Trợ lý AI
+              </Link>
+            </Button>
             <InvoiceOcrDialog suppliers={suppliers} ingredients={ingredients} />
             <Button asChild size="sm">
               <Link href="/purchases/new">
