@@ -680,6 +680,8 @@ export interface MatchedInvoiceItem {
   tax_rate?: number;
   /** Đánh dấu mặt hàng chịu thuế. */
   is_taxable?: boolean;
+  /** Ghi chú bổ sung hoặc cảnh báo nét gạch. */
+  note?: string | null;
 }
 
 export interface InvoiceOcrReviewData {

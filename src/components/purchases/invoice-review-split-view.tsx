@@ -73,7 +73,7 @@ export function InvoiceReviewSplitView({
   const [supplierId, setSupplierId] = useState<string>(reviewData.supplier_id || "");
   const [invoiceNumber, setInvoiceNumber] = useState<string>(reviewData.invoice_number || "");
   const [orderDate, setOrderDate] = useState<string>(reviewData.order_date);
-  const [excludedItems, setExcludedItems] = useState<string[]>(() => reviewData.excluded_items || []);
+  const [excludedItems] = useState<string[]>(() => reviewData.excluded_items || []);
   const [paidNow, setPaidNow] = useState<number>(0);
   const [paidMethod, setPaidMethod] = useState<PaymentMethod>("cash");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -173,19 +173,8 @@ export function InvoiceReviewSplitView({
     return shouldAutoAllocateVat ? `${baseNote} [Đã gồm VAT]`.trim() : baseNote;
   });
 
-  // Xác định mục tiêu tổng tiền hóa đơn:
-  // Nếu hóa đơn có món gạch bỏ và tổng in máy cao hơn tổng hàng thực nhận, tự động lấy tổng hàng thực nhận
-  const initialTargetTotal = (() => {
-    const rawDeliveredExpected = baseSubtotal + initialTaxAmount;
-    if (
-      reviewData.excluded_items &&
-      reviewData.excluded_items.length > 0 &&
-      reviewData.total_amount > rawDeliveredExpected + 1000
-    ) {
-      return rawDeliveredExpected;
-    }
-    return reviewData.total_amount > 0 ? reviewData.total_amount : rawDeliveredExpected;
-  })();
+  // Xác định mục tiêu tổng tiền hóa đơn: Lấy đúng tổng tiền in trên hóa đơn
+  const initialTargetTotal = reviewData.total_amount > 0 ? reviewData.total_amount : baseSubtotal + initialTaxAmount;
 
   const [taxPercent, setTaxPercent] = useState<number>(initialTaxPercent);
   const [taxAmount, setTaxAmount] = useState<number>(initialTaxAmount);
@@ -203,54 +192,6 @@ export function InvoiceReviewSplitView({
     initialTaxAmount > 0 && initialTaxPercent !== 5 && initialTaxPercent !== 8 && initialTaxPercent !== 10 && !hasItemTax
   );
 
-  // Khôi phục món bị gạch tay khi NCC giao bổ sung
-  const handleRestoreExcludedItem = (itemName: string) => {
-    const foundRaw = reviewData.raw_extracted?.items?.find((it) =>
-      it.raw_name?.toLowerCase().includes(itemName.toLowerCase()) ||
-      itemName.toLowerCase().includes(it.raw_name?.toLowerCase() || "")
-    );
-
-    const defaultQty = foundRaw?.quantity && foundRaw.quantity > 0 ? foundRaw.quantity : 1;
-    const defaultPrice = foundRaw?.unit_price && foundRaw.unit_price > 0 ? foundRaw.unit_price : 0;
-    const defaultTaxRate = typeof foundRaw?.tax_rate === "number" ? foundRaw.tax_rate : (foundRaw?.is_taxable ? 8 : 0);
-
-    const restoredItem: MatchedInvoiceItem = {
-      raw_name: itemName,
-      quantity: defaultQty,
-      unit: foundRaw?.unit || "kg",
-      unit_price: defaultPrice,
-      line_total: defaultQty * defaultPrice,
-      ingredient_id: null,
-      matched_ingredient_name: null,
-      conversion_factor: 1,
-      match_confidence: "unmatched",
-      tax_rate: defaultTaxRate,
-      is_taxable: defaultTaxRate > 0,
-    };
-
-    const updatedRaw = [...rawItems, restoredItem];
-    setRawItems(updatedRaw);
-
-    const addedAmount = defaultQty * defaultPrice;
-    const addedTax = defaultTaxRate > 0 ? Math.round(addedAmount * (defaultTaxRate / 100)) : 0;
-    const newTaxTotal = taxAmount + addedTax;
-
-    setTaxAmount(newTaxTotal);
-    setTargetInvoiceTotal((prev) => prev + addedAmount + addedTax);
-
-    if (isVatAllocated) {
-      const updatedItems = [...items, restoredItem];
-      setItems(updatedItems);
-      applyVatAllocationInternal(updatedItems, updatedRaw, newTaxTotal);
-    } else {
-      setItems((prev) => [...prev, restoredItem]);
-    }
-
-    setExcludedItems((prev) => prev.filter((name) => name !== itemName));
-    toast.success(
-      `Đã khôi phục món "${itemName}" (+${formatVND(addedAmount + addedTax)}). Tổng tiền đã tự động cập nhật khớp!`
-    );
-  };
 
   // Áp dụng mức VAT định sẵn hoặc tùy chỉnh
   const handleSelectVatPreset = (preset: "items" | "0" | "5" | "8" | "10" | "custom") => {
@@ -1108,40 +1049,19 @@ export function InvoiceReviewSplitView({
               </div>
             )}
 
-            {/* Thông báo các mặt hàng bị gạch tay trên hóa đơn kèm nút khôi phục nếu NCC đã giao bổ sung */}
+            {/* Thông báo các mặt hàng có nét gạch bút mực trên hóa đơn */}
             {excludedItems && excludedItems.length > 0 && (
-              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 space-y-2.5 text-xs text-rose-900 dark:text-rose-200 shadow-sm">
+              <div className="rounded-xl border border-rose-500/30 bg-rose-500/10 p-3.5 space-y-2 text-xs text-rose-900 dark:text-rose-200 shadow-sm">
                 <div className="flex items-start gap-2.5">
                   <FileX2 className="size-4 text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" />
-                  <div className="space-y-0.5">
+                  <div className="space-y-1">
                     <p className="font-semibold text-rose-950 dark:text-rose-100">
-                      AI đã nhận diện và tự động loại bỏ {excludedItems.length} mặt hàng bị gạch tay trên hóa đơn (hàng hủy / không nhận):
+                      Hóa đơn có {excludedItems.length} mặt hàng có nét gạch bút mực ({excludedItems.join(", ")}):
                     </p>
-                    <p className="text-[11px] text-muted-foreground">
-                      Hệ thống đã tự động trừ tiền các món này khỏi tổng thanh toán. Nếu nhà cung cấp đã giao bổ sung món này đợt này, bạn có thể bấm <strong>Khôi phục</strong> để tự động cộng bù vào phiếu nhập kho:
+                    <p className="text-[11px] text-muted-foreground leading-relaxed">
+                      Các món này vẫn được trích xuất đầy đủ vào bảng bên dưới để bạn kiểm tra đối chiếu. Nếu thực tế không nhận món nào, bạn hãy nhấn biểu tượng <strong>Thùng rác</strong> trên dòng đó để xóa thủ công (hệ thống sẽ tự động trừ tiền tương ứng để khớp 100%).
                     </p>
                   </div>
-                </div>
-
-                <div className="flex flex-wrap gap-2 pl-6">
-                  {excludedItems.map((itemName, idx) => (
-                    <div
-                      key={idx}
-                      className="inline-flex items-center gap-2 px-2.5 py-1 bg-background/90 border border-rose-300 dark:border-rose-800 rounded-md shadow-sm"
-                    >
-                      <span className="line-through font-mono text-muted-foreground">{itemName}</span>
-                      <Button
-                        type="button"
-                        size="sm"
-                        variant="secondary"
-                        onClick={() => handleRestoreExcludedItem(itemName)}
-                        className="h-6 px-2 text-[11px] gap-1 bg-emerald-600/10 hover:bg-emerald-600/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 font-medium"
-                      >
-                        <Plus className="size-3" />
-                        Khôi phục (Đã bổ sung)
-                      </Button>
-                    </div>
-                  ))}
                 </div>
               </div>
             )}
@@ -1280,10 +1200,23 @@ export function InvoiceReviewSplitView({
                   <tbody className="divide-y">
                     {items.map((item, idx) => {
                       const isMatched = Boolean(item.ingredient_id);
+                      const isStruckItem = Boolean(
+                        item.note?.toLowerCase().includes("gạch") ||
+                        excludedItems.some((name) =>
+                          item.raw_name?.toLowerCase().includes(name.toLowerCase()) ||
+                          name.toLowerCase().includes(item.raw_name?.toLowerCase() || "")
+                        )
+                      );
                       return (
                         <tr
                           key={idx}
-                          className={!isMatched ? "bg-amber-500/10 dark:bg-amber-950/20" : undefined}
+                          className={
+                            isStruckItem
+                              ? "bg-rose-500/10 dark:bg-rose-950/20"
+                              : !isMatched
+                              ? "bg-amber-500/10 dark:bg-amber-950/20"
+                              : undefined
+                          }
                         >
                           <td className="p-2 text-center w-[46px] min-w-[42px] font-mono text-xs font-semibold text-muted-foreground/80 select-none">
                             {idx + 1}
@@ -1292,8 +1225,14 @@ export function InvoiceReviewSplitView({
                             <Input
                               value={item.raw_name}
                               onChange={(e) => handleUpdateItem(idx, { raw_name: e.target.value })}
-                              className="h-8 text-xs font-medium"
+                              className={`h-8 text-xs font-medium ${isStruckItem ? "border-rose-300 dark:border-rose-800" : ""}`}
                             />
+                            {isStruckItem && (
+                              <div className="flex items-center gap-1 mt-1 text-[10px] text-rose-600 dark:text-rose-400 font-medium">
+                                <FileX2 className="size-3 shrink-0" />
+                                <span>Có nét gạch trên HĐ</span>
+                              </div>
+                            )}
                           </td>
                           <td className="p-2 w-[220px] min-w-[190px]">
                             <div className="space-y-1">
@@ -1407,8 +1346,13 @@ export function InvoiceReviewSplitView({
                               type="button"
                               variant="ghost"
                               size="icon"
-                              className="size-7 text-muted-foreground hover:text-destructive"
+                              className={`size-7 ${
+                                isStruckItem
+                                  ? "text-rose-600 hover:text-rose-700 bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30"
+                                  : "text-muted-foreground hover:text-destructive"
+                              }`}
                               onClick={() => handleDeleteItem(idx)}
+                              title={isStruckItem ? "Xóa món có nét gạch trên hóa đơn" : "Xóa dòng này"}
                             >
                               <Trash2 className="size-3.5" />
                             </Button>

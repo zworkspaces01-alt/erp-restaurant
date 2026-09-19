@@ -12,15 +12,12 @@ Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam.
 Nhiệm vụ: Trích xuất chính xác thông tin biên bản giao nhận / hóa đơn nhập kho.
 
 CỰC KỲ QUAN TRỌNG:
-1. MÓN GẠCH BỎ (CANCELLED / STRIKETHROUGH):
-   - CHỈ coi một dòng là bị gạch bỏ nếu THỰC SỰ CÓ NÉT BÚT MỰC VIẾT TAY GẠCH ĐÈ LÊN TÊN/DÒNG ĐÓ TRONG BẢNG.
-   - Nếu có dòng bị gạch bỏ bằng bút bi mực (ví dụ gạch ngang hủy món không giao):
-     + Đưa tên các món bị gạch vào "excluded_items".
-     + KHÔNG đưa các món này vào "items".
-     + "subtotal" CHỈ tính tổng các dòng thực nhận (không bị gạch).
-     + "total_amount": Nếu chân phiếu in sẵn tổng tiền gồm cả món gạch, hãy LẤY TỔNG THỰC TẾ GIAO (trừ tiền các món gạch ra).
-   - Nếu trong bảng KHÔNG CÓ NÉT BÚT VIẾT TAY GẠCH XÓA DÒNG HÀNG thì đặt "excluded_items": []. TUYỆT ĐỐI KHÔNG TỰ BỊA RA MÓN GẠCH!
-   - Dấu tích chữ V, chữ ký người nhận hoặc hình vẽ ở góc phiếu KHÔNG PHẢI là gạch bỏ mặt hàng.
+1. MÓN GẠCH BỎ TRÊN HÓA ĐƠN:
+   - VẪN ĐỌC ĐẦY ĐỦ TẤT CẢ CÁC MẶT HÀNG TRÊN HÓA ĐƠN VÀO "items" (kể cả những dòng có nét bút bi gạch đè lên). Người dùng sẽ xem và tự xóa thủ công nếu cần.
+   - TUYỆT ĐỐI KHÔNG tự ý loại bỏ bất kỳ dòng nào ra khỏi danh sách "items"!
+   - Nếu dòng nào có nét bút bi viết tay gạch đè xóa dòng, hãy ghi vào "excluded_items" tên các món đó để hệ thống hiển thị cảnh báo cho người dùng dễ nhìn thấy để xóa thủ công.
+   - "subtotal": Tổng tiền hàng chưa thuế của tất cả các dòng in trên hóa đơn.
+   - "total_amount": Đọc đúng ô tổng thanh toán in trên hóa đơn.
 
 2. PHÂN BIỆT "SL ĐẶT" VÀ "SL GIAO" (HÀNG THỰC GIAO):
    - Cột "SL giao" (Fulfilled qty) là số lượng THỰC TẾ GIAO ĐỢT NÀY -> BẮT BUỘC LẤY SỐ LƯỢNG THEO CỘT "SL GIAO".
@@ -172,14 +169,9 @@ function parseJsonSafe(text: string): InvoiceParsedData {
       taxAmount = itemTaxSum;
     }
 
-    let totalAmount = rawTotalAmount > 0 ? rawTotalAmount : subtotal + taxAmount;
+    const totalAmount = rawTotalAmount > 0 ? rawTotalAmount : subtotal + taxAmount;
 
-    // Nếu hóa đơn có món bị gạch bỏ và tổng in máy cao hơn nhiều so với tổng hàng thực nhận + thuế
-    // (do tổng in chân phiếu đã bao gồm cả các món bị gạch bỏ)
-    if (excluded_items.length > 0 && rawTotalAmount > (calculatedSubtotal + taxAmount) + 1000) {
-      // Tự động điều chỉnh tổng hóa đơn theo số tiền hàng thực nhận
-      totalAmount = calculatedSubtotal + taxAmount;
-    } else if (taxAmount <= 0 && totalAmount > subtotal) {
+    if (taxAmount <= 0 && totalAmount > subtotal) {
       taxAmount = totalAmount - subtotal;
     }
 
@@ -787,6 +779,16 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           is_taxable: true,
         },
         {
+          raw_name: "Hạt bạch quả đông lạnh FROZEN GINKGO (KARATSUKI GINNAN)",
+          quantity: 1,
+          unit: "Túi",
+          unit_price: 415000,
+          line_total: 415000,
+          tax_rate: 0,
+          is_taxable: false,
+          note: "Có nét gạch trên hóa đơn",
+        },
+        {
           raw_name: "Vây cá đuối 250g",
           quantity: 1,
           unit: "Gói",
@@ -794,6 +796,16 @@ export const SAMPLE_DEMO_INVOICES: Array<{
           line_total: 145000,
           tax_rate: 8,
           is_taxable: true,
+        },
+        {
+          raw_name: "Vỏ tắc Nhật: Kizami Yuzu (Khô) 250g",
+          quantity: 1,
+          unit: "Gói",
+          unit_price: 165000,
+          line_total: 165000,
+          tax_rate: 0,
+          is_taxable: false,
+          note: "Có nét gạch trên hóa đơn",
         },
         {
           raw_name: "Rong biển nướng cắt sợi Kizami Nori",
@@ -845,10 +857,10 @@ export const SAMPLE_DEMO_INVOICES: Array<{
         "Hạt bạch quả đông lạnh FROZEN GINKGO (KARATSUKI GINNAN)",
         "Vỏ tắc Nhật: Kizami Yuzu (Khô) 250g",
       ],
-      subtotal: 4150000,
+      subtotal: 4730000,
       tax_percent: 8,
       tax_amount: 310240,
-      total_amount: 4460240, // Đã trừ 580.000đ của 2 món gạch bỏ
+      total_amount: 5040240,
       confidence_score: 0.99,
     },
   },

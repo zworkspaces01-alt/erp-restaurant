@@ -285,6 +285,7 @@ export function matchItemWithIngredient(
     match_confidence: confidence,
     tax_rate: taxRate,
     is_taxable: isTaxable,
+    note: item.note || null,
   };
 }
 
