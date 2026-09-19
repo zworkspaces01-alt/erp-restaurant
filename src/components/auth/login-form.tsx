@@ -54,7 +54,7 @@ export function LoginForm({ next }: { next?: string }) {
             id="email"
             type="email"
             autoComplete="email"
-            placeholder="superadmin@restaurant.com"
+            placeholder="name@example.com"
             className="pl-9"
             {...form.register("email")}
           />

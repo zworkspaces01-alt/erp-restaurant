@@ -27,9 +27,6 @@ export default async function LoginPage({
         </CardHeader>
         <CardContent>
           <LoginForm next={safeNext} />
-          <p className="mt-4 text-center text-xs text-muted-foreground">
-            Tài khoản SuperAdmin: superadmin@restaurant.com / SuperAdmin@2026!
-          </p>
         </CardContent>
       </Card>
     </div>
