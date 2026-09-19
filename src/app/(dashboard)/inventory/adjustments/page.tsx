@@ -48,10 +48,10 @@ export default async function InventoryAdjustmentsPage() {
         }
       />
 
-      <Tabs defaultValue="single" className="space-y-4">
+      <Tabs defaultValue="sheet" className="space-y-4">
         <TabsList>
-          <TabsTrigger value="single">Ghi nhận lẻ</TabsTrigger>
-          <TabsTrigger value="sheet">Kiểm kê hàng loạt</TabsTrigger>
+          <TabsTrigger value="sheet">Kiểm kê hàng loạt & Excel</TabsTrigger>
+          <TabsTrigger value="single">Ghi nhận lẻ từng món</TabsTrigger>
         </TabsList>
 
         <TabsContent value="sheet">

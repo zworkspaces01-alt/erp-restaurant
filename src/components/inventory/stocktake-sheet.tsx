@@ -2,8 +2,10 @@
 
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ClipboardCheck, Eraser } from "lucide-react";
+import { ClipboardCheck, Eraser, Download, FileSpreadsheet } from "lucide-react";
 import { recordStocktakeSheet } from "@/server-actions/inventory.actions";
+import { downloadStocktakeExcel } from "@/lib/excel";
+import { StocktakeImportDialog } from "./stocktake-import-dialog";
 import { toTxnTimestamp } from "@/components/inventory/adjustment-schema";
 import type { StocktakeSheetInput } from "@/components/inventory/adjustment-schema";
 import { useAction } from "@/hooks/use-action";
@@ -47,6 +49,7 @@ export function StocktakeSheet({ rows }: { rows: StocktakeRow[] }) {
   const [txnAt, setTxnAt] = useState(todayISO());
   const [note, setNote] = useState("");
   const [search, setSearch] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -98,11 +101,35 @@ export function StocktakeSheet({ rows }: { rows: StocktakeRow[] }) {
 
   return (
     <Card>
-      <CardHeader>
-        <CardTitle>Kiểm kê hàng loạt</CardTitle>
-        <CardDescription>
-          Nhập số đếm thực tế cho từng nguyên liệu. Chỉ những dòng lệch với tồn sổ được ghi nhận.
-        </CardDescription>
+      <CardHeader className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <CardTitle>Kiểm kê hàng loạt</CardTitle>
+          <CardDescription>
+            Nhập số đếm thực tế cho từng nguyên liệu hoặc xuất/nhập qua file Excel để đồng bộ tồn kho.
+          </CardDescription>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => downloadStocktakeExcel(rows)}
+            className="gap-1.5"
+          >
+            <Download className="size-4 text-emerald-600 dark:text-emerald-400" />
+            Xuất file Excel kiểm kho
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setImportOpen(true)}
+            className="gap-1.5 border-primary/25 bg-primary/5 text-primary hover:bg-primary/10"
+          >
+            <FileSpreadsheet className="size-4" />
+            Nhập file Excel kiểm kho
+          </Button>
+        </div>
       </CardHeader>
       <CardContent className="space-y-4">
         <div className="grid gap-3 sm:grid-cols-3">
@@ -245,6 +272,12 @@ export function StocktakeSheet({ rows }: { rows: StocktakeRow[] }) {
           </div>
         </div>
       </CardContent>
+
+      <StocktakeImportDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        stockRows={rows}
+      />
     </Card>
   );
 }

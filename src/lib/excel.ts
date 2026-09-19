@@ -744,3 +744,123 @@ export function exportDailyReportToExcel(
   XLSX.writeFile(wb, `Bao_Cao_Tieu_Hao_Nguyen_Lieu_${date}.xlsx`);
 }
 
+// -----------------------------------------------------------------------------
+// KIỂM KÊ KHO (STOCKTAKE)
+// -----------------------------------------------------------------------------
+
+export interface StocktakeExportItem {
+  id: string;
+  code: string | null;
+  name: string;
+  category: string | null;
+  base_unit: string;
+  current_stock: number;
+}
+
+export interface StocktakeImportRow {
+  ingredientId?: string;
+  code?: string;
+  name: string;
+  counted: number;
+  note?: string;
+  rowIndex: number;
+  raw: Record<string, unknown>;
+}
+
+export function downloadStocktakeExcel(items: StocktakeExportItem[], fileName?: string) {
+  const wsData = [
+    [
+      "STT",
+      "Mã nguyên liệu",
+      "Tên nguyên liệu (*)",
+      "Danh mục / Nhóm",
+      "Đơn vị cơ sở",
+      "Tồn sổ sách (Hệ thống)",
+      "Số đếm thực tế (*)",
+      "Ghi chú kiểm kê",
+    ],
+    ...items.map((it, idx) => [
+      idx + 1,
+      it.code || "",
+      it.name,
+      it.category || "",
+      it.base_unit || "",
+      it.current_stock,
+      it.current_stock, // Điền sẵn tồn sổ để người kiểm kho tiện đối soát và sửa dòng có lệch
+      "",
+    ]),
+  ];
+
+  const wb = XLSX.utils.book_new();
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+  ws["!cols"] = [
+    { wch: 6 },  // STT
+    { wch: 16 }, // Mã
+    { wch: 42 }, // Tên
+    { wch: 24 }, // Danh mục
+    { wch: 14 }, // ĐVT
+    { wch: 22 }, // Tồn sổ
+    { wch: 22 }, // Số đếm thực tế
+    { wch: 28 }, // Ghi chú
+  ];
+
+  XLSX.utils.book_append_sheet(wb, ws, "Kiểm kê kho");
+  const today = new Date().toISOString().slice(0, 10);
+  XLSX.writeFile(wb, fileName || `Phieu_Kiem_Kho_${today}.xlsx`);
+}
+
+export async function parseStocktakeExcelFile(file: File): Promise<StocktakeImportRow[]> {
+  const buffer = await file.arrayBuffer();
+  const wb = XLSX.read(buffer, { type: "array" });
+  const sheetName = wb.SheetNames[0];
+  if (!sheetName) return [];
+
+  const ws = wb.Sheets[sheetName];
+  const jsonData = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1 });
+  if (jsonData.length < 2) return [];
+
+  const headers = (jsonData[0] as unknown[]).map((h) => normalizeHeader(String(h || "")));
+
+  const codeIdx = headers.findIndex((h) => h.includes("ma") || h.includes("code") || h.includes("sku"));
+  const nameIdx = headers.findIndex(
+    (h) => h.includes("ten") || h.includes("name") || h.includes("nguyenlieu") || h.includes("sanpham")
+  );
+  const countedIdx = headers.findIndex(
+    (h) =>
+      h.includes("sodem") ||
+      h.includes("thucte") ||
+      h.includes("counted") ||
+      h.includes("kiemke") ||
+      h.includes("tonthuc")
+  );
+  const noteIdx = headers.findIndex((h) => h.includes("ghichu") || h.includes("note") || h.includes("lydo"));
+
+  const results: StocktakeImportRow[] = [];
+
+  for (let i = 1; i < jsonData.length; i++) {
+    const row = jsonData[i] as unknown[];
+    if (!row || row.length === 0) continue;
+
+    const rawName = nameIdx >= 0 ? cellToString(row[nameIdx]) : "";
+    const rawCode = codeIdx >= 0 ? cellToString(row[codeIdx]) : "";
+
+    if (!rawName && !rawCode) continue;
+
+    const rawCounted = countedIdx >= 0 ? row[countedIdx] : null;
+    const counted = cellToNumber(rawCounted, 0);
+    const note = noteIdx >= 0 ? cellToString(row[noteIdx]) : undefined;
+
+    results.push({
+      rowIndex: i + 1,
+      code: rawCode || undefined,
+      name: rawName,
+      counted: Math.max(0, counted),
+      note: note || undefined,
+      raw: row as unknown as Record<string, unknown>,
+    });
+  }
+
+  return results;
+}
+
