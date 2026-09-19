@@ -21,6 +21,10 @@ function normalizeHeader(str: string): string {
   return str
     .trim()
     .toLowerCase()
+    // "đ" KHÔNG tách ra được bằng NFD (khác với các nguyên âm có dấu), nên phải
+    // đổi thủ công. Thiếu dòng này thì "Định lượng" -> "inhluong" và mọi cột bắt
+    // đầu bằng Đ (Định lượng, Đơn vị, Đơn giá, Đang bán) đều không khớp parser.
+    .replace(/đ/g, "d")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]/g, "");

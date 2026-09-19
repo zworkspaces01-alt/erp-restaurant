@@ -182,6 +182,12 @@ export async function parseQueryIntent(userQuery: string): Promise<ParsedIntent>
 }
 
 /**
+ * Model văn bản của Groq, thử theo thứ tự. Kiểm tra danh sách còn sống bằng:
+ *   curl -s https://api.groq.com/openai/v1/models -H "Authorization: Bearer $GROQ_API_KEY"
+ */
+const GROQ_TEXT_MODELS = ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"] as const;
+
+/**
  * Gọi mô hình ngôn ngữ thông qua Key Rotator (hỗ trợ Groq / Gemini / OpenAI với tự động failover)
  */
 async function callLlmForExplanation(prompt: string, systemPrompt?: string): Promise<{ text: string; provider: string }> {
@@ -199,41 +205,59 @@ async function callLlmForExplanation(prompt: string, systemPrompt?: string): Pro
 
     try {
       if (provider === "groq") {
-        const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${key.trim()}`,
-          },
-          body: JSON.stringify({
-            model: "llama-3.3-70b-versatile",
-            messages: [
-              {
-                role: "system",
-                content:
-                  systemPrompt ||
-                  "Bạn là trợ lý AI thông minh của hệ thống ERP Nhà hàng. Nhiệm vụ của bạn là giải thích, phân tích dữ liệu nhập hàng và chi phí một cách khách quan, súc tích, chuyên nghiệp bằng tiếng Việt, dựa CHÍNH XÁC trên số liệu được cung cấp, tuyệt đối không bịa thêm con số.",
-              },
-              { role: "user", content: prompt },
-            ],
-            temperature: 0.2,
-            max_tokens: 800,
-          }),
-        });
+        // Thử lần lượt các model: Groq gỡ model cũ khá thường xuyên (llama-3.3-70b-versatile
+        // đã bị gỡ và trả 404 model_not_found), nên luôn có model dự phòng.
+        // Giữ đồng bộ với GROQ_TEXT_MODELS dùng ở invoice-ocr / ingredient-ocr.
+        let groqModelMissing = false;
 
-        if (res.status === 200) {
-          const json = await res.json();
-          const text = json.choices?.[0]?.message?.content || "";
-          recordKeySuccess(key);
-          return { text, provider: "Groq (Llama 3.3 70B)" };
+        for (const model of GROQ_TEXT_MODELS) {
+          const res = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${key.trim()}`,
+            },
+            body: JSON.stringify({
+              model,
+              messages: [
+                {
+                  role: "system",
+                  content:
+                    systemPrompt ||
+                    "Bạn là trợ lý AI thông minh của hệ thống ERP Nhà hàng. Nhiệm vụ của bạn là giải thích, phân tích dữ liệu nhập hàng và chi phí một cách khách quan, súc tích, chuyên nghiệp bằng tiếng Việt, dựa CHÍNH XÁC trên số liệu được cung cấp, tuyệt đối không bịa thêm con số.",
+                },
+                { role: "user", content: prompt },
+              ],
+              temperature: 0.2,
+              max_tokens: 800,
+            }),
+          });
+
+          if (res.status === 200) {
+            const json = await res.json();
+            const text = json.choices?.[0]?.message?.content || "";
+            recordKeySuccess(key);
+            return { text, provider: `Groq (${model})` };
+          }
+
+          if (res.status === 429) {
+            recordKeyRateLimit(key, 60);
+            break; // key này hết hạn mức, xoay sang key khác
+          }
+
+          if (res.status === 404) {
+            groqModelMissing = true;
+            continue; // model đã bị gỡ, thử model kế tiếp
+          }
+
+          throw new Error(`Groq status ${res.status}`);
         }
 
-        if (res.status === 429) {
-          recordKeyRateLimit(key, 60);
-          continue;
+        if (groqModelMissing) {
+          throw new Error("Groq: không còn model khả dụng trong GROQ_TEXT_MODELS");
         }
 
-        throw new Error(`Groq status ${res.status}`);
+        continue;
       }
 
       if (provider === "gemini") {
