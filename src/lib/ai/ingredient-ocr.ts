@@ -395,7 +395,7 @@ async function extractWithGroq(
         },
       ],
       temperature: 0.1,
-      max_tokens: 800, // Đặt 800 để luôn nằm an toàn trong trần 1000 OTPM của Groq Free Tier
+      max_tokens: 950, // Tối ưu 950 token để đọc trọn vẹn hóa đơn dài dưới trần 1000 OTPM
     };
 
     return fetch(url, {

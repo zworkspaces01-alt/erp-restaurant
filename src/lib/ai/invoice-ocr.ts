@@ -12,40 +12,36 @@ Bạn là chuyên gia OCR và kế toán kiểm kho nhà hàng tại Việt Nam.
 Nhiệm vụ: Trích xuất chính xác thông tin biên bản giao nhận / hóa đơn nhập kho.
 
 CỰC KỲ QUAN TRỌNG:
-1. MÓN GẠCH BỎ TRÊN HÓA ĐƠN:
-   - VẪN ĐỌC ĐẦY ĐỦ TẤT CẢ CÁC MẶT HÀNG TRÊN HÓA ĐƠN VÀO "items" (kể cả những dòng có nét bút bi gạch đè lên). Người dùng sẽ xem và tự xóa thủ công nếu cần.
-   - TUYỆT ĐỐI KHÔNG tự ý loại bỏ bất kỳ dòng nào ra khỏi danh sách "items"!
+1. BẢO ĐẢM ĐỌC ĐỦ TOÀN BỘ CÁC DÒNG (KHÔNG BỎ SÓT BẤT KỲ DÒNG NÀO):
+   - Đọc tuần tự theo cột Số TT từ dòng 001 đến dòng cuối cùng của bảng hóa đơn (ví dụ 019 hoặc nhiều hơn).
+   - TUYỆT ĐỐI KHÔNG dừng lại giữa chừng! Kể cả những dòng có nét bút bi gạch đè (như Hạt bạch quả, Vỏ tắc...) VẪN PHẢI ĐỌC ĐẦY ĐỦ VÀO "items" (đồng thời ghi tên các món bị gạch đó vào "excluded_items").
+   - Người dùng sẽ xem và tự xóa thủ công nếu cần.
+
+2. MÓN GẠCH BỎ TRÊN HÓA ĐƠN:
+   - VẪN ĐỌC ĐẦY ĐỦ TẤT CẢ CÁC MẶT HÀNG TRÊN HÓA ĐƠN VÀO "items".
    - Nếu dòng nào có nét bút bi viết tay gạch đè xóa dòng, hãy ghi vào "excluded_items" tên các món đó để hệ thống hiển thị cảnh báo cho người dùng dễ nhìn thấy để xóa thủ công.
-   - "subtotal": Tổng tiền hàng chưa thuế của tất cả các dòng in trên hóa đơn.
    - "total_amount": Đọc đúng ô tổng thanh toán in trên hóa đơn.
 
-2. PHÂN BIỆT "SL ĐẶT" VÀ "SL GIAO" (HÀNG THỰC GIAO):
+3. PHÂN BIỆT "SL ĐẶT" VÀ "SL GIAO" (HÀNG THỰC GIAO):
    - Cột "SL giao" (Fulfilled qty) là số lượng THỰC TẾ GIAO ĐỢT NÀY -> BẮT BUỘC LẤY SỐ LƯỢNG THEO CỘT "SL GIAO".
    - Dòng nào có SL giao = 0.00 (như Măng tây cồ: SL đặt 0.5, SL giao 0.00; Lá mè Nhật: SL đặt 1.0, SL giao 0.00):
      -> SL giao là 0, Thành tiền là 0.
 
-3. PHÂN BIỆT RÕ "ĐƠN GIÁ" (UNIT PRICE) VÀ "THÀNH TIỀN" (LINE TOTAL):
+4. PHÂN BIỆT RÕ "ĐƠN GIÁ" (UNIT PRICE) VÀ "THÀNH TIỀN" (LINE TOTAL):
    - "Đơn giá" (Giá trước thuế / Unit price): giá của 1 đơn vị tính (vd: Gừng là 30,000 đ/kg; Hẹ lá là 55,000 đ/kg; Ngò rí là 59,000 đ/kg).
-   - "Thành tiền" (Line total): = SL giao * Đơn giá (vd: 0.5kg Gừng * 30,000 = 15,000đ; 0.1kg Ngò rí * 59,000 = 5,900đ; Măng tây cồ: 0 * 139,000 = 0).
+   - "Thành tiền" (Line total): = SL giao * Đơn giá.
    - TUYỆT ĐỐI KHÔNG lấy Thành tiền làm Đơn giá!
 
-4. MẶT HÀNG CHỊU THUẾ VÀ KHÔNG CHỊU THUẾ (VAT THEO TỪNG MẶT HÀNG):
-   - Trên một hóa đơn, có thể có cả mặt hàng chịu thuế và không chịu thuế:
-     + MẶT HÀNG KHÔNG CHỊU THUẾ (KCT / 0% VAT): Nông sản tươi sống, rau củ quả thô, thịt cá tươi sống chưa qua chế biến. Ghi thuế suất là 0.
-     + MẶT HÀNG CHỊU THUẾ (5%, 8%, 10% VAT): Hàng chế biến, đồ đóng hộp, bơ sữa đóng gói, dầu ăn, gia vị công nghiệp, đồ uống, bao bì... hoặc dòng có ghi cột thuế suất riêng (vd 5%, 8%, 10%) hoặc có ký hiệu đánh dấu (*).
+5. MẶT HÀNG CHỊU THUẾ VÀ KHÔNG CHỊU THUẾ (VAT THEO TỪNG MẶT HÀNG):
+   - Nông sản tươi sống, rau củ quả thô, thịt cá tươi sống chưa qua chế biến: Thuế suất là 0.
+   - Hàng chế biến, đóng hộp, bơ sữa, dầu ăn, gia vị công nghiệp, bao bì...: Thuế suất là 5, 8 hoặc 10.
    - Trích xuất trường Thuế_suất_% cho từng dòng (0 nếu không chịu thuế, hoặc 5, 8, 10 nếu chịu thuế).
 
-5. HÓA ĐƠN CÓ 2 HỆ THỐNG CỘT GIÁ (TRƯỚC THUẾ VÀ SAU THUẾ - VÍ DỤ SIM BA, METRO...):
+6. HÓA ĐƠN CÓ 2 HỆ THỐNG CỘT GIÁ (TRƯỚC THUẾ VÀ SAU THUẾ - VÍ DỤ SIM BA, METRO...):
    - Một số hóa đơn in cùng lúc: "Đơn giá (- VAT)", "Thành tiền (- VAT)", "VAT %" và "Đơn giá (+ VAT)", "Thành tiền (+ VAT)".
    - QUY TẮC: Lấy "Đơn giá (- VAT)" làm Đơn_giá_1_đơn_vị và đọc đúng cột "VAT %" của từng dòng.
-   - KIỂM TRA SỐ HỌC BẮT BUỘC: SL * Đơn giá = Thành tiền. Nếu trên phiếu có nét bút mực xanh quẹt đè lên số in sẵn (ví dụ máy in 4,00 nhưng bị quẹt bút bi trông giống số 1 thành 14, máy in 2,00 trông giống 12):
+   - KIỂM TRA SỐ HỌC BẮT BUỘC: Nếu trên phiếu có nét bút mực xanh quẹt đè lên số in sẵn (ví dụ máy in 4,00 nhưng bị quẹt bút bi trông giống số 1 thành 14, máy in 2,00 trông giống 12):
      -> BẮT BUỘC lấy Thành tiền / Đơn giá (138.000 / 34.500 = 4; 600.000 / 300.000 = 2) để lấy đúng số lượng in máy, TUYỆT ĐỐI KHÔNG đọc nhầm nét quẹt bút thành 14 hay 12!
-
-6. TỔNG TIỀN & THUẾ VAT:
-   - "subtotal": Tổng tiền hàng chưa thuế của các dòng thực giao.
-   - "tax_amount": Tiền thuế GTGT / VAT (tổng thuế các dòng chịu thuế hoặc ghi riêng ở chân phiếu).
-   - "tax_percent": Tỷ lệ thuế VAT chung nếu có. Nếu không thì để 0.
-   - "total_amount": BẮT BUỘC đọc đúng ô tổng tiền thanh toán thực tế cuối cùng (sau thuế và sau khi trừ các món gạch).
 
 Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
 {
@@ -56,13 +52,13 @@ Trả về DUY NHẤT một chuỗi JSON hợp lệ theo đúng cấu trúc sau:
   "invoice_number": "Mã phiếu / Số hóa đơn",
   "order_date": "YYYY-MM-DD",
   "items": [
-    ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thành_tiền, Thuế_suất_%]
+    ["Tên mặt hàng", SL_giao, "ĐVT", Đơn_giá_1_đơn_vị, Thuế_suất_%]
   ],
-  "excluded_items": [],
-  "subtotal": 976000,
+  "excluded_items": ["Tên món bị gạch bỏ nếu có"],
+  "subtotal": 4730000,
   "tax_percent": 0,
-  "tax_amount": 45090,
-  "total_amount": 1021090
+  "tax_amount": 310240,
+  "total_amount": 5040240
 }
 `;
 
@@ -77,14 +73,38 @@ function parseJsonSafe(text: string): InvoiceParsedData {
     if (Array.isArray(rawItems)) {
       for (const it of rawItems) {
         if (Array.isArray(it)) {
-          // Dạng mảng tinh gọn: [name, qty, unit, price, total, tax_rate?]
+          // Dạng mảng tinh gọn: [name, qty, unit, price, vat] hoặc [name, qty, unit, price, total, vat]
           const name = (typeof it[0] === "string" ? it[0] : "").trim();
           let qty = typeof it[1] === "number" ? it[1] : (!isNaN(Number(it[1])) && it[1] !== "" && it[1] !== null) ? Number(it[1]) : 0;
           const unit = (typeof it[2] === "string" ? it[2] : "kg").trim() || "kg";
           const price = typeof it[3] === "number" ? it[3] : (!isNaN(Number(it[3])) && it[3] !== "" && it[3] !== null) ? Number(it[3]) : 0;
-          const total = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : qty * price;
-          const rawTaxRate = it[5];
-          const taxRate = typeof rawTaxRate === "number" ? rawTaxRate : (!isNaN(Number(rawTaxRate)) && rawTaxRate !== "" && rawTaxRate !== null) ? Number(rawTaxRate) : 0;
+
+          let total = 0;
+          let taxRate = 0;
+
+          if (it.length >= 6) {
+            total = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : qty * price;
+            const rawTaxRate = it[5];
+            taxRate = typeof rawTaxRate === "number" ? rawTaxRate : (!isNaN(Number(rawTaxRate)) && rawTaxRate !== "" && rawTaxRate !== null) ? Number(rawTaxRate) : 0;
+          } else if (it.length === 5) {
+            const val4 = typeof it[4] === "number" ? it[4] : (!isNaN(Number(it[4])) && it[4] !== "" && it[4] !== null) ? Number(it[4]) : 0;
+            if (price > 500 && (val4 === 0 || val4 === 5 || val4 === 8 || val4 === 10) && Math.abs(val4 - qty * price) > 500) {
+              taxRate = val4;
+              total = qty * price;
+            } else if (Math.abs(val4 - qty * price) < 500) {
+              total = val4;
+              taxRate = 0;
+            } else if (val4 <= 100 && price > 500) {
+              taxRate = val4;
+              total = qty * price;
+            } else {
+              total = val4;
+              taxRate = 0;
+            }
+          } else {
+            total = qty * price;
+            taxRate = 0;
+          }
 
           // Kiểm tra và sửa sai số học nếu nét bút bi quẹt đè lên số lượng (ví dụ in 4 nhưng trông như 14, in 2 trông như 12)
           if (price > 0 && total > 0 && Math.abs(qty * price - total) > 500) {
@@ -205,35 +225,39 @@ function parseJsonSafe(text: string): InvoiceParsedData {
     // tiếp tục cứu hộ
   }
 
-  // 2. Tìm khối { ... }
+  // 2. Tìm khối { ... } hoặc cứu hộ chuỗi JSON bị đứt đoạn do hết token
   const firstBrace = cleaned.indexOf("{");
-  const lastBrace = cleaned.lastIndexOf("}");
-  if (firstBrace !== -1 && lastBrace > firstBrace) {
-    const candidate = cleaned.slice(firstBrace, lastBrace + 1);
-    try {
-      const parsed = JSON.parse(candidate);
-      if (parsed && typeof parsed === "object") {
-        return normalizeObj(parsed as Record<string, unknown>);
+  if (firstBrace !== -1) {
+    const lastBrace = cleaned.lastIndexOf("}");
+    if (lastBrace > firstBrace) {
+      const candidate = cleaned.slice(firstBrace, lastBrace + 1);
+      try {
+        const parsed = JSON.parse(candidate);
+        if (parsed && typeof parsed === "object") {
+          return normalizeObj(parsed as Record<string, unknown>);
+        }
+      } catch {
+        // thử tiếp bên dưới
       }
-    } catch {
-      // 3. Phục hồi nếu bị ngắt đuôi mảng
-      const lastItemEnd = candidate.lastIndexOf("]");
-      if (lastItemEnd > 0) {
-        const truncatedSlice = candidate.slice(0, lastItemEnd + 1);
-        const recoveryPatterns = [
-          truncatedSlice + "}",
-          truncatedSlice + "]}",
-          truncatedSlice + "}]}",
-        ];
-        for (const pattern of recoveryPatterns) {
-          try {
-            const recovered = JSON.parse(pattern);
-            if (recovered && (Array.isArray(recovered.items) || Array.isArray(recovered.del))) {
-              return normalizeObj(recovered as Record<string, unknown>);
-            }
-          } catch {
-            // thử tiếp
+    }
+
+    // 3. Phục hồi nếu bị ngắt đuôi mảng (kể cả khi không có dấu đóng ngoặc nhọn })
+    const lastItemEnd = cleaned.lastIndexOf("]");
+    if (lastItemEnd > firstBrace) {
+      const truncatedSlice = cleaned.slice(firstBrace, lastItemEnd + 1);
+      const recoveryPatterns = [
+        truncatedSlice + "}",
+        truncatedSlice + "]}",
+        truncatedSlice + "}]}",
+      ];
+      for (const pattern of recoveryPatterns) {
+        try {
+          const recovered = JSON.parse(pattern);
+          if (recovered && (Array.isArray(recovered.items) || Array.isArray(recovered.del))) {
+            return normalizeObj(recovered as Record<string, unknown>);
           }
+        } catch {
+          // thử tiếp
         }
       }
     }
@@ -304,7 +328,7 @@ async function extractWithGroq(
         {
           role: "system",
           content:
-            "Bạn là chuyên gia OCR và kế toán kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) CHỈ đưa vào excluded_items nếu THỰC SỰ CÓ NÉT BÚT MỰC GẠCH ĐÈ LÊN DÒNG HÀNG TRONG BẢNG; nếu không có gạch tay thì để mảng rỗng []. 3) Lấy số lượng theo cột SL GIAO (thực giao), lấy đơn giá 1 ĐVT (không nhầm với thành tiền). 4) Trích xuất thuế suất VAT % từng dòng (0 nếu không chịu thuế như rau củ thịt cá tươi sống; 5, 8, 10 nếu là hàng chế biến/có thuế). 5) total_amount là tổng thanh toán thực tế của hóa đơn.",
+            "Bạn là chuyên gia OCR và kế toán kiểm kho F&B tại Việt Nam. BẮT BUỘC: 1) Không viết lời dẫn hay giải thích. Trả về DUY NHẤT chuỗi JSON bắt đầu bằng { và kết thúc bằng }. 2) ĐỌC ĐẦY ĐỦ TẤT CẢ CÁC DÒNG HÀNG TRÊN HÓA ĐƠN VÀO items (từ STT 001 đến hết bảng, kể cả dòng có gạch mực). 3) Ghi tên món bị gạch vào excluded_items. 4) Lấy số lượng theo cột SL GIAO (thực giao), lấy đơn giá 1 ĐVT (- VAT). 5) Trích xuất thuế suất VAT % từng dòng (0 nếu không thuế, hoặc 5, 8, 10). 6) total_amount là tổng thanh toán thực tế.",
         },
         {
           role: "user",
@@ -315,7 +339,7 @@ async function extractWithGroq(
         },
       ],
       temperature: 0.1,
-      max_tokens: 800,
+      max_tokens: 950,
     };
 
     return fetch(url, {
