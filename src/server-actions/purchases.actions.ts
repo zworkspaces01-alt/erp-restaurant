@@ -717,6 +717,159 @@ export async function deletePurchaseOrderLine(
   return ok({ id: lineId });
 }
 
+/**
+ * Sửa một dòng trong phiếu nhập.
+ * Do cơ sở dữ liệu có trigger trg_po_items_no_update chặn UPDATE trực tiếp,
+ * thao tác sửa được thực hiện chuẩn mực theo thiết kế kế toán:
+ * 1. Thu hồi dòng cũ (DELETE -> trigger tự động trừ tồn kho và giảm công nợ).
+ * 2. Thêm dòng mới đã chỉnh sửa (INSERT -> trigger tự động cộng tồn kho, tính WAC và cập nhật công nợ).
+ * 3. Ghi vết audit log với chi tiết các trường thay đổi (nguyên liệu, số lượng, đơn giá, thành tiền).
+ */
+export async function updatePurchaseOrderLine(
+  lineId: string,
+  input: PurchaseOrderLineInput
+): Promise<ActionResult<{ id: string }>> {
+  const parsed = purchaseOrderLineSchema.safeParse(input);
+  if (!parsed.success) {
+    return failZod(parsed.error);
+  }
+
+  const supabase = await createClient();
+
+  // 1. Tìm thông tin dòng cũ
+  const { data: oldLine, error: lookupError } = await supabase
+    .from("purchase_order_items")
+    .select(`
+      id,
+      purchase_order_id,
+      ingredient_id,
+      quantity,
+      unit_price,
+      line_total,
+      unit,
+      conversion_factor,
+      ingredients(name),
+      purchase_orders(po_number, supplier_id, suppliers(name))
+    `)
+    .eq("id", lineId)
+    .maybeSingle();
+
+  if (lookupError) return fail(parseDbError(lookupError));
+  if (!oldLine) return fail("Không tìm thấy dòng nhập cần sửa.");
+
+  // 2. Lấy thông tin nguyên liệu mới
+  const { data: ingredient, error: ingredientError } = await supabase
+    .from("ingredients")
+    .select("name, conversion_factor, import_unit, base_unit")
+    .eq("id", parsed.data.ingredient_id)
+    .maybeSingle();
+  if (ingredientError) return fail(parseDbError(ingredientError));
+  if (!ingredient) return fail("Không tìm thấy nguyên liệu.");
+
+  const unit = parsed.data.unit ?? ingredient.import_unit ?? ingredient.base_unit;
+  const factor = parsed.data.conversion_factor ?? ingredient.conversion_factor ?? 1;
+
+  // 3. Xóa dòng cũ (trigger DB tự động thu hồi tồn kho và giảm công nợ)
+  const { error: delError } = await supabase
+    .from("purchase_order_items")
+    .delete()
+    .eq("id", lineId);
+
+  if (delError) return fail(`Không thể xóa dòng cũ để cập nhật: ${parseDbError(delError)}`);
+
+  // 4. Thêm dòng mới
+  const { data: newLine, error: insError } = await supabase
+    .from("purchase_order_items")
+    .insert({
+      purchase_order_id: oldLine.purchase_order_id,
+      ingredient_id: parsed.data.ingredient_id,
+      quantity: parsed.data.quantity,
+      unit_price: parsed.data.unit_price,
+      conversion_factor: factor,
+      unit: unit,
+    })
+    .select("id")
+    .single();
+
+  if (insError || !newLine) {
+    // Phục hồi lại dòng cũ nếu thêm dòng mới không thành công
+    await supabase.from("purchase_order_items").insert({
+      purchase_order_id: oldLine.purchase_order_id,
+      ingredient_id: oldLine.ingredient_id,
+      quantity: oldLine.quantity,
+      unit_price: oldLine.unit_price,
+      conversion_factor: oldLine.conversion_factor ?? 1,
+      unit: oldLine.unit ?? undefined,
+    });
+    return fail(`Không thể lưu dòng mới: ${parseDbError(insError)}`);
+  }
+
+  // 5. Ghi nhật ký kiểm toán (Audit Trail)
+  try {
+    const userSession = await getCurrentUserWithRole().catch(() => null);
+    const poInfo = oldLine.purchase_orders as {
+      po_number?: string;
+      supplier_id?: string;
+      suppliers?: { name?: string };
+    } | null;
+    const oldIngName = (oldLine.ingredients as { name?: string } | null)?.name || "Nguyên liệu";
+    const newIngName = ingredient.name;
+    const newLineTotal = Number(parsed.data.quantity) * Number(parsed.data.unit_price);
+
+    const changes: Record<string, { from: unknown; to: unknown }> = {};
+    if (oldLine.ingredient_id !== parsed.data.ingredient_id) {
+      changes["Nguyên liệu"] = { from: oldIngName, to: newIngName };
+    }
+    if (Number(oldLine.quantity) !== Number(parsed.data.quantity)) {
+      changes["Số lượng"] = {
+        from: `${oldLine.quantity} ${oldLine.unit || ""}`,
+        to: `${parsed.data.quantity} ${unit || ""}`,
+      };
+    }
+    if (Number(oldLine.unit_price) !== Number(parsed.data.unit_price)) {
+      changes["Đơn giá"] = {
+        from: Number(oldLine.unit_price),
+        to: Number(parsed.data.unit_price),
+      };
+    }
+    changes["Thành tiền"] = {
+      from: Number(oldLine.line_total),
+      to: newLineTotal,
+    };
+
+    await logPoAction(supabase, {
+      purchase_order_id: oldLine.purchase_order_id,
+      po_number: poInfo?.po_number || oldLine.purchase_order_id.slice(0, 8),
+      supplier_id: poInfo?.supplier_id || null,
+      supplier_name: poInfo?.suppliers?.name || null,
+      action: "line_updated",
+      performed_by: userSession?.user.id,
+      performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+      details: {
+        summary: `Sửa dòng: ${oldIngName} (x${oldLine.quantity} ${oldLine.unit || ""}) → ${newIngName} (x${parsed.data.quantity} ${unit || ""})`,
+        changes,
+        item: {
+          name: newIngName,
+          quantity: Number(parsed.data.quantity),
+          unit: unit || "",
+          unit_price: Number(parsed.data.unit_price),
+          line_total: newLineTotal,
+        },
+      },
+    });
+  } catch (auditErr) {
+    console.warn("Could not log updatePurchaseOrderLine audit:", auditErr);
+  }
+
+  const poInfo = oldLine.purchase_orders as { supplier_id?: string } | null;
+  revalidatePurchaseScope(poInfo?.supplier_id, oldLine.purchase_order_id, [
+    oldLine.ingredient_id,
+    parsed.data.ingredient_id,
+  ]);
+
+  return ok({ id: newLine.id });
+}
+
 export async function deletePurchaseOrder(
   id: string,
   reason?: string

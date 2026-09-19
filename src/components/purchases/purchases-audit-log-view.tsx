@@ -73,6 +73,12 @@ export function PurchasesAuditLogView() {
             <Trash2 className="size-3" /> Xóa món
           </Badge>
         );
+      case "line_updated":
+        return (
+          <Badge variant="outline" className="border-indigo-500/30 text-indigo-600 bg-indigo-500/10 gap-1 text-[11px]">
+            <Pencil className="size-3" /> Sửa món
+          </Badge>
+        );
       case "deleted":
         return (
           <Badge variant="outline" className="border-destructive/30 text-destructive bg-destructive/10 gap-1 text-[11px]">
@@ -131,6 +137,7 @@ export function PurchasesAuditLogView() {
                 <SelectItem value="updated">Sửa thông tin</SelectItem>
                 <SelectItem value="line_added">Thêm món</SelectItem>
                 <SelectItem value="line_deleted">Xóa món</SelectItem>
+                <SelectItem value="line_updated">Sửa món</SelectItem>
                 <SelectItem value="deleted">Xóa phiếu</SelectItem>
                 <SelectItem value="restored">Khôi phục</SelectItem>
               </SelectContent>

@@ -77,6 +77,12 @@ export function PoAuditHistoryDialog({
             <Trash2 className="size-3" /> Xóa mặt hàng
           </Badge>
         );
+      case "line_updated":
+        return (
+          <Badge variant="outline" className="border-indigo-500/30 text-indigo-600 bg-indigo-500/10 gap-1">
+            <Pencil className="size-3" /> Sửa mặt hàng
+          </Badge>
+        );
       case "deleted":
         return (
           <Badge variant="outline" className="border-destructive/30 text-destructive bg-destructive/10 gap-1">

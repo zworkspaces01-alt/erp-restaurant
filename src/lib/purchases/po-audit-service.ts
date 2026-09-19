@@ -5,6 +5,7 @@ export type PoAuditAction =
   | "updated"
   | "line_added"
   | "line_deleted"
+  | "line_updated"
   | "deleted"
   | "restored";
 
