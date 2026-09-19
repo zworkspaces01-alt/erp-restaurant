@@ -16,6 +16,7 @@ import {
 } from "@tanstack/react-table";
 import { Search, SlidersHorizontal, X } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -86,11 +87,26 @@ export interface DataTableProps<TData, TValue> {
 function globalTextFilter<TData>(row: Row<TData>, _columnId: string, filterValue: string): boolean {
   const needle = filterValue.trim().toLowerCase();
   if (!needle) return true;
-  return row.getAllCells().some((cell) => {
+  const normNeedle = normalizeVietnamese(needle);
+
+  const matchedCell = row.getAllCells().some((cell) => {
     const value = cell.getValue();
     if (value === null || value === undefined) return false;
-    return String(value).toLowerCase().includes(needle);
+    const s = String(value).toLowerCase();
+    return s.includes(needle) || (normNeedle ? normalizeVietnamese(s).includes(normNeedle) : false);
   });
+  if (matchedCell) return true;
+
+  const original = row.original as Record<string, unknown> | undefined;
+  if (original && Array.isArray(original.item_names)) {
+    return original.item_names.some((name) => {
+      if (typeof name !== "string") return false;
+      const s = name.toLowerCase();
+      return s.includes(needle) || (normNeedle ? normalizeVietnamese(s).includes(normNeedle) : false);
+    });
+  }
+
+  return false;
 }
 
 export function DataTable<TData, TValue>({

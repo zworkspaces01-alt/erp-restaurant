@@ -32,6 +32,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { StatCard } from "@/components/shared";
 import { PurchaseOrdersTable } from "@/components/purchases/purchase-orders-table";
 import { formatDate, formatVND, todayISO } from "@/lib/format";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 import { paymentTermLabel } from "@/types/restaurant";
 import type { PurchaseOrderRow, SupplierPickRow } from "@/lib/queries/purchases.queries";
 
@@ -243,14 +244,22 @@ export function PurchasesExplorer({
         return false;
       }
 
-      // 4. Search Query (po_number, invoice_number, supplier_name, note)
+      // 4. Search Query (po_number, invoice_number, supplier_name, note, item_names)
       if (searchQuery.trim()) {
-        const q = searchQuery.trim().toLowerCase();
-        const po = (order.po_number || "").toLowerCase();
-        const inv = (order.invoice_number || "").toLowerCase();
-        const sup = (order.supplier_name || "").toLowerCase();
-        const note = (order.note || "").toLowerCase();
-        if (!po.includes(q) && !inv.includes(q) && !sup.includes(q) && !note.includes(q)) {
+        const q = normalizeVietnamese(searchQuery);
+        const po = normalizeVietnamese(order.po_number || "");
+        const inv = normalizeVietnamese(order.invoice_number || "");
+        const sup = normalizeVietnamese(order.supplier_name || "");
+        const note = normalizeVietnamese(order.note || "");
+        const items = (order.item_names || []).map((name) => normalizeVietnamese(name)).join(" ");
+
+        if (
+          !po.includes(q) &&
+          !inv.includes(q) &&
+          !sup.includes(q) &&
+          !note.includes(q) &&
+          !items.includes(q)
+        ) {
           return false;
         }
       }
@@ -338,7 +347,7 @@ export function PurchasesExplorer({
               <Input
                 value={searchQuery}
                 onChange={(e) => handleSearchChange(e.target.value)}
-                placeholder="Tìm số phiếu, số HĐ đỏ, ghi chú..."
+                placeholder="Tìm số phiếu, số HĐ, tên sản phẩm nhập, NCC..."
                 className="pl-9 pr-8 h-9 text-xs sm:text-sm"
               />
               {searchQuery && (

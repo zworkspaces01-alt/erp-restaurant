@@ -19,16 +19,29 @@ const baseColumns: ColumnDef<PurchaseOrderRow>[] = [
     accessorKey: "po_number",
     header: ({ column }) => <DataTableColumnHeader column={column} title="Số phiếu" />,
     cell: ({ row }) => (
-      <div className="min-w-36">
-        <Link
-          href={`/purchases/${row.original.id}`}
-          className="font-mono font-medium text-primary hover:underline"
-          onClick={(e) => e.stopPropagation()}
-        >
-          {row.original.po_number ?? "—"}
-        </Link>
-        {row.original.invoice_number ? (
-          <div className="text-xs text-muted-foreground">HĐ {row.original.invoice_number}</div>
+      <div className="min-w-36 max-w-[280px]">
+        <div className="flex items-center gap-2">
+          <Link
+            href={`/purchases/${row.original.id}`}
+            className="font-mono font-medium text-primary hover:underline"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {row.original.po_number ?? "—"}
+          </Link>
+          {row.original.invoice_number ? (
+            <span className="text-xs text-muted-foreground">HĐ {row.original.invoice_number}</span>
+          ) : null}
+        </div>
+        {row.original.item_names && row.original.item_names.length > 0 ? (
+          <div
+            className="text-xs text-muted-foreground truncate mt-0.5"
+            title={row.original.item_names.join(", ")}
+          >
+            <span className="text-foreground/80 font-normal">📦 {row.original.item_names.slice(0, 2).join(", ")}</span>
+            {row.original.item_names.length > 2 ? (
+              <span className="text-muted-foreground font-medium"> +{row.original.item_names.length - 2}</span>
+            ) : null}
+          </div>
         ) : null}
       </div>
     ),
@@ -166,7 +179,7 @@ export function PurchaseOrdersTable({
       columns={columns}
       data={orders}
       searchable={!hideToolbar}
-      searchPlaceholder="Tìm theo số phiếu, số hóa đơn, NCC..."
+      searchPlaceholder="Tìm theo số phiếu, số hóa đơn, NCC, tên sản phẩm..."
       filters={hideToolbar ? [] : filters}
       hideToolbar={hideToolbar}
       initialSorting={[{ id: "order_date", desc: true }]}

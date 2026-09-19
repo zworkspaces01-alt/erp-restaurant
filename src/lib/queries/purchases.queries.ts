@@ -54,6 +54,7 @@ export interface PurchaseOrderRow {
   is_overdue: boolean;
   days_overdue: number;
   created_at: string;
+  item_names?: string[];
 }
 
 export interface PurchaseOrderItemRow {
@@ -226,7 +227,14 @@ export async function getSupplierOptionsWithDebt(): Promise<SupplierPickRow[]> {
 // ============================================================================
 
 const PO_COLUMNS =
-  "id, po_number, supplier_id, supplier_name, supplier_code, order_date, due_date, total_amount, paid_amount, debt_amount, payment_status, invoice_number, invoice_image_url, note, item_count, is_overdue, days_overdue, created_at";
+  "id, po_number, supplier_id, supplier_name, supplier_code, order_date, due_date, total_amount, paid_amount, debt_amount, payment_status, invoice_number, invoice_image_url, note, item_count, is_overdue, days_overdue, created_at, purchase_order_items(ingredient:ingredients(name, code))";
+
+interface RawPoItemNested {
+  ingredient: {
+    name: string | null;
+    code: string | null;
+  } | null;
+}
 
 interface RawPoRow {
   id: string | null;
@@ -247,9 +255,18 @@ interface RawPoRow {
   is_overdue: boolean | null;
   days_overdue: number | null;
   created_at: string | null;
+  purchase_order_items?: RawPoItemNested[] | null;
 }
 
 function mapPo(r: RawPoRow): PurchaseOrderRow {
+  const item_names = Array.from(
+    new Set(
+      (r.purchase_order_items ?? [])
+        .map((it) => it.ingredient?.name?.trim())
+        .filter((name): name is string => Boolean(name))
+    )
+  );
+
   return {
     id: r.id ?? "",
     po_number: r.po_number,
@@ -269,6 +286,7 @@ function mapPo(r: RawPoRow): PurchaseOrderRow {
     is_overdue: r.is_overdue ?? false,
     days_overdue: r.days_overdue ?? 0,
     created_at: r.created_at ?? "",
+    item_names,
   };
 }
 
