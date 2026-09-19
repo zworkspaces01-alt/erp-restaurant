@@ -134,16 +134,15 @@ export function InvoiceReviewSplitView({
     let currentSum = 0;
     const allocated = initialRaw.map((item) => {
       const isTaxableRow = hasTaxable ? (item.tax_rate || 0) > 0 : true;
+      const keepPrice = item.unit_price; // Đơn giá luôn là giá chưa VAT
       if (!isTaxableRow) {
-        const keepPrice = item.unit_price;
         const lineTotal = item.quantity * keepPrice;
         currentSum += lineTotal;
         return { ...item, unit_price: keepPrice, line_total: lineTotal };
       }
-      const newPrice = Math.round(item.unit_price * ratio);
-      const lineTotal = item.quantity * newPrice;
+      const lineTotal = Math.round(item.quantity * keepPrice * ratio);
       currentSum += lineTotal;
-      return { ...item, unit_price: newPrice, line_total: lineTotal };
+      return { ...item, unit_price: keepPrice, line_total: lineTotal };
     });
 
     const targetGrandTotal = currentBaseSubtotal + initialTaxAmount;
@@ -160,9 +159,7 @@ export function InvoiceReviewSplitView({
       }
       if (candidateIdx !== -1 && allocated[candidateIdx].quantity > 0) {
         const target = allocated[candidateIdx];
-        const adjustedPrice = Math.round((target.line_total + diff) / target.quantity);
-        target.unit_price = adjustedPrice;
-        target.line_total = target.quantity * adjustedPrice;
+        target.line_total = target.line_total + diff;
       }
     }
     return allocated;
@@ -201,11 +198,11 @@ export function InvoiceReviewSplitView({
       const updated = items.map((it, i) => {
         const raw = rawItems[i] || it;
         const r = it.tax_rate || 0;
-        const price = r > 0 ? Math.round(raw.unit_price * (1 + r / 100)) : raw.unit_price;
-        const lineTotal = it.quantity * price;
+        const preTaxPrice = raw.unit_price;
+        const lineTotal = r > 0 ? Math.round(it.quantity * preTaxPrice * (1 + r / 100)) : it.quantity * preTaxPrice;
         return {
           ...it,
-          unit_price: price,
+          unit_price: preTaxPrice, // Luôn là giá chưa VAT
           line_total: lineTotal,
         };
       });
@@ -232,7 +229,7 @@ export function InvoiceReviewSplitView({
           ...it,
           tax_rate: 0,
           is_taxable: false,
-          unit_price: raw.unit_price,
+          unit_price: raw.unit_price, // Luôn là giá chưa VAT
           line_total: it.quantity * raw.unit_price,
         };
       });
@@ -248,13 +245,14 @@ export function InvoiceReviewSplitView({
       const pct = Number(preset);
       const updated = items.map((it, i) => {
         const raw = rawItems[i] || it;
-        const newPrice = Math.round(raw.unit_price * (1 + pct / 100));
+        const preTaxPrice = raw.unit_price;
+        const lineTotal = Math.round(it.quantity * preTaxPrice * (1 + pct / 100));
         return {
           ...it,
           tax_rate: pct,
           is_taxable: true,
-          unit_price: newPrice,
-          line_total: it.quantity * newPrice,
+          unit_price: preTaxPrice, // Luôn là giá chưa VAT
+          line_total: lineTotal,
         };
       });
       const updatedRaw = rawItems.map((it) => ({ ...it, tax_rate: pct, is_taxable: true }));
@@ -340,13 +338,13 @@ export function InvoiceReviewSplitView({
         };
       }
 
-      // Mặt hàng chịu thuế: tăng đơn giá theo tỷ lệ thuế
-      const newPrice = Math.round(raw.unit_price * ratio);
-      const lineTotal = item.quantity * newPrice;
+      // Mặt hàng chịu thuế: giữ nguyên đơn giá chưa VAT, phân bổ thuế vào thành tiền
+      const keepPrice = raw.unit_price;
+      const lineTotal = Math.round(item.quantity * keepPrice * ratio);
       currentSum += lineTotal;
       return {
         ...item,
-        unit_price: newPrice,
+        unit_price: keepPrice, // Luôn hiển thị đơn giá chưa VAT
         line_total: lineTotal,
       };
     });
@@ -367,9 +365,7 @@ export function InvoiceReviewSplitView({
       if (candidateIdx !== -1) {
         const target = updated[candidateIdx];
         if (target.quantity > 0) {
-          const adjustedPrice = Math.round((target.line_total + diff) / target.quantity);
-          target.unit_price = adjustedPrice;
-          target.line_total = target.quantity * adjustedPrice;
+          target.line_total = target.line_total + diff;
         }
       }
     }
@@ -424,15 +420,14 @@ export function InvoiceReviewSplitView({
     setRawItems(updatedRaw);
 
     // Nhảy ngay số tiền của từng món:
-    // Dòng chịu thuế r% => Đơn giá sau thuế = round(Đơn giá gốc * (1 + r / 100))
-    // Dòng không chịu thuế (0%) => Đơn giá giữ nguyên giá gốc
-    // Thành tiền = Số lượng * Đơn giá sau thuế
+    // Đơn giá luôn giữ nguyên đơn giá chưa VAT
+    // Thành tiền = Số lượng * Đơn giá chưa VAT * (1 + r / 100)
     const updatedItems = items.map((item, i) => {
       const raw = updatedRaw[i] || item;
       const rate = i === index ? validRate : (item.tax_rate || 0);
       const isTaxableRow = rate > 0;
-      const unitPrice = isTaxableRow ? Math.round(raw.unit_price * (1 + rate / 100)) : raw.unit_price;
-      const lineTotal = item.quantity * unitPrice;
+      const unitPrice = raw.unit_price; // Luôn là đơn giá chưa VAT
+      const lineTotal = isTaxableRow ? Math.round(item.quantity * unitPrice * (1 + rate / 100)) : item.quantity * unitPrice;
 
       return {
         ...item,
@@ -506,7 +501,10 @@ export function InvoiceReviewSplitView({
     setItems((prev) => {
       const copy = [...prev];
       const current = { ...copy[index], ...patch };
-      current.line_total = current.quantity * current.unit_price;
+      const rate = current.tax_rate || 0;
+      current.line_total = rate > 0
+        ? Math.round(current.quantity * current.unit_price * (1 + rate / 100))
+        : current.quantity * current.unit_price;
       if (patch.tax_rate !== undefined) {
         current.is_taxable = patch.tax_rate > 0;
       }
@@ -522,16 +520,16 @@ export function InvoiceReviewSplitView({
         if (patch.quantity !== undefined) current.quantity = patch.quantity;
         if (patch.unit !== undefined) current.unit = patch.unit;
         if (patch.unit_price !== undefined) {
-          const rate = current.tax_rate || 0;
-          current.unit_price = isVatAllocated && rate > 0
-            ? Math.round(patch.unit_price / (1 + rate / 100))
-            : patch.unit_price;
+          current.unit_price = patch.unit_price;
         }
         if (patch.tax_rate !== undefined) {
           current.tax_rate = patch.tax_rate;
           current.is_taxable = patch.tax_rate > 0;
         }
-        current.line_total = current.quantity * current.unit_price;
+        const rate = current.tax_rate || 0;
+        current.line_total = rate > 0
+          ? Math.round(current.quantity * current.unit_price * (1 + rate / 100))
+          : current.quantity * current.unit_price;
         copy[index] = current;
       }
       return copy;
@@ -692,20 +690,16 @@ export function InvoiceReviewSplitView({
   const nonTaxableItemsCount = nonTaxableItems.length;
   const taxableItemsCount = taxableItems.length;
 
-  const nonTaxableSubtotal = items.reduce((sum, it, idx) => {
+  const nonTaxableSubtotal = items.reduce((sum, it) => {
     if ((it.tax_rate || 0) === 0) {
-      const raw = rawItems[idx] || it;
-      const price = isVatAllocated ? raw.unit_price : it.unit_price;
-      return sum + it.quantity * price;
+      return sum + it.quantity * it.unit_price;
     }
     return sum;
   }, 0);
 
-  const taxableSubtotal = items.reduce((sum, it, idx) => {
+  const taxableSubtotal = items.reduce((sum, it) => {
     if ((it.tax_rate || 0) > 0) {
-      const raw = rawItems[idx] || it;
-      const price = isVatAllocated ? raw.unit_price : it.unit_price;
-      return sum + it.quantity * price;
+      return sum + it.quantity * it.unit_price;
     }
     return sum;
   }, 0);
@@ -776,7 +770,7 @@ export function InvoiceReviewSplitView({
       }
 
       const totalValidAmount = validItemsToImport.reduce(
-        (sum, it) => sum + it.quantity * it.unit_price,
+        (sum, it) => sum + (it.line_total || it.quantity * it.unit_price),
         0
       );
       const sanitizedPaidNow = Math.min(paidNow, totalValidAmount);
@@ -797,13 +791,19 @@ export function InvoiceReviewSplitView({
         invoice_number: invoiceNumber || null,
         invoice_image_url: finalInvoiceImageUrl,
         note: note || null,
-        items: validItemsToImport.map((it) => ({
-          ingredient_id: it.ingredient_id!,
-          quantity: it.quantity,
-          unit_price: it.unit_price,
-          unit: it.unit || null,
-          conversion_factor: it.conversion_factor || 1,
-        })),
+        items: validItemsToImport.map((it) => {
+          const dbUnitPrice =
+            it.quantity > 0 && it.line_total
+              ? Math.round((it.line_total / it.quantity) * 100) / 100
+              : it.unit_price;
+          return {
+            ingredient_id: it.ingredient_id!,
+            quantity: it.quantity,
+            unit_price: dbUnitPrice,
+            unit: it.unit || null,
+            conversion_factor: it.conversion_factor || 1,
+          };
+        }),
         paid_now: sanitizedPaidNow,
         paid_method: paidMethod,
       };
@@ -1186,7 +1186,7 @@ export function InvoiceReviewSplitView({
                         Số lượng
                       </th>
                       <th className="p-2.5 text-center w-[90px] min-w-[85px]">Đơn vị</th>
-                      <th className="p-2.5 text-right w-[125px] min-w-[115px]">Đơn giá</th>
+                      <th className="p-2.5 text-right w-[125px] min-w-[115px]">Đơn giá (- VAT)</th>
                       <th className="p-2.5 text-center w-[75px] min-w-[70px]" title="Hệ số quy đổi về đơn vị gốc của kho">
                         Hệ số
                       </th>
@@ -1285,6 +1285,11 @@ export function InvoiceReviewSplitView({
                               }
                               className="h-8 w-full min-w-[115px] text-xs text-right tabular-nums px-2"
                             />
+                            {(item.tax_rate ?? 0) > 0 && (
+                              <div className="text-[10px] text-muted-foreground mt-0.5 tabular-nums">
+                                Sau VAT: {formatNumber(Math.round(item.unit_price * (1 + (item.tax_rate ?? 0) / 100)))}
+                              </div>
+                            )}
                           </td>
                           <td className="p-2 w-[75px] min-w-[70px] text-center">
                             <Input
@@ -1319,7 +1324,7 @@ export function InvoiceReviewSplitView({
                               <div className="text-[10px] tabular-nums leading-tight">
                                 {(item.tax_rate ?? 0) > 0 ? (
                                   <span className="text-amber-600 dark:text-amber-400 font-medium">
-                                    +{formatVND(Math.round((rawItems[idx]?.unit_price || item.unit_price) * item.quantity * ((item.tax_rate ?? 0) / 100)))}
+                                    +{formatVND(Math.round(item.unit_price * item.quantity * ((item.tax_rate ?? 0) / 100)))}
                                   </span>
                                 ) : (
                                   <span className="text-muted-foreground/60">Không thuế</span>
