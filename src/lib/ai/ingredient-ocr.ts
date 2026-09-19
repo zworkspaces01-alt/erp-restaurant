@@ -1,5 +1,6 @@
 import type { IngredientInput } from "@/types/restaurant";
 import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
+import { getNextAvailableKey, recordKeyRateLimit, recordKeySuccess } from "./api-key-rotator";
 
 export type IngredientParsedItem = IngredientInput;
 
@@ -436,9 +437,10 @@ async function extractWithGroq(
           }
 
           if (isDailyLimit || waitSeconds > 25) {
+            recordKeyRateLimit(apiKey, waitSeconds);
             const resetStr = waitSeconds >= 60 ? `${Math.ceil(waitSeconds / 60)} phút` : `${waitSeconds} giây`;
             throw new Error(
-              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc cấu hình GEMINI_API_KEY để tiếp tục sử dụng miễn phí.`
+              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc hệ thống sẽ tự động đảo sang key kế tiếp.`
             );
           }
 
@@ -490,26 +492,61 @@ async function extractWithGroq(
 export async function parseIngredientsFromImage(
   options: IngredientOcrRequestOptions
 ): Promise<IngredientOcrResult> {
-  const apiKey =
-    options.apiKeyOverride ||
-    process.env.GROQ_API_KEY ||
-    process.env.NEXT_PUBLIC_GROQ_API_KEY ||
-    "";
-
   if (options.isDemo) {
     return getMockIngredientResult();
   }
 
-  if (!apiKey) {
-    throw new Error("Chưa cấu hình GROQ_API_KEY để sử dụng tính năng quét AI.");
+  let rawResult: {
+    items: IngredientParsedItem[];
+    supplier?: SupplierParsedInfo | null;
+    model_used?: string;
+    source_title?: string | null;
+    excluded_items?: string[];
+  } | null = null;
+
+  if (options.apiKeyOverride?.trim()) {
+    rawResult = await extractWithGroq(
+      options.base64Data,
+      options.mimeType,
+      options.apiKeyOverride.trim()
+    );
+  } else {
+    const excludedKeys: string[] = [];
+    let attemptCount = 0;
+    const maxAttempts = 10;
+    let lastError: Error | null = null;
+
+    while (attemptCount < maxAttempts) {
+      attemptCount++;
+      const keyInfo = await getNextAvailableKey("groq", excludedKeys);
+      if (!keyInfo) break;
+
+      try {
+        rawResult = await extractWithGroq(
+          options.base64Data,
+          options.mimeType,
+          keyInfo.key
+        );
+        recordKeySuccess(keyInfo.key);
+        break;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        console.warn(`[AI Key Rotator] Key "${keyInfo.name}" thất bại, tự động chuyển key:`, lastError.message);
+        excludedKeys.push(keyInfo.key);
+        const errMsg = lastError.message;
+        if (errMsg.includes("429") || errMsg.includes("Rate Limit") || errMsg.includes("TPD")) {
+          recordKeyRateLimit(keyInfo.key, 120);
+        }
+      }
+    }
+
+    if (!rawResult) {
+      if (lastError) throw lastError;
+      throw new Error("Chưa cấu hình API Key khả dụng trong Cài đặt AI & API Keys.");
+    }
   }
 
   try {
-    const rawResult = await extractWithGroq(
-      options.base64Data,
-      options.mimeType,
-      apiKey
-    );
 
     const uniqueItems: IngredientParsedItem[] = [];
     const seenNames = new Set<string>();

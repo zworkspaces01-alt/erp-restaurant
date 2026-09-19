@@ -18,7 +18,7 @@ import {
   IngredientPickRow,
   SupplierPickRow,
 } from "@/lib/queries/purchases.queries";
-import { SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
+import { SAMPLE_DEMO_INVOICES } from "@/lib/ai/sample-invoices";
 import { compressImageForUpload } from "@/lib/client-image-compression";
 import { extractAndMatchInvoice } from "@/server-actions/invoice-ocr.actions";
 import { Button } from "@/components/ui/button";

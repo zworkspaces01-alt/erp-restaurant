@@ -2,6 +2,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   BarChart3,
   ClipboardList,
+  Cpu,
   CreditCard,
   LayoutDashboard,
   Package,
@@ -117,6 +118,12 @@ export const NAV_GROUPS: NavGroup[] = [
         title: "Tài khoản & Phân quyền",
         href: "/settings/users",
         icon: UserCheck,
+        allowedRoles: ["owner"],
+      },
+      {
+        title: "Cài đặt AI & Đảo API Keys",
+        href: "/settings/ai",
+        icon: Cpu,
         allowedRoles: ["owner"],
       },
     ],

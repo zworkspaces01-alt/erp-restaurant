@@ -1,4 +1,5 @@
 import type { InvoiceParsedData, InvoiceParsedItem } from "@/types/restaurant";
+import { getNextAvailableKey, recordKeyRateLimit, recordKeySuccess } from "./api-key-rotator";
 
 export interface OcrRequestOptions {
   base64Data: string;
@@ -379,9 +380,10 @@ async function extractWithGroq(
           }
 
           if (isDailyLimit || waitSeconds > 25) {
+            recordKeyRateLimit(apiKey, waitSeconds);
             const resetStr = waitSeconds >= 60 ? `${Math.ceil(waitSeconds / 60)} phút` : `${waitSeconds} giây`;
             throw new Error(
-              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc cấu hình GEMINI_API_KEY để tiếp tục sử dụng miễn phí.`
+              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc hệ thống sẽ tự động đảo sang key kế tiếp.`
             );
           }
 
@@ -530,384 +532,8 @@ async function extractWithOpenAI(
   return parseJsonSafe(text);
 }
 
-/**
- * Hóa đơn mẫu (Demo Invoices) thực tế giúp người dùng kiểm thử ngay lập tức.
- */
-export const SAMPLE_DEMO_INVOICES: Array<{
-  id: string;
-  name: string;
-  description: string;
-  supplierName: string;
-  data: InvoiceParsedData;
-}> = [
-  {
-    id: "rau-cu-qua-da-lat",
-    name: "Hóa đơn Nông Sản & Rau Củ Tươi (Có & Không Thuế)",
-    description: "Nhà cung cấp Rau Sạch Đà Lạt Mart (Rau củ tươi không thuế, dầu Oliu chịu thuế 8%)",
-    supplierName: "Công ty TNHH Rau Sạch Đà Lạt Mart",
-    data: {
-      supplier_name: "Công ty TNHH Rau Sạch Đà Lạt Mart",
-      supplier_tax_code: "0314892341",
-      supplier_phone: "0908123456",
-      supplier_address: "128 Đinh Tiên Hoàng, P.1, TP. Đà Lạt, Lâm Đồng",
-      invoice_number: "HD-2026-0892",
-      order_date: new Date().toISOString().slice(0, 10),
-      items: [
-        {
-          raw_name: "Xà lách Romaine tươi Đà Lạt",
-          quantity: 15,
-          unit: "kg",
-          unit_price: 32000,
-          line_total: 480000,
-          note: "Hàng loại 1 chọn lọc",
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Chanh vàng không hạt",
-          quantity: 10,
-          unit: "kg",
-          unit_price: 45000,
-          line_total: 450000,
-          note: "Tươi mọng nước",
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Cà chua bi Cherry đỏ",
-          quantity: 8,
-          unit: "kg",
-          unit_price: 38000,
-          line_total: 304000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Dầu Oliu Extra Virgin nguyên chất",
-          quantity: 4,
-          unit: "chai",
-          unit_price: 185000,
-          line_total: 740000,
-          note: "Chai 1 lít",
-          tax_rate: 8,
-          is_taxable: true,
-        },
-      ],
-      subtotal: 1974000,
-      tax_percent: 0,
-      tax_amount: 59200, // 740,000 * 8%
-      total_amount: 2033200,
-      confidence_score: 0.98,
-    },
-  },
-  {
-    id: "nguyen-lieu-pha-che",
-    name: "Hóa đơn Nguyên Liệu Pha Chế & Sữa",
-    description: "Công ty Cung ứng Nguyên liệu Tân Nhất Hương (Trà Oolong, Sữa tươi, Kem béo...)",
-    supplierName: "Công ty CP Cung Ứng Nguyên Liệu Tân Nhất Hương",
-    data: {
-      supplier_name: "Công ty CP Cung Ứng Nguyên Liệu Tân Nhất Hương",
-      supplier_tax_code: "0102983741",
-      supplier_phone: "02838991234",
-      supplier_address: "61A Trần Quang Diệu, P.13, Q.3, TP.HCM",
-      invoice_number: "TNH-88219",
-      order_date: new Date().toISOString().slice(0, 10),
-      items: [
-        {
-          raw_name: "Trà Ô Long Kim Tuyên hảo hạng",
-          quantity: 10,
-          unit: "gói",
-          unit_price: 125000,
-          line_total: 1250000,
-          note: "Gói 500g",
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Sữa tươi thanh trùng Dalat Milk không đường",
-          quantity: 24,
-          unit: "hộp",
-          unit_price: 34000,
-          line_total: 816000,
-          note: "Hộp 950ml",
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Kem béo thực vật Rich's Non-Dairy Creamer",
-          quantity: 12,
-          unit: "hộp",
-          unit_price: 28500,
-          line_total: 342000,
-          note: "Hộp 454g",
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Đường cát trắng Biên Hòa Pure",
-          quantity: 20,
-          unit: "kg",
-          unit_price: 22000,
-          line_total: 440000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-      ],
-      subtotal: 2848000,
-      tax_percent: 0,
-      tax_amount: 127840, // (816000+342000+440000)*8% = 1598000*8% = 127840
-      total_amount: 2975840,
-      confidence_score: 0.97,
-    },
-  },
-  {
-    id: "thit-hai-san",
-    name: "Hóa đơn Thực Phẩm Thịt Bò & Hải Sản Tươi Sống",
-    description: "Đại lý Thực phẩm Sạch Phúc Thịnh (Thịt bò thăn, Ức gà phi lê, Tôm sú - KCT)",
-    supplierName: "Đại lý Thực Phẩm Sạch Phúc Thịnh",
-    data: {
-      supplier_name: "Đại lý Thực Phẩm Sạch Phúc Thịnh",
-      supplier_tax_code: "0309981245",
-      supplier_phone: "0918889922",
-      supplier_address: "Bình Điền, P.7, Q.8, TP.HCM",
-      invoice_number: "PT-260901",
-      order_date: new Date().toISOString().slice(0, 10),
-      items: [
-        {
-          raw_name: "Thịt bò thăn mềm Úc",
-          quantity: 12,
-          unit: "kg",
-          unit_price: 260000,
-          line_total: 3120000,
-          note: "Hàng mát bảo quản 2-4 độ C",
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Ức gà phi lê CP tươi",
-          quantity: 20,
-          unit: "kg",
-          unit_price: 75000,
-          line_total: 1500000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Tôm sú tươi sống size 20-25 con/kg",
-          quantity: 5,
-          unit: "kg",
-          unit_price: 320000,
-          line_total: 1600000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-      ],
-      subtotal: 6220000,
-      tax_percent: 0,
-      tax_amount: 0,
-      total_amount: 6220000,
-      confidence_score: 0.96,
-    },
-  },
-  {
-    id: "simba-food",
-    name: "Phiếu Giao Hàng SIM BA (Thuế Hỗn Hợp + Món Gạch Bỏ)",
-    description: "Công ty CP Thương mại SIM BA (Đậu nành, trứng cá, rong biển 8% VAT, trứng gà 0% VAT, kèm 2 món gạch bỏ)",
-    supplierName: "Công ty Cổ phần Thương mại SIM BA",
-    data: {
-      supplier_name: "Công ty Cổ phần Thương mại SIM BA",
-      supplier_tax_code: "0303123890",
-      supplier_phone: "0354010285",
-      supplier_address: "968 Ba Tháng Hai, P. Phú Thọ, TP. Hồ Chí Minh / Kho SG_K032 Bạch Đằng, P. Hồng Hà, Hà Nội",
-      invoice_number: "26413820",
-      order_date: "2026-09-04",
-      items: [
-        {
-          raw_name: "Trứng gà tươi (30 quả/khay)",
-          quantity: 1,
-          unit: "Khay",
-          unit_price: 84000,
-          line_total: 84000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Đậu nành luộc đông lạnh Edamame 400g",
-          quantity: 4,
-          unit: "Gói",
-          unit_price: 34500,
-          line_total: 138000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Trứng cá chế biến đông lạnh Tobiko Orange 500g",
-          quantity: 1,
-          unit: "Hộp",
-          unit_price: 440000,
-          line_total: 440000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Trứng cá tuyết chế biến Yamaya 500g",
-          quantity: 1,
-          unit: "Gói",
-          unit_price: 280000,
-          line_total: 280000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Mù tạt 505 Nama Wasabi Kaneku",
-          quantity: 2,
-          unit: "Gói",
-          unit_price: 300000,
-          line_total: 600000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Rong biển đỏ ướp muối 500g",
-          quantity: 1,
-          unit: "Gói",
-          unit_price: 230000,
-          line_total: 230000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Rong biển xanh ướp muối 500g",
-          quantity: 1,
-          unit: "Gói",
-          unit_price: 230000,
-          line_total: 230000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Trứng gà Ise - Vfood Vitamin E (hộp 10 quả)",
-          quantity: 1,
-          unit: "Hộp",
-          unit_price: 48000,
-          line_total: 48000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Gừng chế biến Menyo Sushigari Pink 1.5Kg",
-          quantity: 2,
-          unit: "Gói",
-          unit_price: 85000,
-          line_total: 170000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Cá trứng đông lạnh Frozen Capelin Shisamo",
-          quantity: 2,
-          unit: "Khay",
-          unit_price: 70000,
-          line_total: 140000,
-          tax_rate: 0,
-          is_taxable: false,
-        },
-        {
-          raw_name: "Bột khoai tây KATAKURIKO",
-          quantity: 1,
-          unit: "Túi",
-          unit_price: 35000,
-          line_total: 35000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Hạt bạch quả đông lạnh FROZEN GINKGO (KARATSUKI GINNAN)",
-          quantity: 1,
-          unit: "Túi",
-          unit_price: 415000,
-          line_total: 415000,
-          tax_rate: 0,
-          is_taxable: false,
-          note: "Có nét gạch trên hóa đơn",
-        },
-        {
-          raw_name: "Vây cá đuối 250g",
-          quantity: 1,
-          unit: "Gói",
-          unit_price: 145000,
-          line_total: 145000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Vỏ tắc Nhật: Kizami Yuzu (Khô) 250g",
-          quantity: 1,
-          unit: "Gói",
-          unit_price: 165000,
-          line_total: 165000,
-          tax_rate: 0,
-          is_taxable: false,
-          note: "Có nét gạch trên hóa đơn",
-        },
-        {
-          raw_name: "Rong biển nướng cắt sợi Kizami Nori",
-          quantity: 1,
-          unit: "Túi",
-          unit_price: 115000,
-          line_total: 115000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Nước tương Higashimaru Usukuchi Shoyu 1.8L",
-          quantity: 1,
-          unit: "Chai",
-          unit_price: 170000,
-          line_total: 170000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Súp Soba Tsuyu Sauce (Somi Shokuhin) 1.8L",
-          quantity: 1,
-          unit: "Chai",
-          unit_price: 340000,
-          line_total: 340000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Xốt Yakiniku No Tare Deluxe (Somi Shokuhin) 2 kg",
-          quantity: 1,
-          unit: "Hộp",
-          unit_price: 345000,
-          line_total: 345000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-        {
-          raw_name: "Nước xốt Yakiniku sauce 2kg",
-          quantity: 1,
-          unit: "Chai",
-          unit_price: 640000,
-          line_total: 640000,
-          tax_rate: 8,
-          is_taxable: true,
-        },
-      ],
-      excluded_items: [
-        "Hạt bạch quả đông lạnh FROZEN GINKGO (KARATSUKI GINNAN)",
-        "Vỏ tắc Nhật: Kizami Yuzu (Khô) 250g",
-      ],
-      subtotal: 4730000,
-      tax_percent: 8,
-      tax_amount: 310240,
-      total_amount: 5040240,
-      confidence_score: 0.99,
-    },
-  },
-];
+import { SAMPLE_DEMO_INVOICES } from "./sample-invoices";
+export { SAMPLE_DEMO_INVOICES };
 
 /**
  * Trích xuất thông tin hóa đơn tự động:
@@ -922,16 +548,6 @@ export async function parseInvoiceImage(options: OcrRequestOptions): Promise<{
   isMock: boolean;
   modelUsed: string;
 }> {
-  const overrideKey = options.apiKeyOverride?.trim();
-  const groqKey =
-    (overrideKey && (overrideKey.startsWith("gsk_") || (!overrideKey.startsWith("AIza") && !overrideKey.startsWith("sk-")))
-      ? overrideKey
-      : undefined) || process.env.GROQ_API_KEY;
-  const geminiKey =
-    (overrideKey && overrideKey.startsWith("AIza") ? overrideKey : undefined) || process.env.GEMINI_API_KEY;
-  const openaiKey =
-    (overrideKey && overrideKey.startsWith("sk-") ? overrideKey : undefined) || process.env.OPENAI_API_KEY;
-
   if (options.isDemo) {
     const sample = SAMPLE_DEMO_INVOICES[0];
     return {
@@ -941,53 +557,70 @@ export async function parseInvoiceImage(options: OcrRequestOptions): Promise<{
     };
   }
 
-  // 1. Thử gọi Groq API trước tiên
-  if (groqKey) {
+  const overrideKey = options.apiKeyOverride?.trim();
+
+  // Nếu người dùng nhập key thủ công trực tiếp trên form
+  if (overrideKey) {
+    if (overrideKey.startsWith("AIza")) {
+      const data = await extractWithGemini(options.base64Data, options.mimeType, overrideKey);
+      return { data, isMock: false, modelUsed: "Gemini 2.0 Flash (Key chỉ định)" };
+    }
+    if (overrideKey.startsWith("sk-")) {
+      const data = await extractWithOpenAI(options.base64Data, options.mimeType, overrideKey);
+      return { data, isMock: false, modelUsed: "OpenAI Vision (Key chỉ định)" };
+    }
+    const data = await extractWithGroq(options.base64Data, options.mimeType, overrideKey);
+    return { data, isMock: false, modelUsed: "Groq Vision (Key chỉ định)" };
+  }
+
+  // TỰ ĐỘNG ĐẢO API KEY LIÊN TỤC TỪ POOL CẤU HÌNH (GROQ -> GEMINI -> OPENAI)
+  const excludedKeys: string[] = [];
+  let attemptCount = 0;
+  const maxAttempts = 10;
+  let lastError: Error | null = null;
+
+  while (attemptCount < maxAttempts) {
+    attemptCount++;
+    const keyInfo = await getNextAvailableKey(undefined, excludedKeys);
+    if (!keyInfo) break;
+
     try {
-      const data = await extractWithGroq(options.base64Data, options.mimeType, groqKey);
-      return { data, isMock: false, modelUsed: "Groq Vision AI (LPU)" };
+      if (keyInfo.provider === "groq") {
+        const data = await extractWithGroq(options.base64Data, options.mimeType, keyInfo.key);
+        recordKeySuccess(keyInfo.key);
+        return { data, isMock: false, modelUsed: `Groq Vision (${keyInfo.name})` };
+      }
+      if (keyInfo.provider === "gemini") {
+        const data = await extractWithGemini(options.base64Data, options.mimeType, keyInfo.key);
+        recordKeySuccess(keyInfo.key);
+        return { data, isMock: false, modelUsed: `Gemini Vision (${keyInfo.name})` };
+      }
+      if (keyInfo.provider === "openai") {
+        const data = await extractWithOpenAI(options.base64Data, options.mimeType, keyInfo.key);
+        recordKeySuccess(keyInfo.key);
+        return { data, isMock: false, modelUsed: `OpenAI Vision (${keyInfo.name})` };
+      }
     } catch (err) {
-      console.warn("Lỗi trích xuất Groq Vision, kiểm tra fallback...", err);
-      // Fallback sang Gemini hoặc OpenAI nếu có
-      if (geminiKey) {
-        const data = await extractWithGemini(options.base64Data, options.mimeType, geminiKey);
-        return { data, isMock: false, modelUsed: "Gemini 2.0 Flash Vision" };
+      lastError = err instanceof Error ? err : new Error(String(err));
+      console.warn(`[AI Key Rotator] Key "${keyInfo.name}" thất bại, tự động chuyển key:`, lastError.message);
+      excludedKeys.push(keyInfo.key);
+      const errMsg = lastError.message;
+      if (errMsg.includes("429") || errMsg.includes("Rate Limit") || errMsg.includes("TPD")) {
+        recordKeyRateLimit(keyInfo.key, 120);
       }
-      if (openaiKey) {
-        const data = await extractWithOpenAI(options.base64Data, options.mimeType, openaiKey);
-        return { data, isMock: false, modelUsed: "OpenAI GPT-4o-mini Vision" };
-      }
-      throw err;
     }
   }
 
-  // 2. Thử gọi Gemini nếu được cấu hình
-  if (geminiKey) {
-    try {
-      const data = await extractWithGemini(options.base64Data, options.mimeType, geminiKey);
-      return { data, isMock: false, modelUsed: "Gemini 2.0 Flash Vision" };
-    } catch (err) {
-      console.warn("Lỗi trích xuất Gemini, kiểm tra fallback...", err);
-      if (openaiKey) {
-        const data = await extractWithOpenAI(options.base64Data, options.mimeType, openaiKey);
-        return { data, isMock: false, modelUsed: "OpenAI GPT-4o-mini Vision" };
-      }
-      throw err;
-    }
+  if (lastError) {
+    throw lastError;
   }
 
-  // 3. Thử gọi OpenAI nếu được cấu hình
-  if (openaiKey) {
-    const data = await extractWithOpenAI(options.base64Data, options.mimeType, openaiKey);
-    return { data, isMock: false, modelUsed: "OpenAI GPT-4o-mini Vision" };
-  }
-
-  // 4. Fallback demo: Giúp người dùng trải nghiệm flow hoàn hảo mà chưa cần API key
+  // Fallback demo nếu chưa cấu hình bất kỳ key nào
   const sample = SAMPLE_DEMO_INVOICES[0];
   return {
     data: sample.data,
     isMock: true,
-    modelUsed: "Demo Mode (Chưa cấu hình GROQ_API_KEY)",
+    modelUsed: "Demo Mode (Chưa cấu hình API Key trong Cài đặt)",
   };
 }
 
