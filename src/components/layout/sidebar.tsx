@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { ChefHat, ChevronLeft, PanelLeftClose, PanelLeftOpen } from "lucide-react";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { SidebarNav } from "@/components/layout/sidebar-nav";
@@ -58,14 +57,14 @@ export function Sidebar({ role }: SidebarProps) {
     <aside
       data-collapsed={isCollapsed}
       className={cn(
-        "sticky top-0 hidden h-svh shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-in-out lg:flex",
+        "sticky top-0 hidden h-svh max-h-svh shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground transition-[width] duration-300 ease-in-out lg:flex overflow-hidden",
         isCollapsed ? "w-16" : "w-64"
       )}
     >
       {/* Brand Header & Toggle */}
       <div
         className={cn(
-          "flex items-center border-b border-sidebar-border/40",
+          "flex items-center border-b border-sidebar-border/40 shrink-0",
           isCollapsed ? "justify-center h-14" : "justify-between pr-2"
         )}
       >
@@ -91,12 +90,12 @@ export function Sidebar({ role }: SidebarProps) {
       </div>
 
       {/* Main Navigation Scroll Area */}
-      <ScrollArea className="flex-1">
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden overscroll-contain [scrollbar-width:thin]">
         <SidebarNav role={role} isCollapsed={isCollapsed} />
-      </ScrollArea>
+      </div>
 
       {/* Footer Collapse Button */}
-      <div className={cn("border-t border-sidebar-border/40 p-2", isCollapsed ? "flex justify-center" : "")}>
+      <div className={cn("border-t border-sidebar-border/40 p-2 shrink-0", isCollapsed ? "flex justify-center" : "")}>
         {isCollapsed ? (
           <Tooltip>
             <TooltipTrigger asChild>

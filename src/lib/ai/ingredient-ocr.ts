@@ -414,68 +414,56 @@ async function extractWithGroq(
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
-    // Tự động thử lại tối đa 3 lần nếu gặp lỗi Rate Limit (429)
-    for (let attempt = 1; attempt <= 3; attempt++) {
-      try {
-        const response = await sendRequest(model);
+    try {
+      const response = await sendRequest(model);
 
-        if (response.status === 429) {
-          const errBody = await response.json().catch(() => ({}));
-          const errMsg = errBody.error?.message || "";
-          const isDailyLimit =
-            errMsg.includes("tokens per day") ||
-            errMsg.includes("TPD") ||
-            errMsg.includes("RPD") ||
-            errMsg.includes("requests per day");
-
-          const matchMinSec = errMsg.match(/try again in (?:(\d+)m\s*)?([\d.]+)s/);
-          let waitSeconds = 6;
-          if (matchMinSec) {
-            const mins = matchMinSec[1] ? parseInt(matchMinSec[1], 10) : 0;
-            const secs = matchMinSec[2] ? parseFloat(matchMinSec[2]) : 0;
-            waitSeconds = mins * 60 + Math.ceil(secs);
-          }
-
-          if (isDailyLimit || waitSeconds > 25) {
-            recordKeyRateLimit(apiKey, waitSeconds);
-            const resetStr = waitSeconds >= 60 ? `${Math.ceil(waitSeconds / 60)} phút` : `${waitSeconds} giây`;
-            throw new Error(
-              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc hệ thống sẽ tự động đảo sang key kế tiếp.`
-            );
-          }
-
-          console.warn(`Groq 429 Rate Limit trên model ${model}. Tự động chờ ${waitSeconds}s trước lần thử ${attempt + 1}...`);
-          await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
-          continue;
+      if (response.status === 429) {
+        const errBody = await response.json().catch(() => ({}));
+        const errMsg = errBody.error?.message || "";
+        const matchMinSec = errMsg.match(/try again in (?:(\d+)m\s*)?([\d.]+)s/);
+        let waitSeconds = 60;
+        if (matchMinSec) {
+          const mins = matchMinSec[1] ? parseInt(matchMinSec[1], 10) : 0;
+          const secs = matchMinSec[2] ? parseFloat(matchMinSec[2]) : 0;
+          waitSeconds = Math.max(mins * 60 + Math.ceil(secs), 30);
         }
 
-        if (!response.ok) {
-          const errText = await response.text();
-          throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
-        }
-
-        const json = await response.json();
-        const text = json.choices?.[0]?.message?.content;
-        if (!text) {
-          throw new Error(`Mô hình ${model} không trả về nội dung.`);
-        }
-
-        const parsed = parseJsonSafe(text);
-        if (parsed.items && parsed.items.length > 0) {
-          return {
-            ...parsed,
-            model_used: model,
-          };
-        }
-
-        lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
-        break; // Nếu parse được nhưng không có item, chuyển sang model tiếp theo
-      } catch (err) {
-        lastError = err instanceof Error ? err : new Error(String(err));
-        console.warn(`Thử model OCR ${model} (lần ${attempt}) thất bại:`, lastError.message);
-        if (attempt === 3) break;
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        recordKeyRateLimit(apiKey, waitSeconds);
+        console.warn(`[Groq 429 Rate Limit] Key đang bị giới hạn (chờ ${waitSeconds}s). Lập tức đảo sang API key khác...`);
+        throw new Error(`Groq API Rate Limit 429 (chờ ${waitSeconds}s): ${errMsg}`);
       }
+
+      if (response.status === 401) {
+        throw new Error("Groq API Key không hợp lệ hoặc đã bị thu hồi (401 Unauthorized).");
+      }
+
+      if (!response.ok) {
+        const errText = await response.text();
+        throw new Error(`Groq API error (${response.status}) on model ${model}: ${errText}`);
+      }
+
+      const json = await response.json();
+      const text = json.choices?.[0]?.message?.content;
+      if (!text) {
+        throw new Error(`Mô hình ${model} không trả về nội dung.`);
+      }
+
+      const parsed = parseJsonSafe(text);
+      if (parsed.items && parsed.items.length > 0) {
+        return {
+          ...parsed,
+          model_used: model,
+        };
+      }
+
+      lastError = new Error(`Mô hình ${model} không nhận diện được mặt hàng nào.`);
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      // Nếu là lỗi rate limit 429, lập tức ném lỗi ra ngoài để outer loop đảo sang key khác!
+      if (lastError.message.includes("429") || lastError.message.includes("Rate Limit")) {
+        throw lastError;
+      }
+      console.warn(`Thử model OCR ${model} thất bại:`, lastError.message);
     }
   }
 
@@ -484,6 +472,79 @@ async function extractWithGroq(
   }
 
   throw new Error("Không thể nhận diện dữ liệu từ ảnh. Vui lòng kiểm tra lại độ rõ nét của ảnh.");
+}
+
+/**
+ * Trích xuất danh sách nguyên liệu bằng Google Gemini Vision (2.0 Flash).
+ */
+async function extractWithGemini(
+  base64Data: string,
+  mimeType: string,
+  apiKey: string
+): Promise<{
+  source_title?: string;
+  supplier?: SupplierParsedInfo | null;
+  items: IngredientParsedItem[];
+  excluded_items?: string[];
+  model_used: string;
+}> {
+  const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
+  const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
+  let lastErrText = "";
+
+  for (const model of modelsToTry) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const payload = {
+      contents: [
+        {
+          parts: [
+            { text: INGREDIENT_OCR_PROMPT },
+            {
+              inline_data: {
+                mime_type: mimeType || "image/jpeg",
+                data: cleanBase64,
+              },
+            },
+          ],
+        },
+      ],
+      generationConfig: {
+        temperature: 0.1,
+        response_mime_type: "application/json",
+      },
+    };
+
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+
+    if (response.status === 404) {
+      lastErrText = await response.text();
+      continue;
+    }
+
+    if (!response.ok) {
+      const errText = await response.text();
+      throw new Error(`Gemini API error (${response.status}) on model ${model}: ${errText}`);
+    }
+
+    const json = await response.json();
+    const text = json.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!text) {
+      throw new Error(`Không nhận được nội dung phân tích từ Gemini AI (${model}).`);
+    }
+
+    const parsed = parseJsonSafe(text);
+    return {
+      ...parsed,
+      model_used: model,
+    };
+  }
+
+  throw new Error(`Gemini API error (404) on available models: ${lastErrText}`);
 }
 
 /**
@@ -505,33 +566,45 @@ export async function parseIngredientsFromImage(
   } | null = null;
 
   if (options.apiKeyOverride?.trim()) {
-    rawResult = await extractWithGroq(
-      options.base64Data,
-      options.mimeType,
-      options.apiKeyOverride.trim()
-    );
-  } else {
+    const overrideKey = options.apiKeyOverride.trim();
+    try {
+      if (overrideKey.startsWith("AIza")) {
+        rawResult = await extractWithGemini(options.base64Data, options.mimeType, overrideKey);
+      } else {
+        rawResult = await extractWithGroq(options.base64Data, options.mimeType, overrideKey);
+      }
+    } catch (manualErr) {
+      console.warn("[Ingredient OCR] Key chỉ định bị lỗi/giới hạn, chuyển sang pool hệ thống:", manualErr);
+    }
+  }
+
+  if (!rawResult) {
     const excludedKeys: string[] = [];
     let attemptCount = 0;
-    const maxAttempts = 10;
+    const maxAttempts = 15;
     let lastError: Error | null = null;
+    const failoverHistory: string[] = [];
 
     while (attemptCount < maxAttempts) {
       attemptCount++;
-      const keyInfo = await getNextAvailableKey("groq", excludedKeys);
+      const keyInfo = await getNextAvailableKey(undefined, excludedKeys);
       if (!keyInfo) break;
 
       try {
-        rawResult = await extractWithGroq(
-          options.base64Data,
-          options.mimeType,
-          keyInfo.key
-        );
+        if (keyInfo.provider === "gemini") {
+          rawResult = await extractWithGemini(options.base64Data, options.mimeType, keyInfo.key);
+        } else {
+          rawResult = await extractWithGroq(options.base64Data, options.mimeType, keyInfo.key);
+        }
         recordKeySuccess(keyInfo.key);
+        if (failoverHistory.length > 0) {
+          rawResult.model_used = `${rawResult.model_used || keyInfo.provider} (Đã tự động đảo từ: ${failoverHistory.join(", ")})`;
+        }
         break;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
-        console.warn(`[AI Key Rotator] Key "${keyInfo.name}" thất bại, tự động chuyển key:`, lastError.message);
+        failoverHistory.push(keyInfo.name);
+        console.warn(`[AI Key Rotator] Key "${keyInfo.name}" (${keyInfo.provider}) bị lỗi/giới hạn, lập tức đảo sang API khác:`, lastError.message);
         excludedKeys.push(keyInfo.key);
         const errMsg = lastError.message;
         if (errMsg.includes("429") || errMsg.includes("Rate Limit") || errMsg.includes("TPD")) {
@@ -541,7 +614,11 @@ export async function parseIngredientsFromImage(
     }
 
     if (!rawResult) {
-      if (lastError) throw lastError;
+      if (lastError) {
+        throw new Error(
+          `Tất cả API keys hiện tại đều đang bị giới hạn rate limit hoặc hết hạn mức (${lastError.message}). Vui lòng cấu hình thêm API key phụ tại menu Cài đặt -> Cài đặt AI.`
+        );
+      }
       throw new Error("Chưa cấu hình API Key khả dụng trong Cài đặt AI & API Keys.");
     }
   }

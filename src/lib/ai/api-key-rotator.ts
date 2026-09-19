@@ -166,16 +166,18 @@ export async function getNextAvailableKey(
     return null;
   }
 
-  // Nếu có chỉ định provider (vd: Groq hoặc Gemini)
-  let candidateKeys = preferredProvider
-    ? activeKeys.filter((k) => k.provider === preferredProvider)
+  // Xác định provider ưu tiên: tham số hoặc cấu hình
+  const targetProvider = preferredProvider || (config.primaryProvider !== "auto" ? config.primaryProvider : undefined);
+
+  let candidateKeys = targetProvider
+    ? activeKeys.filter((k) => k.provider === targetProvider)
     : activeKeys;
 
-  // Nếu provider được yêu cầu đã hết key khả dụng, cho phép fallback sang provider khác
+  // Nếu provider được yêu cầu đã hết key khả dụng (hoặc đều bị 429), lập tức fallback sang provider khác
   if (candidateKeys.length === 0) {
-    // Thứ tự fallback ưu tiên: groq -> gemini -> openai
     const providerOrder: AiProvider[] = ["groq", "gemini", "openai"];
     for (const p of providerOrder) {
+      if (p === targetProvider) continue;
       const pKeys = activeKeys.filter((k) => k.provider === p);
       if (pKeys.length > 0) {
         candidateKeys = pKeys;
@@ -185,12 +187,16 @@ export async function getNextAvailableKey(
   }
 
   if (candidateKeys.length === 0) {
+    candidateKeys = activeKeys;
+  }
+
+  if (candidateKeys.length === 0) {
     return null;
   }
 
   // Chiến lược chọn key:
   if (config.rotationStrategy === "round_robin" && candidateKeys.length > 1) {
-    const pKey = preferredProvider || "all";
+    const pKey = targetProvider || "all";
     const lastIdx = roundRobinIndices[pKey] || 0;
     const nextIdx = (lastIdx + 1) % candidateKeys.length;
     roundRobinIndices[pKey] = nextIdx;
@@ -209,7 +215,7 @@ export async function getNextAvailableKey(
  */
 export function recordKeyRateLimit(key: string, waitSeconds: number): void {
   const now = Date.now();
-  const cooldownMs = Math.max(waitSeconds, 5) * 1000;
+  const cooldownMs = Math.max(waitSeconds, 30) * 1000;
   const current = runtimeHealthMap.get(key) || {
     rateLimitedUntil: 0,
     consecutiveFailures: 0,
@@ -223,7 +229,7 @@ export function recordKeyRateLimit(key: string, waitSeconds: number): void {
     lastUsedAt: now,
   });
 
-  console.warn(`[AI Key Rotator] Key ${maskApiKey(key)} bị 429 Rate Limit. Cooldown trong ${waitSeconds}s.`);
+  console.warn(`[AI Key Rotator] Key ${maskApiKey(key)} bị 429 Rate Limit. Đã khóa tạm thời trong ${Math.ceil(cooldownMs / 1000)}s.`);
 }
 
 /**
@@ -300,43 +306,53 @@ export async function testApiKeyConnectivity(
     }
 
     if (provider === "gemini") {
-      const res = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${key.trim()}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: "Ping" }] }],
-            generationConfig: { maxOutputTokens: 2 },
-          }),
+      const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
+      let lastErrMsg = "";
+
+      for (const model of modelsToTry) {
+        const res = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key.trim()}`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: "Ping" }] }],
+              generationConfig: { maxOutputTokens: 2 },
+            }),
+          }
+        );
+
+        const latencyMs = Date.now() - start;
+        if (res.status === 200) {
+          return {
+            success: true,
+            provider,
+            message: `Kết nối thành công (${latencyMs}ms). Model ${model} sẵn sàng.`,
+            latencyMs,
+          };
         }
-      );
 
-      const latencyMs = Date.now() - start;
-      if (res.status === 200) {
-        return {
-          success: true,
-          provider,
-          message: `Kết nối thành công (${latencyMs}ms). Gemini 2.0 Flash sẵn sàng.`,
-          latencyMs,
-        };
+        if (res.status === 400 || res.status === 403) {
+          return {
+            success: false,
+            provider,
+            message: `API Key Gemini không hợp lệ hoặc chưa bật dịch vụ Generative AI (${res.status}).`,
+            latencyMs,
+          };
+        }
+
+        const txt = await res.text();
+        lastErrMsg = `(${res.status}): ${txt.slice(0, 150)}`;
+        if (res.status === 404) {
+          continue; // thử model tiếp theo trong danh sách
+        }
       }
 
-      if (res.status === 400 || res.status === 403) {
-        return {
-          success: false,
-          provider,
-          message: `API Key Gemini không hợp lệ hoặc chưa bật dịch vụ Generative AI (${res.status}).`,
-          latencyMs,
-        };
-      }
-
-      const txt = await res.text();
       return {
         success: false,
         provider,
-        message: `Lỗi kết nối Gemini (${res.status}): ${txt.slice(0, 150)}`,
-        latencyMs,
+        message: `Lỗi kết nối Gemini: ${lastErrMsg}`,
+        latencyMs: Date.now() - start,
       };
     }
 
