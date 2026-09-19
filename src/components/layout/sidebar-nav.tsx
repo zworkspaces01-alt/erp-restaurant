@@ -3,17 +3,83 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { cn } from "@/lib/utils";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { NAV_GROUPS, isNavActive, filterNavGroupsByRole } from "@/components/layout/nav-config";
 import type { UserRole } from "@/types/restaurant";
 
 interface SidebarNavProps {
   role?: UserRole | null;
   onNavigate?: () => void;
+  isCollapsed?: boolean;
 }
 
-export function SidebarNav({ role, onNavigate }: SidebarNavProps) {
+export function SidebarNav({ role, onNavigate, isCollapsed = false }: SidebarNavProps) {
   const pathname = usePathname();
   const navGroups = role ? filterNavGroupsByRole(NAV_GROUPS, role) : NAV_GROUPS;
+
+  if (isCollapsed) {
+    return (
+      <nav className="flex flex-col gap-2 p-2" aria-label="Điều hướng chính thu nhỏ">
+        {navGroups.map((group, groupIdx) => (
+          <div key={group.title} className="flex flex-col gap-1.5">
+            {groupIdx > 0 && <div className="my-1 border-t border-sidebar-border/50 mx-1" />}
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const active = isNavActive(pathname, item.href);
+              return (
+                <Tooltip key={item.href}>
+                  <TooltipTrigger asChild>
+                    <Link
+                      href={item.href}
+                      onClick={onNavigate}
+                      aria-current={active ? "page" : undefined}
+                      className={cn(
+                        "flex size-10 items-center justify-center rounded-lg transition-colors",
+                        active
+                          ? "bg-sidebar-accent font-semibold text-sidebar-accent-foreground shadow-2xs"
+                          : "text-sidebar-foreground/75 hover:bg-sidebar-accent/70 hover:text-sidebar-accent-foreground"
+                      )}
+                    >
+                      <Icon className="size-5 shrink-0" />
+                      <span className="sr-only">{item.title}</span>
+                    </Link>
+                  </TooltipTrigger>
+                  <TooltipContent side="right" sideOffset={10} className="p-2.5 min-w-44">
+                    <p className="font-semibold text-xs text-foreground">{item.title}</p>
+                    {item.children && item.children.length > 0 && (
+                      <div className="mt-1.5 pt-1.5 border-t border-border/40 flex flex-col gap-1">
+                        {item.children.map((child) => {
+                          const childActive =
+                            child.href === item.href
+                              ? pathname === child.href
+                              : isNavActive(pathname, child.href);
+                          return (
+                            <Link
+                              key={child.href}
+                              href={child.href}
+                              onClick={onNavigate}
+                              className={cn(
+                                "text-xs rounded px-1.5 py-0.5 transition-colors",
+                                childActive
+                                  ? "font-medium text-primary bg-primary/10"
+                                  : "text-muted-foreground hover:text-foreground hover:bg-muted"
+                              )}
+                            >
+                              {child.title}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </TooltipContent>
+                </Tooltip>
+              );
+            })}
+          </div>
+        ))}
+      </nav>
+    );
+  }
 
   return (
     <nav className="flex flex-col gap-5 px-3 py-4" aria-label="Điều hướng chính">
