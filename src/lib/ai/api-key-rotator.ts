@@ -306,8 +306,9 @@ export async function testApiKeyConnectivity(
     }
 
     if (provider === "gemini") {
-      const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
+      const modelsToTry = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
       let lastErrMsg = "";
+      let hitRateLimit = false;
 
       for (const model of modelsToTry) {
         const res = await fetch(
@@ -341,6 +342,12 @@ export async function testApiKeyConnectivity(
           };
         }
 
+        if (res.status === 429) {
+          hitRateLimit = true;
+          lastErrMsg = `Key tạm thời vượt hạn mức (Quota/Rate limit 429) cho model ${model}`;
+          continue; // thử model khác
+        }
+
         const txt = await res.text();
         lastErrMsg = `(${res.status}): ${txt.slice(0, 150)}`;
         if (res.status === 404) {
@@ -351,7 +358,9 @@ export async function testApiKeyConnectivity(
       return {
         success: false,
         provider,
-        message: `Lỗi kết nối Gemini: ${lastErrMsg}`,
+        message: hitRateLimit
+          ? `Lỗi kết nối Gemini: Key đã chạm hạn mức sử dụng (Rate Limit / Quota 429). Hệ thống sẽ tự động xoay vòng sang key dự phòng hoặc Groq khi cần.`
+          : `Lỗi kết nối Gemini: ${lastErrMsg}`,
         latencyMs: Date.now() - start,
       };
     }

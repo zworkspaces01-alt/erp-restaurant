@@ -424,7 +424,7 @@ async function extractWithGemini(
   apiKey: string
 ): Promise<InvoiceParsedData> {
   const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
-  const modelsToTry = ["gemini-2.5-flash", "gemini-1.5-flash"];
+  const modelsToTry = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
   let lastErrText = "";
 
   for (const model of modelsToTry) {
@@ -456,7 +456,7 @@ async function extractWithGemini(
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 404) {
+    if (response.status === 404 || response.status === 429) {
       lastErrText = await response.text();
       continue;
     }
@@ -476,7 +476,7 @@ async function extractWithGemini(
     return parseJsonSafe(text);
   }
 
-  throw new Error(`Gemini API error (404) on available models: ${lastErrText}`);
+  throw new Error(`Gemini API error trên các model khả dụng: ${lastErrText}`);
 }
 
 /**

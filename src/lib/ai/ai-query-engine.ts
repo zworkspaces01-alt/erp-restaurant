@@ -237,7 +237,9 @@ async function callLlmForExplanation(prompt: string, systemPrompt?: string): Pro
       }
 
       if (provider === "gemini") {
-        const models = ["gemini-2.5-flash", "gemini-1.5-flash"];
+        const models = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
+        let allRateLimited = true;
+
         for (const model of models) {
           const res = await fetch(
             `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${key.trim()}`,
@@ -271,9 +273,14 @@ async function callLlmForExplanation(prompt: string, systemPrompt?: string): Pro
           }
 
           if (res.status === 429) {
-            recordKeyRateLimit(key, 60);
-            break;
+            continue; // thử model khác trong key trước khi đánh dấu key bị rate-limit
           }
+
+          allRateLimited = false;
+        }
+
+        if (allRateLimited) {
+          recordKeyRateLimit(key, 60);
         }
       }
 
