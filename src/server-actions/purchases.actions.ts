@@ -177,11 +177,15 @@ export async function updatePurchaseOrderMeta(
 
   // Chỉ gửi đúng các cột người dùng thực sự chỉnh — tránh xóa trắng dữ liệu cũ.
   const patch: {
+    order_date?: string;
     invoice_number?: string | null;
     invoice_image_url?: string | null;
     note?: string | null;
     due_date?: string | null;
   } = {};
+  if (parsed.data.order_date !== undefined) {
+    patch.order_date = parsed.data.order_date;
+  }
   if (parsed.data.invoice_number !== undefined) {
     patch.invoice_number = parsed.data.invoice_number ?? null;
   }

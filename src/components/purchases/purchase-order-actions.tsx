@@ -34,6 +34,7 @@ type FormValues = z.input<typeof purchaseOrderMetaSchema>;
 interface PurchaseOrderActionsProps {
   purchaseOrderId: string;
   poNumber: string | null;
+  orderDate?: string | null;
   invoiceNumber: string | null;
   dueDate: string | null;
   note: string | null;
@@ -44,6 +45,7 @@ interface PurchaseOrderActionsProps {
 export function PurchaseOrderActions({
   purchaseOrderId,
   poNumber,
+  orderDate,
   invoiceNumber,
   dueDate,
   note,
@@ -55,8 +57,9 @@ export function PurchaseOrderActions({
   const [serverError, setServerError] = useState<string | null>(null);
 
   const defaults: FormValues = {
+    order_date: orderDate ? orderDate.slice(0, 10) : "",
     invoice_number: invoiceNumber ?? "",
-    due_date: dueDate ?? "",
+    due_date: dueDate ? dueDate.slice(0, 10) : "",
     note: note ?? "",
   };
 
@@ -74,12 +77,13 @@ export function PurchaseOrderActions({
     if (editOpen) {
       setServerError(null);
       reset({
+        order_date: orderDate ? orderDate.slice(0, 10) : "",
         invoice_number: invoiceNumber ?? "",
-        due_date: dueDate ?? "",
+        due_date: dueDate ? dueDate.slice(0, 10) : "",
         note: note ?? "",
       });
     }
-  }, [editOpen, invoiceNumber, dueDate, note, reset]);
+  }, [editOpen, orderDate, invoiceNumber, dueDate, note, reset]);
 
   const { execute: save, pending } = useAction<PurchaseOrderMetaInput, { id: string }>(
     (values) => updatePurchaseOrderMeta(purchaseOrderId, values),
@@ -120,7 +124,7 @@ export function PurchaseOrderActions({
           <DialogHeader>
             <DialogTitle>Sửa thông tin phiếu {poNumber ?? ""}</DialogTitle>
             <DialogDescription>
-              Chỉ sửa được số hóa đơn, hạn thanh toán và ghi chú. Sửa dòng hàng: xóa dòng rồi nhập
+              Chỉnh sửa ngày nhập hàng, số hóa đơn, hạn thanh toán và ghi chú. Sửa dòng hàng: xóa dòng rồi nhập
               lại.
             </DialogDescription>
           </DialogHeader>
@@ -133,16 +137,24 @@ export function PurchaseOrderActions({
           >
             <FormServerError message={serverError} />
 
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label htmlFor="order_date">Ngày nhập hàng</Label>
+                <Input id="order_date" type="date" {...register("order_date")} />
+                <FormError message={errors.order_date?.message} />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="due_date">Hạn thanh toán</Label>
+                <Input id="due_date" type="date" {...register("due_date")} />
+                <FormError message={errors.due_date?.message} />
+              </div>
+            </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="invoice_number">Số hóa đơn</Label>
               <Input id="invoice_number" placeholder="HD-0001" {...register("invoice_number")} />
               <FormError message={errors.invoice_number?.message} />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="due_date">Hạn thanh toán</Label>
-              <Input id="due_date" type="date" {...register("due_date")} />
-              <FormError message={errors.due_date?.message} />
             </div>
 
             <div className="space-y-1.5">

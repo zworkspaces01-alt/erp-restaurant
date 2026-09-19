@@ -627,12 +627,23 @@ export const purchaseOrderSchema = z
 export type PurchaseOrderInput = z.infer<typeof purchaseOrderSchema>;
 
 /** Sửa phần "mềm" của phiếu nhập (DATABASE.md §1.3/§4.2) — chỉ gửi các trường thực sự đổi. */
-export const purchaseOrderMetaSchema = z.object({
-  invoice_number: optionalText.optional(),
-  invoice_image_url: optionalText.optional(),
-  note: optionalText.optional(),
-  due_date: optionalDate.optional(),
-});
+export const purchaseOrderMetaSchema = z
+  .object({
+    order_date: dateString("Ngày nhập không hợp lệ").optional(),
+    invoice_number: optionalText.optional(),
+    invoice_image_url: optionalText.optional(),
+    note: optionalText.optional(),
+    due_date: optionalDate.optional(),
+  })
+  .refine(
+    (v) => {
+      if (v.due_date && v.order_date) {
+        return v.due_date >= v.order_date;
+      }
+      return true;
+    },
+    { path: ["due_date"], message: "Hạn thanh toán phải sau hoặc cùng ngày nhập" }
+  );
 export type PurchaseOrderMetaInput = z.infer<typeof purchaseOrderMetaSchema>;
 
 // --- Invoice OCR & Review Types -----------------------------------------------

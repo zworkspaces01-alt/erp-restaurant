@@ -66,6 +66,7 @@ export default async function PurchaseOrderDetailPage({
             <PurchaseOrderActions
               purchaseOrderId={po.id}
               poNumber={po.po_number}
+              orderDate={po.order_date}
               invoiceNumber={po.invoice_number}
               dueDate={po.due_date}
               note={po.note}
