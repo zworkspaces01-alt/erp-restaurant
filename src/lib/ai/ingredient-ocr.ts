@@ -489,7 +489,12 @@ async function extractWithGemini(
   model_used: string;
 }> {
   const cleanBase64 = base64Data.replace(/^data:[^;]+;base64,/, "");
-  const modelsToTry = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
+  const modelsToTry = [
+    "gemini-flash-latest",
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.7-flash",
+  ];
   let lastErrText = "";
 
   for (const model of modelsToTry) {
@@ -521,7 +526,14 @@ async function extractWithGemini(
       body: JSON.stringify(payload),
     });
 
-    if (response.status === 404 || response.status === 429) {
+    if (
+      response.status === 404 ||
+      response.status === 429 ||
+      response.status === 503 ||
+      response.status === 500 ||
+      response.status === 502 ||
+      response.status === 504
+    ) {
       lastErrText = await response.text();
       continue;
     }

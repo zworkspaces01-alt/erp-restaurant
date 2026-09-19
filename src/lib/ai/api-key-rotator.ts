@@ -1,4 +1,4 @@
-import type { AiKeyItem, AiProvider, AiSettingsConfig, KeyTestResult } from "@/types/ai-settings";
+import type { AiKeyItem, AiKeyStatus, AiProvider, AiSettingsConfig, KeyTestResult } from "@/types/ai-settings";
 
 export function maskApiKey(key: string): string {
   if (!key) return "";
@@ -116,7 +116,13 @@ export async function loadAiConfig(): Promise<AiSettingsConfig> {
             rateLimitedUntil: health.rateLimitedUntil,
           };
         }
-        return k;
+        // Nếu không có runtime lock, khôi phục lại trạng thái active nếu trước đó bị gán nhầm rate_limited
+        const normalizedStatus =
+          k.status === "paused" || k.status === "invalid" ? k.status : "active";
+        return {
+          ...k,
+          status: normalizedStatus as AiKeyStatus,
+        };
       });
 
       return {
@@ -306,7 +312,12 @@ export async function testApiKeyConnectivity(
     }
 
     if (provider === "gemini") {
-      const modelsToTry = ["gemini-flash-latest", "gemini-3.5-flash", "gemini-2.5-flash"];
+      const modelsToTry = [
+        "gemini-flash-latest",
+        "gemini-3.5-flash",
+        "gemini-3.6-flash",
+        "gemini-3.7-flash",
+      ];
       let lastErrMsg = "";
       let hitRateLimit = false;
 
@@ -350,8 +361,14 @@ export async function testApiKeyConnectivity(
 
         const txt = await res.text();
         lastErrMsg = `(${res.status}): ${txt.slice(0, 150)}`;
-        if (res.status === 404) {
-          continue; // thử model tiếp theo trong danh sách
+        if (
+          res.status === 404 ||
+          res.status === 503 ||
+          res.status === 500 ||
+          res.status === 502 ||
+          res.status === 504
+        ) {
+          continue; // thử model tiếp theo trong danh sách khi gặp 503 high demand hoặc 404
         }
       }
 
