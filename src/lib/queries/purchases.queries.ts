@@ -298,7 +298,8 @@ export async function getPurchaseOrders(filter?: PurchaseOrdersFilter): Promise<
 
   const { data, error } = await query
     .order("order_date", { ascending: false })
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(5000);
 
   if (error) throw new Error(error.message);
   return (data ?? []).map(mapPo);

@@ -123,6 +123,7 @@ interface PurchaseOrdersTableProps {
   hideSupplier?: boolean;
   toolbar?: React.ReactNode;
   emptyMessage?: string;
+  hideToolbar?: boolean;
 }
 
 export function PurchaseOrdersTable({
@@ -130,6 +131,7 @@ export function PurchaseOrdersTable({
   hideSupplier = false,
   toolbar,
   emptyMessage = "Chưa có phiếu nhập nào.",
+  hideToolbar = false,
 }: PurchaseOrdersTableProps) {
   const router = useRouter();
 
@@ -163,9 +165,10 @@ export function PurchaseOrdersTable({
     <DataTable
       columns={columns}
       data={orders}
-      searchable
+      searchable={!hideToolbar}
       searchPlaceholder="Tìm theo số phiếu, số hóa đơn, NCC..."
-      filters={filters}
+      filters={hideToolbar ? [] : filters}
+      hideToolbar={hideToolbar}
       initialSorting={[{ id: "order_date", desc: true }]}
       emptyMessage={emptyMessage}
       toolbar={toolbar}
