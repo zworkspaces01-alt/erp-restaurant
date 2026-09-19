@@ -239,8 +239,9 @@ export function DataTable<TData, TValue>({
         </div>
       )}
 
-      <div className="overflow-x-auto rounded-lg border bg-card">
-        <Table>
+      <div className="relative rounded-lg border bg-card shadow-2xs">
+        <div className="overflow-x-auto overscroll-x-contain">
+          <Table>
           <TableHeader>
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
@@ -279,6 +280,7 @@ export function DataTable<TData, TValue>({
             )}
           </TableBody>
         </Table>
+        </div>
       </div>
 
       {!hidePagination && <DataTablePagination table={table} pageSizeOptions={pageSizeOptions} />}

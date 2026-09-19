@@ -13,6 +13,7 @@ import {
 } from "lucide-react";
 import { getDashboardData } from "@/lib/queries/dashboard.queries";
 import { DailySalesChart } from "@/components/reports/daily-sales-chart";
+import { DashboardActionCenter } from "@/components/dashboard/dashboard-action-center";
 import { EmptyState, PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +53,12 @@ export default async function DashboardPage() {
             </Button>
           </>
         }
+      />
+
+      <DashboardActionCenter
+        stats={stats}
+        lowStock={lowStock}
+        overduePos={overduePos}
       />
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
