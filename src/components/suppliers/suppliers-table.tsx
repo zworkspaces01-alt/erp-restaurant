@@ -1,16 +1,21 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Pencil, Plus } from "lucide-react";
+import { Pencil, Plus, Trash2, Merge } from "lucide-react";
 import { DataTable, DataTableColumnHeader, Money, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDate } from "@/lib/format";
 import { paymentTermLabel } from "@/types/restaurant";
 import type { SupplierDebtRow } from "@/lib/queries/purchases.queries";
 import { SupplierFormDialog, type SupplierFormData } from "./supplier-form-dialog";
+import { SupplierDeleteDialog, type SupplierDeleteData } from "./supplier-delete-dialog";
+import { SupplierMergeDialog } from "./supplier-merge-dialog";
+import { getDuplicateSupplierCandidates } from "@/server-actions/purchases.actions";
 
 interface SuppliersTableProps {
   rows: SupplierDebtRow[];
@@ -22,10 +27,24 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<SupplierFormData | null>(null);
 
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deletingSupplier, setDeletingSupplier] = useState<SupplierDeleteData | null>(null);
+
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergeSourceId, setMergeSourceId] = useState<string | undefined>(undefined);
+  const [duplicateCount, setDuplicateCount] = useState<number>(0);
+
   const detailById = useMemo(
     () => new Map(details.map((d) => [d.id, d])),
     [details]
   );
+
+  // Scan for duplicate candidates on mount
+  useEffect(() => {
+    getDuplicateSupplierCandidates()
+      .then((pairs) => setDuplicateCount(pairs.length))
+      .catch((err) => console.error("Error loading duplicates:", err));
+  }, [rows]);
 
   const columns = useMemo<ColumnDef<SupplierDebtRow>[]>(
     () => [
@@ -111,19 +130,73 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
         id: "actions",
         header: () => <div className="text-right">Thao tác</div>,
         cell: ({ row }) => (
-          <div className="text-right">
-            <Button
-              variant="ghost"
-              size="icon"
-              aria-label={`Sửa ${row.original.name}`}
-              onClick={(e) => {
-                e.stopPropagation();
-                setEditing(detailById.get(row.original.id) ?? null);
-                setOpen(true);
-              }}
-            >
-              <Pencil className="size-4" />
-            </Button>
+          <div className="flex items-center justify-end gap-1">
+            {/* Sửa NCC */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 text-muted-foreground hover:text-foreground"
+                  aria-label={`Sửa ${row.original.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setEditing(detailById.get(row.original.id) ?? null);
+                    setOpen(true);
+                  }}
+                >
+                  <Pencil className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Sửa thông tin</TooltipContent>
+            </Tooltip>
+
+            {/* Gộp NCC */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 text-muted-foreground hover:text-primary"
+                  aria-label={`Gộp ${row.original.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setMergeSourceId(row.original.id);
+                    setMergeOpen(true);
+                  }}
+                >
+                  <Merge className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Gộp vào NCC khác...</TooltipContent>
+            </Tooltip>
+
+            {/* Xóa NCC */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 text-muted-foreground hover:text-destructive"
+                  aria-label={`Xóa ${row.original.name}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeletingSupplier({
+                      id: row.original.id,
+                      name: row.original.name,
+                      code: row.original.code,
+                      current_debt: row.original.current_debt,
+                      po_count: row.original.po_count,
+                      is_active: row.original.is_active,
+                    });
+                    setDeleteOpen(true);
+                  }}
+                >
+                  <Trash2 className="size-3.5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">Xóa / Ngừng hợp tác</TooltipContent>
+            </Tooltip>
           </div>
         ),
       },
@@ -149,19 +222,48 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
         onRowClick={(row) => router.push(`/suppliers/${row.id}`)}
         rowClassName={(row) => (row.original.is_active ? undefined : "opacity-60")}
         toolbar={
-          <Button
-            size="sm"
-            onClick={() => {
-              setEditing(null);
-              setOpen(true);
-            }}
-          >
-            <Plus className="mr-1.5 size-4" />
-            Thêm nhà cung cấp
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5 border-primary/20 bg-primary/5 hover:bg-primary/10 text-primary"
+              onClick={() => {
+                setMergeSourceId(undefined);
+                setMergeOpen(true);
+              }}
+            >
+              <Merge className="size-3.5" />
+              <span>Gộp NCC trùng lặp</span>
+              {duplicateCount > 0 && (
+                <Badge variant="secondary" className="px-1.5 py-0 h-4 text-[10px] bg-primary/20 text-primary font-semibold">
+                  {duplicateCount}
+                </Badge>
+              )}
+            </Button>
+
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setOpen(true);
+              }}
+            >
+              <Plus className="mr-1.5 size-4" />
+              Thêm nhà cung cấp
+            </Button>
+          </div>
         }
       />
+
+      {/* Dialogs */}
       <SupplierFormDialog open={open} onOpenChange={setOpen} supplier={editing} />
+      <SupplierDeleteDialog open={deleteOpen} onOpenChange={setDeleteOpen} supplier={deletingSupplier} />
+      <SupplierMergeDialog
+        open={mergeOpen}
+        onOpenChange={setMergeOpen}
+        suppliers={rows}
+        preselectedSourceId={mergeSourceId}
+      />
     </>
   );
 }

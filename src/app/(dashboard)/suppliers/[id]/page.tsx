@@ -7,12 +7,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PurchaseOrdersTable } from "@/components/purchases/purchase-orders-table";
 import { PaymentsTable } from "@/components/payments/payments-table";
 import { RecordPaymentButton } from "@/components/payments/record-payment-button";
-import { SupplierEditButton } from "@/components/suppliers/supplier-edit-button";
+import { SupplierDetailActions } from "@/components/suppliers/supplier-detail-actions";
 import {
   getOutstandingPurchaseOrders,
   getPurchaseOrdersBySupplier,
   getSupplier,
   getSupplierDebtRow,
+  getSupplierDebtSummary,
   getSupplierOptions,
   getSupplierPaymentsBySupplier,
 } from "@/lib/queries/purchases.queries";
@@ -30,12 +31,13 @@ export default async function SupplierDetailPage({
   const supplier = await getSupplier(id);
   if (!supplier) notFound();
 
-  const [debt, orders, payments, suppliers, outstandingOrders] = await Promise.all([
+  const [debt, orders, payments, suppliers, outstandingOrders, allSuppliersWithDebt] = await Promise.all([
     getSupplierDebtRow(id),
     getPurchaseOrdersBySupplier(id),
     getSupplierPaymentsBySupplier(id),
     getSupplierOptions(),
     getOutstandingPurchaseOrders(id),
+    getSupplierDebtSummary(),
   ]);
 
   const currentDebt = debt?.current_debt ?? 0;
@@ -52,7 +54,7 @@ export default async function SupplierDetailPage({
         breadcrumbs={[{ label: "Nhà cung cấp", href: "/suppliers" }, { label: supplier.name }]}
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <SupplierEditButton
+            <SupplierDetailActions
               supplier={{
                 id: supplier.id,
                 code: supplier.code,
@@ -66,6 +68,11 @@ export default async function SupplierDetailPage({
                 is_active: supplier.is_active,
                 note: supplier.note,
               }}
+              debtInfo={{
+                current_debt: currentDebt,
+                po_count: debt?.po_count ?? orders.length,
+              }}
+              allSuppliers={allSuppliersWithDebt}
             />
             <RecordPaymentButton
               suppliers={suppliers}

@@ -2,6 +2,8 @@
 
 import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
+import { requireAuth } from "@/lib/auth";
+import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 import type { Json } from "@/types/database";
 import { fail, failZod, ok, type ActionResult } from "@/types/actions";
 import {
@@ -117,6 +119,276 @@ export async function updateSupplier(
   revalidateSupplierScope(id);
   revalidatePath("/purchases");
   return ok({ id });
+}
+
+export async function deleteSupplier(id: string): Promise<ActionResult<{ id: string }>> {
+  const { authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền xóa nhà cung cấp.");
+  }
+
+  const supabase = await createClient();
+
+  // Kiểm tra xem NCC có phiếu nhập nào không
+  const { count: poCount } = await supabase
+    .from("purchase_orders")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", id);
+
+  // Kiểm tra xem NCC có phiếu chi nào không
+  const { count: payCount } = await supabase
+    .from("supplier_payments")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", id);
+
+  if ((poCount ?? 0) > 0 || (payCount ?? 0) > 0) {
+    return fail(
+      `Nhà cung cấp này đã có ${poCount ?? 0} phiếu nhập và ${payCount ?? 0} phiếu thanh toán. Để bảo toàn sổ sách tài chính, bạn không thể xóa vĩnh viễn. Vui lòng chọn "Ngừng hợp tác" (vô hiệu hóa) hoặc dùng chức năng "Gộp NCC" để chuyển chứng từ sang NCC khác.`
+    );
+  }
+
+  // Tháo gỡ liên kết default_supplier_id trên bảng ingredients nếu có
+  await supabase
+    .from("ingredients")
+    .update({ default_supplier_id: null })
+    .eq("default_supplier_id", id);
+
+  // Xóa vĩnh viễn
+  const { error } = await supabase.from("suppliers").delete().eq("id", id);
+  if (error) {
+    return fail(parseDbError(error));
+  }
+
+  revalidateSupplierScope(id);
+  return ok({ id });
+}
+
+export async function deactivateSupplier(id: string): Promise<ActionResult<{ id: string }>> {
+  const { authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền cập nhật trạng thái nhà cung cấp.");
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("suppliers").update({ is_active: false }).eq("id", id);
+  if (error) {
+    return fail(parseDbError(error));
+  }
+
+  revalidateSupplierScope(id);
+  return ok({ id });
+}
+
+export interface MergeSuppliersInput {
+  sourceSupplierId: string;
+  targetSupplierId: string;
+  deleteSource?: boolean;
+}
+
+export async function mergeSuppliers(
+  input: MergeSuppliersInput
+): Promise<ActionResult<{ success: boolean; targetId: string }>> {
+  const { authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền thực hiện gộp nhà cung cấp.");
+  }
+
+  const { sourceSupplierId, targetSupplierId, deleteSource = true } = input;
+  if (!sourceSupplierId || !targetSupplierId) {
+    return fail("Vui lòng chọn đầy đủ Nhà cung cấp nguồn và Nhà cung cấp đích.");
+  }
+
+  if (sourceSupplierId === targetSupplierId) {
+    return fail("Nhà cung cấp nguồn và Nhà cung cấp đích không được trùng nhau.");
+  }
+
+  const supabase = await createClient();
+
+  // Lấy thông tin cả 2 NCC
+  const [sourceRes, targetRes] = await Promise.all([
+    supabase.from("suppliers").select("*").eq("id", sourceSupplierId).single(),
+    supabase.from("suppliers").select("*").eq("id", targetSupplierId).single(),
+  ]);
+
+  if (!sourceRes.data) return fail("Không tìm thấy thông tin Nhà cung cấp cần gộp.");
+  if (!targetRes.data) return fail("Không tìm thấy thông tin Nhà cung cấp giữ lại.");
+
+  const source = sourceRes.data;
+  const target = targetRes.data;
+
+  // Kiểm tra xem source có phiếu nhập đã thanh toán (paid_amount > 0) hay có phiếu chi thanh toán không
+  const { count: payCount } = await supabase
+    .from("supplier_payments")
+    .select("*", { count: "exact", head: true })
+    .eq("supplier_id", sourceSupplierId);
+
+  const { data: paidPos } = await supabase
+    .from("purchase_orders")
+    .select("id, po_number, paid_amount")
+    .eq("supplier_id", sourceSupplierId)
+    .gt("paid_amount", 0)
+    .limit(1);
+
+  if ((payCount ?? 0) > 0 || (paidPos && paidPos.length > 0)) {
+    return fail(
+      `Nhà cung cấp "${source.name}" đã có phiếu chi hoặc phiếu nhập đã thanh toán. Để bảo toàn số sách tài chính, vui lòng chọn "${source.name}" làm "NCC giữ lại (NCC Đích)" và gộp nhà cung cấp kia vào.`
+    );
+  }
+
+  // 1. Chuyển toàn bộ phiếu nhập sang target
+  const { error: poErr } = await supabase
+    .from("purchase_orders")
+    .update({ supplier_id: targetSupplierId })
+    .eq("supplier_id", sourceSupplierId);
+
+  if (poErr) {
+    return fail(`Lỗi khi chuyển phiếu nhập: ${poErr.message}`);
+  }
+
+  // 2. Chuyển nguyên liệu mặc định sang target
+  await supabase
+    .from("ingredients")
+    .update({ default_supplier_id: targetSupplierId })
+    .eq("default_supplier_id", sourceSupplierId);
+
+  const updates: {
+    tax_code?: string;
+    phone?: string;
+    email?: string;
+    contact_name?: string;
+    address?: string;
+    note?: string;
+  } = {};
+  if (!target.tax_code && source.tax_code) updates.tax_code = source.tax_code;
+  if (!target.phone && source.phone) updates.phone = source.phone;
+  if (!target.email && source.email) updates.email = source.email;
+  if (!target.contact_name && source.contact_name) updates.contact_name = source.contact_name;
+  if (!target.address && source.address) updates.address = source.address;
+  if (source.note) {
+    updates.note = target.note
+      ? `${target.note}\n[Đã gộp từ ${source.name}]: ${source.note}`
+      : `[Đã gộp từ ${source.name}]: ${source.note}`;
+  }
+
+  if (Object.keys(updates).length > 0) {
+    await supabase.from("suppliers").update(updates).eq("id", targetSupplierId);
+  }
+
+  // 4. Xóa hoặc vô hiệu hóa source
+  if (deleteSource) {
+    const { error: delErr } = await supabase.from("suppliers").delete().eq("id", sourceSupplierId);
+    if (delErr) {
+      console.warn("Could not delete source supplier, deactivating instead:", delErr);
+      await supabase
+        .from("suppliers")
+        .update({ is_active: false, note: `[Đã gộp vào ${target.name}]` })
+        .eq("id", sourceSupplierId);
+    }
+  } else {
+    await supabase
+      .from("suppliers")
+      .update({ is_active: false, note: `[Đã gộp vào ${target.name}]` })
+      .eq("id", sourceSupplierId);
+  }
+
+  revalidateSupplierScope(sourceSupplierId);
+  revalidateSupplierScope(targetSupplierId);
+  revalidatePath("/purchases");
+  revalidatePath("/inventory");
+  revalidatePath("/dashboard");
+
+  return ok({ success: true, targetId: targetSupplierId });
+}
+
+export interface DuplicateSupplierPair {
+  idA: string;
+  nameA: string;
+  codeA: string | null;
+  debtA: number;
+  poCountA: number;
+  idB: string;
+  nameB: string;
+  codeB: string | null;
+  debtB: number;
+  poCountB: number;
+  reason: string;
+}
+
+function cleanLegal(str: string): string {
+  return normalizeVietnamese(str)
+    .replace(/\b(cong ty|tnhh|cp|co phan|thuong mai|thuc pham|mtv|tm tp|tm|tp|dich vu|san xuat|viet nam|asia|co ltd|ltd)\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+export async function getDuplicateSupplierCandidates(): Promise<DuplicateSupplierPair[]> {
+  const supabase = await createClient();
+  const { data: sups } = await supabase
+    .from("suppliers")
+    .select("id, name, code, phone, tax_code, current_debt, is_active")
+    .order("name", { ascending: true });
+
+  if (!sups || sups.length < 2) return [];
+
+  // Lấy số lượng PO của từng supplier
+  const { data: poCounts } = await supabase.from("purchase_orders").select("supplier_id");
+
+  const poCountMap = new Map<string, number>();
+  for (const po of poCounts || []) {
+    poCountMap.set(po.supplier_id, (poCountMap.get(po.supplier_id) || 0) + 1);
+  }
+
+  const duplicates: DuplicateSupplierPair[] = [];
+
+  for (let i = 0; i < sups.length; i++) {
+    for (let j = i + 1; j < sups.length; j++) {
+      const a = sups[i];
+      const b = sups[j];
+
+      const normA = normalizeVietnamese(a.name);
+      const normB = normalizeVietnamese(b.name);
+      const coreA = cleanLegal(a.name);
+      const coreB = cleanLegal(b.name);
+
+      let isDup = false;
+      let reason = "";
+
+      if (a.tax_code && b.tax_code && a.tax_code.trim() === b.tax_code.trim()) {
+        isDup = true;
+        reason = `Trùng mã số thuế: ${a.tax_code}`;
+      } else if (normA === normB) {
+        isDup = true;
+        reason = "Tên hoàn toàn giống nhau (khác dấu hoặc hoa thường)";
+      } else if (
+        coreA &&
+        coreB &&
+        (coreA === coreB ||
+          (coreA.length > 3 && coreB.includes(coreA)) ||
+          (coreB.length > 3 && coreA.includes(coreB)))
+      ) {
+        isDup = true;
+        reason = `Tên tương tự: "${coreA}" & "${coreB}"`;
+      }
+
+      if (isDup) {
+        duplicates.push({
+          idA: a.id,
+          nameA: a.name,
+          codeA: a.code,
+          debtA: Number(a.current_debt) || 0,
+          poCountA: poCountMap.get(a.id) || 0,
+          idB: b.id,
+          nameB: b.name,
+          codeB: b.code,
+          debtB: Number(b.current_debt) || 0,
+          poCountB: poCountMap.get(b.id) || 0,
+          reason,
+        });
+      }
+    }
+  }
+
+  return duplicates;
 }
 
 // ============================================================================
