@@ -353,7 +353,7 @@ async function extractWithGroq(
     });
   };
 
-  const modelsToTry = ["qwen/qwen3.8-27b", "qwen/qwen3.6-27b"];
+  const modelsToTry = ["qwen/qwen3.8-27b"];
   let lastError: Error | null = null;
 
   for (const model of modelsToTry) {
@@ -364,8 +364,27 @@ async function extractWithGroq(
         if (response.status === 429) {
           const errBody = await response.json().catch(() => ({}));
           const errMsg = errBody.error?.message || "";
-          const matchWait = errMsg.match(/try again in ([\d.]+)s/);
-          const waitSeconds = matchWait ? Math.ceil(parseFloat(matchWait[1])) + 1 : 6;
+          const isDailyLimit =
+            errMsg.includes("tokens per day") ||
+            errMsg.includes("TPD") ||
+            errMsg.includes("RPD") ||
+            errMsg.includes("requests per day");
+
+          const matchMinSec = errMsg.match(/try again in (?:(\d+)m\s*)?([\d.]+)s/);
+          let waitSeconds = 6;
+          if (matchMinSec) {
+            const mins = matchMinSec[1] ? parseInt(matchMinSec[1], 10) : 0;
+            const secs = matchMinSec[2] ? parseFloat(matchMinSec[2]) : 0;
+            waitSeconds = mins * 60 + Math.ceil(secs);
+          }
+
+          if (isDailyLimit || waitSeconds > 25) {
+            const resetStr = waitSeconds >= 60 ? `${Math.ceil(waitSeconds / 60)} phút` : `${waitSeconds} giây`;
+            throw new Error(
+              `Groq API đạt giới hạn hạn mức trong ngày (TPD Limit 200,000 tokens/ngày). Vui lòng thử lại sau khoảng ${resetStr} hoặc cấu hình GEMINI_API_KEY để tiếp tục sử dụng miễn phí.`
+            );
+          }
+
           console.warn(`Groq 429 Rate Limit trên model ${model}. Tự động chờ ${waitSeconds}s trước lần thử ${attempt + 1}...`);
           await new Promise((resolve) => setTimeout(resolve, waitSeconds * 1000));
           continue;
