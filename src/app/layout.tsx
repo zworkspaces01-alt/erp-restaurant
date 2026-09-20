@@ -15,13 +15,13 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://miyako.zpos.click"),
+  metadataBase: new URL("https://zpos.click"),
   title: {
-    default: "MIYAKO Japanese Restaurant · ERP",
-    template: "%s · MIYAKO ERP",
+    default: "ZPOS Restaurant ERP",
+    template: "%s · ZPOS ERP",
   },
   description:
-    "Hệ thống quản trị nhà hàng MIYAKO: kho, định lượng món, nhập hàng, công nợ, nhân sự, chi phí và báo cáo P&L.",
+    "Hệ thống quản trị nhà hàng: kho, định lượng món, nhập hàng, công nợ, nhân sự, chi phí và báo cáo P&L.",
 };
 
 export default function RootLayout({
