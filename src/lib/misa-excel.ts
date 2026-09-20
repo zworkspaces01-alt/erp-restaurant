@@ -38,6 +38,8 @@ export interface MisaParsedOrder {
   discount: number;
   subtotal: number;
   total_amount: number;
+  tax_amount: number;
+  total_with_tax: number;
   note: string;
   items: MisaOrderItem[];
   is_duplicate: boolean;
@@ -54,6 +56,8 @@ export interface MisaParseResult {
   invalidInvoices: number;
   unmatchedItems: { code: string; name: string; occurrences: number }[];
   totalRevenue: number;
+  totalTax: number;
+  totalGrossRevenue: number;
 }
 
 /** Chuẩn hóa tiêu đề cột để so sánh linh hoạt */
@@ -214,6 +218,8 @@ function identifyMisaHeaders(headers: string[]) {
   let colPrice = -1;
   let colTotal = -1;
   let colDiscount = -1;
+  let colVat = -1;
+  let colGrossTotal = -1;
   let colMethod = -1;
   let colNote = -1;
 
@@ -334,6 +340,23 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colMethod === -1) colMethod = idx;
     }
+    // Tiền thuế GTGT / VAT
+    else if (
+      norm.includes("tienthue") ||
+      norm.includes("thuegtgt") ||
+      norm.includes("vat")
+    ) {
+      if (colVat === -1) colVat = idx;
+    }
+    // Tổng thanh toán (thực thu)
+    else if (
+      norm === "tong" ||
+      norm === "tongcong" ||
+      norm.includes("tongthanhtoan") ||
+      norm.includes("thucthu")
+    ) {
+      if (colGrossTotal === -1) colGrossTotal = idx;
+    }
     // Ghi chú
     else if (norm.includes("ghichu") || norm.includes("diengiai") || norm === "note") {
       if (colNote === -1) colNote = idx;
@@ -350,6 +373,8 @@ function identifyMisaHeaders(headers: string[]) {
     colPrice,
     colTotal,
     colDiscount,
+    colVat,
+    colGrossTotal,
     colMethod,
     colNote,
   };
@@ -425,6 +450,8 @@ export function parseMisaSalesExcel(
     payment_method_str: string;
     discount: number;
     invoice_total: number;
+    tax_amount: number;
+    gross_total: number;
     note: string;
     items: MisaOrderItem[];
   }>();
@@ -460,6 +487,9 @@ export function parseMisaSalesExcel(
     if (invCodeRaw && !itemCode && !itemName) {
       currentInvoiceCode = invCodeRaw;
       const invoiceTotal = lineTotal;
+      const vatVal = cols.colVat !== -1 ? cellToNumber(row[cols.colVat], 0) : 0;
+      const grossVal = cols.colGrossTotal !== -1 ? cellToNumber(row[cols.colGrossTotal], 0) : 0;
+
       if (!groupsMap.has(invCodeRaw)) {
         groupsMap.set(invCodeRaw, {
           invoice_code: invCodeRaw,
@@ -469,6 +499,8 @@ export function parseMisaSalesExcel(
           payment_method_str: methodStr,
           discount: lineDiscount,
           invoice_total: invoiceTotal > 0 ? invoiceTotal : 0,
+          tax_amount: vatVal,
+          gross_total: grossVal,
           note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
           items: [],
         });
@@ -477,6 +509,8 @@ export function parseMisaSalesExcel(
         if (lineTotal > 0 && (!group.invoice_total || group.invoice_total === 0)) {
           group.invoice_total = lineTotal;
         }
+        if (vatVal > 0) group.tax_amount = vatVal;
+        if (grossVal > 0) group.gross_total = grossVal;
       }
       continue;
     }
@@ -542,6 +576,8 @@ export function parseMisaSalesExcel(
         payment_method_str: methodStr,
         discount: lineDiscount,
         invoice_total: 0,
+        tax_amount: 0,
+        gross_total: 0,
         note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
         items: [orderItem],
       });
@@ -557,6 +593,8 @@ export function parseMisaSalesExcel(
   // 3. Xây dựng danh sách đơn hoàn chỉnh và đánh giá tính hợp lệ
   const orders: MisaParsedOrder[] = [];
   let totalRevenue = 0;
+  let totalTax = 0;
+  let totalGrossRevenue = 0;
 
   for (const group of groupsMap.values()) {
     if (group.items.length === 0) continue;
@@ -593,6 +631,12 @@ export function parseMisaSalesExcel(
     }
 
     const isValid = errors.length === 0;
+    const vatAmount = group.tax_amount || 0;
+    const grossTotal = group.gross_total > 0 ? group.gross_total : totalAmount + vatAmount;
+    let finalNote = group.note;
+    if (vatAmount > 0 && !finalNote.includes("VAT:")) {
+      finalNote = `${finalNote} · VAT: ${Math.round(vatAmount)} · Thực thu: ${Math.round(grossTotal)}`;
+    }
 
     orders.push({
       invoice_code: group.invoice_code,
@@ -603,7 +647,9 @@ export function parseMisaSalesExcel(
       discount: discount,
       subtotal: subtotal,
       total_amount: totalAmount,
-      note: group.note,
+      tax_amount: vatAmount,
+      total_with_tax: grossTotal,
+      note: finalNote,
       items: group.items,
       is_duplicate: isDuplicate,
       is_valid: isValid,
@@ -613,6 +659,8 @@ export function parseMisaSalesExcel(
 
     if (isValid && !isDuplicate) {
       totalRevenue += totalAmount;
+      totalTax += vatAmount;
+      totalGrossRevenue += grossTotal;
     }
   }
 
@@ -628,6 +676,8 @@ export function parseMisaSalesExcel(
     invalidInvoices,
     unmatchedItems: Array.from(unmatchedTracker.values()),
     totalRevenue,
+    totalTax,
+    totalGrossRevenue,
   };
 }
 

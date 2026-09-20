@@ -54,6 +54,31 @@ export function localDayStart(dateISO: string, timeZone: string): string {
   return `${dateISO}T00:00:00${offsetAt(timeZone, dateISO)}`;
 }
 
+/**
+ * Trích xuất tiền thuế GTGT và tổng thực thu từ ghi chú hóa đơn (hỗ trợ file MISA và định dạng ERP).
+ */
+export function extractOrderTax(
+  note: string | null | undefined,
+  netTotal: number
+): { tax_amount: number; total_with_tax: number } {
+  if (note) {
+    const match = /VAT:\s*(\d+(?:\.\d+)?)/i.exec(note);
+    if (match && match[1]) {
+      const tax = Number(match[1]);
+      if (Number.isFinite(tax) && tax >= 0) {
+        return {
+          tax_amount: tax,
+          total_with_tax: netTotal + tax,
+        };
+      }
+    }
+  }
+  return {
+    tax_amount: 0,
+    total_with_tax: netTotal,
+  };
+}
+
 /** One row of the /orders table (order header + số dòng món). */
 export interface OrderListRow {
   id: string;
@@ -64,6 +89,8 @@ export interface OrderListRow {
   subtotal: number;
   discount: number;
   total_amount: number;
+  tax_amount: number;
+  total_with_tax: number;
   total_cogs: number;
   gross_profit: number;
   gross_margin_pct: number | null;
@@ -117,6 +144,7 @@ export async function getOrders(filter: OrdersFilter = {}): Promise<OrdersPage> 
     const counts = row.order_items as unknown as { count: number }[] | null;
     const total = Number(row.total_amount ?? 0);
     const cogs = Number(row.total_cogs ?? 0);
+    const { tax_amount, total_with_tax } = extractOrderTax(row.note, total);
     return {
       id: row.id,
       order_number: row.order_number,
@@ -126,6 +154,8 @@ export async function getOrders(filter: OrdersFilter = {}): Promise<OrdersPage> 
       subtotal: Number(row.subtotal ?? 0),
       discount: Number(row.discount ?? 0),
       total_amount: total,
+      tax_amount,
+      total_with_tax,
       total_cogs: cogs,
       gross_profit: total - cogs,
       gross_margin_pct: marginPct(total, cogs),
@@ -141,6 +171,8 @@ export async function getOrders(filter: OrdersFilter = {}): Promise<OrdersPage> 
 export interface OrdersSummary {
   order_count: number;
   revenue: number;
+  tax_amount: number;
+  gross_revenue: number;
   cogs: number;
   gross_profit: number;
   gross_margin_pct: number | null;
@@ -148,20 +180,30 @@ export interface OrdersSummary {
 
 /**
  * Tổng hợp doanh thu/giá vốn của cả khoảng ngày (đơn hoàn tất) từ `v_daily_sales`
- * — không phụ thuộc `limit` của danh sách đơn.
+ * và trích xuất tiền thuế GTGT thực tế từ các đơn hoàn tất.
  */
 export async function getOrdersSummary(from: string, to: string): Promise<OrdersSummary> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("v_daily_sales")
-    .select("order_count, revenue, cogs")
-    .gte("sales_date", from)
-    .lte("sales_date", to);
+  const timeZone = await getAppTimezone();
 
-  if (error) throw new Error(error.message);
+  const [dailyRes, ordersRes] = await Promise.all([
+    supabase
+      .from("v_daily_sales")
+      .select("order_count, revenue, cogs")
+      .gte("sales_date", from)
+      .lte("sales_date", to),
+    supabase
+      .from("orders")
+      .select("total_amount, note")
+      .eq("status", "completed")
+      .gte("order_date", localDayStart(from, timeZone))
+      .lt("order_date", localDayStart(addDaysISO(to, 1), timeZone)),
+  ]);
+
+  if (dailyRes.error) throw new Error(dailyRes.error.message);
 
   const seed = { order_count: 0, revenue: 0, cogs: 0 };
-  const summary = (data ?? []).reduce(
+  const summary = (dailyRes.data ?? []).reduce(
     (acc: typeof seed, row) => ({
       order_count: acc.order_count + Number(row.order_count ?? 0),
       revenue: acc.revenue + Number(row.revenue ?? 0),
@@ -170,8 +212,16 @@ export async function getOrdersSummary(from: string, to: string): Promise<Orders
     seed
   );
 
+  let totalTax = 0;
+  for (const o of ordersRes.data ?? []) {
+    const { tax_amount } = extractOrderTax(o.note, Number(o.total_amount ?? 0));
+    totalTax += tax_amount;
+  }
+
   return {
     ...summary,
+    tax_amount: totalTax,
+    gross_revenue: summary.revenue + totalTax,
     gross_profit: summary.revenue - summary.cogs,
     gross_margin_pct: marginPct(summary.revenue, summary.cogs),
   };
@@ -206,6 +256,8 @@ export interface OrderDetail {
   consumption_total_cost: number;
   gross_profit: number;
   gross_margin_pct: number | null;
+  tax_amount: number;
+  total_with_tax: number;
 }
 
 export async function getOrderDetail(id: string): Promise<OrderDetail | null> {
@@ -271,6 +323,8 @@ export async function getOrderDetail(id: string): Promise<OrderDetail | null> {
 
   const total = Number(orderRes.data.total_amount ?? 0);
   const cogs = Number(orderRes.data.total_cogs ?? 0);
+  const { tax_amount, total_with_tax } = extractOrderTax(orderRes.data.note, total);
+
   return {
     order: orderRes.data,
     items,
@@ -278,6 +332,8 @@ export async function getOrderDetail(id: string): Promise<OrderDetail | null> {
     consumption_total_cost: consumption.reduce((sum, row) => sum + row.total_cost, 0),
     gross_profit: total - cogs,
     gross_margin_pct: marginPct(total, cogs),
+    tax_amount,
+    total_with_tax,
   };
 }
 

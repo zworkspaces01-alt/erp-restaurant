@@ -107,6 +107,10 @@ export interface DashboardStats {
   overdue_debt: number;
   pending_expenses_amount: number;
   pending_expenses_count: number;
+  today_gross_revenue?: number;
+  today_tax_amount?: number;
+  month_gross_revenue?: number;
+  month_tax_amount?: number;
 }
 
 /** Payload shapes for the jsonb arguments of the RPCs (DATABASE.md §5.1, §5.3). */

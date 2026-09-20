@@ -64,15 +64,23 @@ export default async function DashboardPage() {
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
         <StatCard
           title="Doanh thu hôm nay"
-          value={formatVND(stats?.today_revenue ?? 0)}
-          hint={`${formatNumber(stats?.today_orders ?? 0, 0)} đơn hoàn tất · Giá vốn ${formatVND(stats?.today_cogs ?? 0)}`}
+          value={formatVND(stats?.today_gross_revenue ?? stats?.today_revenue ?? 0)}
+          hint={
+            (stats?.today_tax_amount ?? 0) > 0
+              ? `Trước thuế: ${formatVND(stats?.today_revenue ?? 0)} · VAT: ${formatVND(stats?.today_tax_amount ?? 0)}`
+              : `${formatNumber(stats?.today_orders ?? 0, 0)} đơn hoàn tất · Giá vốn ${formatVND(stats?.today_cogs ?? 0)}`
+          }
           icon={CircleDollarSign}
           tone="success"
         />
         <StatCard
           title="Doanh thu tháng này"
-          value={formatVND(stats?.month_revenue ?? 0)}
-          hint={`${formatNumber(stats?.month_order_count ?? 0, 0)} đơn · Lợi nhuận gộp ${formatVND(stats?.month_gross_profit ?? 0)}`}
+          value={formatVND(stats?.month_gross_revenue ?? stats?.month_revenue ?? 0)}
+          hint={
+            (stats?.month_tax_amount ?? 0) > 0
+              ? `Trước thuế: ${formatVND(stats?.month_revenue ?? 0)} · VAT: ${formatVND(stats?.month_tax_amount ?? 0)} · Lãi gộp ${formatVND(stats?.month_gross_profit ?? 0)}`
+              : `${formatNumber(stats?.month_order_count ?? 0, 0)} đơn · Lợi nhuận gộp ${formatVND(stats?.month_gross_profit ?? 0)}`
+          }
           icon={TrendingUp}
           tone="info"
         />

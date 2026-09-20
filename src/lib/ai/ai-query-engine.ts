@@ -307,20 +307,27 @@ export async function parseQueryIntent(userQuery: string): Promise<ParsedIntent>
       },
     ];
 
-    for (const pass of passes) {
-      for (const anchor of buildAnchors(pass.query, pass.stop)) {
-        const padded = ` ${anchor.text} `;
-        const hits = allIngredients.filter((ing) => ` ${pass.nameOf(ing.name)} `.includes(padded));
-        if (hits.length === 0) continue;
+    // Gộp cụm neo của cả hai lượt rồi xét theo ĐỘ DÀI giảm dần. Nếu xét xong hẳn
+    // lượt có dấu mới sang lượt bỏ dấu, một cụm ngắn còn dấu sẽ thắng oan một cụm
+    // dài không dấu: gõ "ca ngu" sẽ ra "Nam Ngư" thay vì "Cá ngừ".
+    const allAnchors = passes
+      .flatMap((pass, passIndex) =>
+        buildAnchors(pass.query, pass.stop).map((anchor) => ({ ...anchor, passIndex }))
+      )
+      .sort((a, b) => b.weight - a.weight || a.passIndex - b.passIndex);
 
-        // tên ngắn hơn thì cụ thể hơn, ưu tiên trước
-        hits.sort((a, b) => a.name.length - b.name.length);
-        matchedKeyword = hits[0].name;
-        candidates = hits.slice(0, 5).map((h) => h.name);
-        matchConfidence = hits.length > 1 ? "ambiguous" : "fuzzy";
-        break;
-      }
-      if (matchedKeyword) break;
+    for (const anchor of allAnchors) {
+      const nameOf = passes[anchor.passIndex].nameOf;
+      const padded = ` ${anchor.text} `;
+      const hits = allIngredients.filter((ing) => ` ${nameOf(ing.name)} `.includes(padded));
+      if (hits.length === 0) continue;
+
+      // tên ngắn hơn thì cụ thể hơn, ưu tiên trước
+      hits.sort((a, b) => a.name.length - b.name.length);
+      matchedKeyword = hits[0].name;
+      candidates = hits.slice(0, 5).map((h) => h.name);
+      matchConfidence = hits.length > 1 ? "ambiguous" : "fuzzy";
+      break;
     }
 
     // Vẫn chưa ra => có thể do gõ sai chính tả. Dò từng từ bằng khoảng cách Levenshtein.

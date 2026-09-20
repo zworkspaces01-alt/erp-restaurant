@@ -24,7 +24,14 @@ export default async function OrderDetailPage({
   const detail = await getOrderDetail(id);
   if (!detail) notFound();
 
-  const { order, items, gross_profit: grossProfit, gross_margin_pct: marginPct } = detail;
+  const {
+    order,
+    items,
+    gross_profit: grossProfit,
+    gross_margin_pct: marginPct,
+    tax_amount: taxAmount,
+    total_with_tax: totalWithTax,
+  } = detail;
   const cancelled = order.status === "cancelled";
 
   // Gom sổ kho theo món để kể đúng câu chuyện "bán món này — hết bao nhiêu nguyên liệu".
@@ -65,7 +72,12 @@ export default async function OrderDetailPage({
       />
 
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard title="Doanh thu" value={formatVND(order.total_amount)} tone="success" />
+        <StatCard
+          title="Tổng thực thu (gồm VAT)"
+          value={formatVND(totalWithTax)}
+          hint={taxAmount > 0 ? `Thuần: ${formatVND(order.total_amount)} · VAT: ${formatVND(taxAmount)}` : undefined}
+          tone="success"
+        />
         <StatCard title="Giá vốn thực tế" value={formatVND(order.total_cogs)} tone="warning" />
         <StatCard title="Lãi gộp" value={formatVND(grossProfit)} tone="info" />
         <StatCard
@@ -142,13 +154,25 @@ export default async function OrderDetailPage({
               <dt className="text-muted-foreground">Tạm tính</dt>
               <dd className="tabular-nums">{formatVND(order.subtotal)}</dd>
             </div>
-            <div className="flex justify-between">
-              <dt className="text-muted-foreground">Giảm giá</dt>
-              <dd className="tabular-nums text-destructive">-{formatVND(order.discount)}</dd>
+            {order.discount > 0 && (
+              <div className="flex justify-between">
+                <dt className="text-muted-foreground">Giảm giá</dt>
+                <dd className="tabular-nums text-destructive">-{formatVND(order.discount)}</dd>
+              </div>
+            )}
+            <div className="flex justify-between text-muted-foreground">
+              <dt>Doanh thu thuần (trước thuế)</dt>
+              <dd className="tabular-nums font-medium">{formatVND(order.total_amount)}</dd>
             </div>
-            <div className="flex justify-between text-base font-semibold">
-              <dt>Tổng thanh toán</dt>
-              <dd className="tabular-nums">{formatVND(order.total_amount)}</dd>
+            {taxAmount > 0 && (
+              <div className="flex justify-between text-muted-foreground">
+                <dt>Tiền thuế GTGT</dt>
+                <dd className="tabular-nums text-emerald-600 dark:text-emerald-400">+{formatVND(taxAmount)}</dd>
+              </div>
+            )}
+            <div className="flex justify-between text-base font-semibold border-t pt-1.5">
+              <dt>Tổng thực thu (Khách trả)</dt>
+              <dd className="tabular-nums text-primary">{formatVND(totalWithTax)}</dd>
             </div>
           </dl>
 

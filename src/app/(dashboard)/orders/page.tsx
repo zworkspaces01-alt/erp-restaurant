@@ -81,9 +81,13 @@ export default async function OrdersPage({
           tone="info"
         />
         <StatCard
-          title="Doanh thu"
-          value={formatVND(summary.revenue)}
-          hint={periodLabel}
+          title="Tổng thực thu (gồm VAT)"
+          value={formatVND(summary.gross_revenue)}
+          hint={
+            summary.tax_amount > 0
+              ? `Thuần: ${formatVND(summary.revenue)} · VAT: ${formatVND(summary.tax_amount)}`
+              : periodLabel
+          }
           tone="success"
         />
         <StatCard

@@ -122,7 +122,7 @@ export async function getDashboardData(days = 30): Promise<DashboardData> {
   const today = isoDate(new Date());
   const startDate = shiftDays(today, -(days - 1));
 
-  const [statsRes, dailyRes, lowStockRes, overdueRes, topItemsRes] = await Promise.all([
+  const [statsRes, dailyRes, lowStockRes, overdueRes, topItemsRes, ordersTaxRes] = await Promise.all([
     supabase.rpc("get_dashboard_stats"),
     supabase
       .from("v_daily_sales")
@@ -148,6 +148,11 @@ export async function getDashboardData(days = 30): Promise<DashboardData> {
       .gt("qty_sold", 0)
       .order("qty_sold", { ascending: false })
       .limit(5),
+    supabase
+      .from("orders")
+      .select("total_amount, note, order_date")
+      .eq("status", "completed")
+      .gte("order_date", `${startDate}T00:00:00+07:00`),
   ]);
 
   for (const res of [statsRes, dailyRes, lowStockRes, overdueRes, topItemsRes]) {
@@ -156,6 +161,28 @@ export async function getDashboardData(days = 30): Promise<DashboardData> {
 
   const stats = (statsRes.data as DashboardStats | null) ?? null;
   const endDate = stats?.today ?? today;
+  const monthStart = stats?.month_start ?? `${today.slice(0, 7)}-01`;
+
+  if (stats) {
+    let monthTax = 0;
+    let todayTax = 0;
+    for (const o of ordersTaxRes.data ?? []) {
+      const match = /VAT:\s*(\d+(?:\.\d+)?)/i.exec(o.note || "");
+      const tax = match ? Number(match[1]) : 0;
+      if (tax > 0) {
+        if (o.order_date && o.order_date >= `${monthStart}T00:00:00`) {
+          monthTax += tax;
+        }
+        if (o.order_date && o.order_date.startsWith(endDate)) {
+          todayTax += tax;
+        }
+      }
+    }
+    stats.month_tax_amount = monthTax;
+    stats.month_gross_revenue = stats.month_revenue + monthTax;
+    stats.today_tax_amount = todayTax;
+    stats.today_gross_revenue = stats.today_revenue + todayTax;
+  }
 
   return {
     stats,

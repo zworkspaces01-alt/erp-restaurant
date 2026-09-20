@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import { DataTable, DataTableColumnHeader, Money, StatusBadge } from "@/components/shared";
-import { formatDateTime, formatNumber, formatPercent } from "@/lib/format";
+import { formatDateTime, formatNumber, formatPercent, formatVND } from "@/lib/format";
 import {
   ORDER_STATUS_LABELS,
   ORDER_STATUS_OPTIONS,
@@ -32,9 +32,7 @@ const columns: ColumnDef<OrderListRow>[] = [
     accessorKey: "order_date",
     header: ({ column }) => <DataTableColumnHeader column={column} title="Thời gian" />,
     cell: ({ row }) => (
-      <span className="whitespace-nowrap text-muted-foreground">
-        {formatDateTime(row.original.order_date)}
-      </span>
+      <span className="text-muted-foreground">{formatDateTime(row.original.order_date)}</span>
     ),
   },
   {
@@ -51,12 +49,24 @@ const columns: ColumnDef<OrderListRow>[] = [
   },
   {
     accessorKey: "total_amount",
-    header: ({ column }) => <DataTableColumnHeader column={column} title="Doanh thu" align="right" />,
-    cell: ({ row }) => (
-      <div className="text-right font-medium">
-        <Money value={row.original.total_amount} />
-      </div>
-    ),
+    header: ({ column }) => <DataTableColumnHeader column={column} title="Tổng thực thu" align="right" />,
+    cell: ({ row }) => {
+      const gross = row.original.total_with_tax || row.original.total_amount;
+      const tax = row.original.tax_amount || 0;
+      return (
+        <div className="text-right">
+          <div className="font-semibold text-foreground">
+            <Money value={gross} />
+          </div>
+          {tax > 0 && (
+            <div className="text-[11px] text-muted-foreground whitespace-nowrap">
+              Thuần: {formatVND(row.original.total_amount)}
+              <span className="text-emerald-600 dark:text-emerald-400 ml-1">· VAT: {formatVND(tax)}</span>
+            </div>
+          )}
+        </div>
+      );
+    },
   },
   {
     accessorKey: "total_cogs",

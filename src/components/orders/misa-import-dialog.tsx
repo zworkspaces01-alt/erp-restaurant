@@ -340,7 +340,25 @@ export function MisaImportDialog() {
                 </div>
               </div>
 
-              {/* Cảnh báo các món chưa có trong Thực đơn ERP */}
+              {/* Doanh thu dự kiến kép */}
+              <div className="rounded-lg border bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent p-3.5 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <span className="text-xs text-muted-foreground">Tổng tiền thực thu (Khách trả đã gồm VAT):</span>
+                  <div className="text-xl font-bold text-emerald-700 dark:text-emerald-400">
+                    {formatVND(parseResult.totalGrossRevenue || parseResult.totalRevenue)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-4 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Thuần (trước thuế):</span>
+                    <p className="font-semibold text-foreground">{formatVND(parseResult.totalRevenue)}</p>
+                  </div>
+                  <div className="border-l pl-4">
+                    <span className="text-muted-foreground">Tiền thuế GTGT (8-10%):</span>
+                    <p className="font-semibold text-foreground">{formatVND(parseResult.totalTax)}</p>
+                  </div>
+                </div>
+              </div>
               {parseResult.unmatchedItems.length > 0 && (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2 text-xs">
                   <div className="flex items-center gap-2 font-medium text-amber-800 dark:text-amber-300">
@@ -452,7 +470,12 @@ export function MisaImportDialog() {
                                   </div>
                                 </td>
                                 <td className="py-2 px-3 text-right font-medium text-foreground whitespace-nowrap">
-                                  {formatVND(ord.total_amount)}
+                                  <div>{formatVND(ord.total_with_tax || ord.total_amount)}</div>
+                                  {ord.tax_amount > 0 && (
+                                    <div className="text-[10px] text-muted-foreground">
+                                      Thuần: {formatVND(ord.total_amount)} · VAT: {formatVND(ord.tax_amount)}
+                                    </div>
+                                  )}
                                 </td>
                                 <td className="py-2 px-3 text-center whitespace-nowrap">
                                   <Badge variant="outline" className="text-[10px] font-normal">
