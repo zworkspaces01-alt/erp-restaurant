@@ -418,27 +418,24 @@ export function PurchasesExplorer({
             <div className="lg:col-span-4">
               <Select value={selectedSupplierId} onValueChange={handleSupplierChange}>
                 <SelectTrigger className="h-9 text-xs sm:text-sm w-full">
-                  <div className="flex items-center gap-1.5 truncate">
+                  <span className="flex items-center gap-1.5 truncate pointer-events-none">
                     <Building2 className="size-3.5 text-primary shrink-0" />
-                    <span className="truncate">
-                      {activeSupplier ? activeSupplier.name : "Tất cả nhà cung cấp"}
-                    </span>
-                  </div>
+                    <SelectValue placeholder="Tất cả nhà cung cấp" />
+                  </span>
                 </SelectTrigger>
-                <SelectContent className="max-h-72">
-                  <SelectItem value="all">
-                    <span className="font-medium">Tất cả nhà cung cấp</span> ({suppliers.length})
+                <SelectContent className="max-h-72" position="popper">
+                  <SelectItem value="all" textValue="Tất cả nhà cung cấp">
+                    <span className="font-medium">Tất cả nhà cung cấp</span>
+                    <span className="text-muted-foreground ml-1.5 text-xs">({suppliers.length})</span>
                   </SelectItem>
                   {suppliers.map((s) => (
-                    <SelectItem key={s.id} value={s.id}>
-                      <div className="flex items-center justify-between gap-3 w-full">
-                        <span className="truncate">{s.name}</span>
-                        {s.code && (
-                          <span className="text-[11px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
-                            {s.code}
-                          </span>
-                        )}
-                      </div>
+                    <SelectItem key={s.id} value={s.id} textValue={s.name}>
+                      <span className="truncate">{s.name}</span>
+                      {s.code && (
+                        <span className="ml-2 text-[11px] font-mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded shrink-0">
+                          {s.code}
+                        </span>
+                      )}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -451,7 +448,7 @@ export function PurchasesExplorer({
                 <SelectTrigger className="h-9 text-xs sm:text-sm w-full">
                   <SelectValue placeholder="Trạng thái thanh toán" />
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent position="popper">
                   <SelectItem value="all">Tất cả trạng thái</SelectItem>
                   <SelectItem value="unpaid">Chưa thanh toán</SelectItem>
                   <SelectItem value="partial">Thanh toán một phần</SelectItem>
