@@ -61,6 +61,7 @@ function normalizeHeader(str: string): string {
   return str
     .trim()
     .toLowerCase()
+    .replace(/đ/g, "d")
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[^a-z0-9]/g, "");
@@ -118,7 +119,7 @@ export function normalizePaymentMethod(str: string): PaymentMethod {
 }
 
 /** Phân tích ngày giờ từ ô Excel (hỗ trợ cả serial number của Excel và chuỗi DD/MM/YYYY HH:mm:ss) */
-export function parseExcelDateTime(val: unknown): { iso: string; display: string } {
+export function parseExcelDateTime(val: unknown, timeStr?: string): { iso: string; display: string } {
   const now = new Date();
   const pad = (n: number) => String(n).padStart(2, "0");
 
@@ -130,9 +131,22 @@ export function parseExcelDateTime(val: unknown): { iso: string; display: string
         const y = dateObj.y;
         const m = dateObj.m;
         const d = dateObj.d;
-        const H = dateObj.H ?? 12;
-        const M = dateObj.M ?? 0;
-        const S = dateObj.S ?? 0;
+        let H = dateObj.H ?? 12;
+        let M = dateObj.M ?? 0;
+        let S = dateObj.S ?? 0;
+
+        // Nếu có chuỗi thời gian bổ sung (VD: "18:10 - 20:07"), lấy giờ ra kết thúc
+        if (timeStr && timeStr.includes(":")) {
+          const parts = timeStr.split("-").map((s) => s.trim());
+          const target = parts[parts.length - 1]; // Giờ thanh toán/ra
+          const mTime = /(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/.exec(target);
+          if (mTime) {
+            H = Number(mTime[1]);
+            M = Number(mTime[2]);
+            if (mTime[3]) S = Number(mTime[3]);
+          }
+        }
+
         const iso = `${y}-${pad(m)}-${pad(d)}T${pad(H)}:${pad(M)}:${pad(S)}+07:00`;
         const display = `${pad(d)}/${pad(m)}/${y} ${pad(H)}:${pad(M)}`;
         return { iso, display };
@@ -232,16 +246,6 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colDate === -1) colDate = idx;
     }
-    // Bàn / Phòng
-    else if (
-      norm.includes("ban") ||
-      norm.includes("soban") ||
-      norm.includes("phongban") ||
-      norm.includes("khuvuc") ||
-      norm === "table"
-    ) {
-      if (colTable === -1) colTable = idx;
-    }
     // Mã món
     else if (
       norm.includes("mamon") ||
@@ -266,7 +270,7 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colName === -1) colName = idx;
     }
-    // Số lượng
+    // Số lượng (phải kiểm tra trước 'ban' để tránh nhận nhầm 'slban')
     else if (
       norm.includes("soluong") ||
       norm.includes("slban") ||
@@ -285,11 +289,12 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colPrice === -1) colPrice = idx;
     }
-    // Thành tiền
+    // Thành tiền / Doanh thu
     else if (
       norm.includes("thanhtien") ||
       norm.includes("tienhang") ||
       norm.includes("tongtien") ||
+      norm.includes("doanhthu") ||
       norm === "amount" ||
       norm === "total"
     ) {
@@ -299,12 +304,25 @@ function identifyMisaHeaders(headers: string[]) {
     else if (
       norm.includes("giamgia") ||
       norm.includes("chietkhau") ||
+      norm.includes("khuyenmai") ||
       norm.includes("tienck") ||
       norm.includes("tiengiam") ||
       norm === "ck" ||
       norm === "discount"
     ) {
       if (colDiscount === -1) colDiscount = idx;
+    }
+    // Bàn / Phòng (ưu tiên khớp chính xác để tránh nhầm với slban, giaban)
+    else if (
+      norm === "ban" ||
+      norm === "soban" ||
+      norm === "phong" ||
+      norm === "phongban" ||
+      norm.includes("soban") ||
+      norm.includes("khuvuc") ||
+      norm === "table"
+    ) {
+      if (colTable === -1) colTable = idx;
     }
     // Phương thức thanh toán
     else if (
@@ -406,17 +424,20 @@ export function parseMisaSalesExcel(
     table_number: string;
     payment_method_str: string;
     discount: number;
+    invoice_total: number;
     note: string;
     items: MisaOrderItem[];
   }>();
 
   let autoInvoiceCounter = 1;
+  let currentInvoiceCode = "";
   const unmatchedTracker = new Map<string, { code: string; name: string; occurrences: number }>();
 
   for (let i = headerRowIndex + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
     if (!row || row.length === 0) continue;
 
+    const invCodeRaw = cols.colInvoice !== -1 ? cellToString(row[cols.colInvoice]) : "";
     const itemCode = cols.colCode !== -1 ? cellToString(row[cols.colCode]) : "";
     const itemName = cols.colName !== -1 ? cellToString(row[cols.colName]) : "";
     const qty = cols.colQty !== -1 ? cellToNumber(row[cols.colQty], 0) : 0;
@@ -424,23 +445,52 @@ export function parseMisaSalesExcel(
     const lineTotal = cols.colTotal !== -1 ? cellToNumber(row[cols.colTotal], qty * unitPrice) : qty * unitPrice;
     const lineDiscount = cols.colDiscount !== -1 ? cellToNumber(row[cols.colDiscount], 0) : 0;
 
-    // Bỏ qua dòng trống hoặc dòng tổng cộng của MISA
-    if (!itemName && !itemCode) continue;
-    if (itemName.toLowerCase().includes("tổng cộng") || itemName.toLowerCase().includes("cộng")) continue;
-    if (qty <= 0) continue;
-
-    let invoiceCode = cols.colInvoice !== -1 ? cellToString(row[cols.colInvoice]) : "";
     const dateVal = cols.colDate !== -1 ? row[cols.colDate] : null;
-    const { iso: orderDateIso, display: displayDate } = parseExcelDateTime(dateVal);
+    const timeVal = cellToString(row[1]); // Giờ vào - ra (VD: "18:10 - 20:07")
+    const { iso: orderDateIso, display: displayDate } = parseExcelDateTime(dateVal, timeVal);
     const tableNumber = cols.colTable !== -1 ? cellToString(row[cols.colTable]) : "";
     const methodStr = cols.colMethod !== -1 ? cellToString(row[cols.colMethod]) : "";
     const note = cols.colNote !== -1 ? cellToString(row[cols.colNote]) : "";
 
-    // Nếu không có số hóa đơn (báo cáo tổng hợp), tạo mã giả lập theo ngày
+    // Bỏ qua dòng trống hoặc dòng tổng cộng của MISA
+    if (itemName.toLowerCase().includes("tổng cộng") || itemName.toLowerCase().includes("cộng")) continue;
+
+    // TRƯỜNG HỢP A: Dòng tổng quan của Hóa đơn MISA CukCuk
+    // (Có số hóa đơn nhưng chưa có mã món và tên món)
+    if (invCodeRaw && !itemCode && !itemName) {
+      currentInvoiceCode = invCodeRaw;
+      const invoiceTotal = lineTotal;
+      if (!groupsMap.has(invCodeRaw)) {
+        groupsMap.set(invCodeRaw, {
+          invoice_code: invCodeRaw,
+          order_date: orderDateIso,
+          display_date: displayDate,
+          table_number: tableNumber,
+          payment_method_str: methodStr,
+          discount: lineDiscount,
+          invoice_total: invoiceTotal > 0 ? invoiceTotal : 0,
+          note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
+          items: [],
+        });
+      } else {
+        const group = groupsMap.get(invCodeRaw)!;
+        if (lineTotal > 0 && (!group.invoice_total || group.invoice_total === 0)) {
+          group.invoice_total = lineTotal;
+        }
+      }
+      continue;
+    }
+
+    // TRƯỜNG HỢP B: Dòng chi tiết món ăn
+    if (!itemName && !itemCode) continue;
+    if (qty <= 0) continue;
+
+    let invoiceCode = invCodeRaw || currentInvoiceCode;
     if (!invoiceCode) {
       const datePart = orderDateIso.slice(0, 10).replace(/-/g, "");
       invoiceCode = `MISA-TH-${datePart}-${String(autoInvoiceCounter++).padStart(3, "0")}`;
     }
+    currentInvoiceCode = invoiceCode;
 
     // Đối chiếu món với menu ERP
     let matchedItem: PosMenuItem | undefined;
@@ -491,7 +541,8 @@ export function parseMisaSalesExcel(
         table_number: tableNumber,
         payment_method_str: methodStr,
         discount: lineDiscount,
-        note: note,
+        invoice_total: 0,
+        note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
         items: [orderItem],
       });
     } else {
@@ -508,9 +559,13 @@ export function parseMisaSalesExcel(
   let totalRevenue = 0;
 
   for (const group of groupsMap.values()) {
+    if (group.items.length === 0) continue;
+
     const subtotal = group.items.reduce((sum, it) => sum + it.line_total, 0);
     const discount = Math.min(group.discount, subtotal);
-    const totalAmount = Math.max(0, subtotal - discount);
+    const totalAmount = group.invoice_total && group.invoice_total > 0
+      ? group.invoice_total
+      : Math.max(0, subtotal - discount);
     const paymentMethod = normalizePaymentMethod(group.payment_method_str);
 
     const isDuplicate = existingCodesSet.has(group.invoice_code.toLowerCase());

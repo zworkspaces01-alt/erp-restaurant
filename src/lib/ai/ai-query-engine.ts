@@ -5,11 +5,10 @@ import {
   recordKeyRateLimit,
   recordKeySuccess,
 } from "@/lib/ai/api-key-rotator";
-import { normalizeVietnamese } from "@/lib/ai/invoice-matcher";
+import { computeSimilarity, normalizeVietnamese } from "@/lib/ai/invoice-matcher";
 import { formatNumber, formatVND } from "@/lib/format";
 import {
   getAllIngredientDirectory,
-  getTopPurchasedIngredients,
   queryIngredientPurchases,
   type IngredientPurchaseSummary,
   type TopPurchasedIngredient,
@@ -44,6 +43,74 @@ interface ParsedIntent {
   fromDate?: string;
   toDate?: string;
   periodLabel: string;
+  /** exact = người dùng gõ đúng tên; fuzzy = hệ thống tự suy ra; ambiguous = nhiều khả năng ngang nhau. */
+  matchConfidence: "exact" | "fuzzy" | "ambiguous" | "none";
+  /** Các nguyên liệu gần đúng khác, để gợi ý hoặc hỏi lại người dùng. */
+  candidates: string[];
+}
+
+/** Từ để hỏi và từ chỉ thời gian — bỏ đi trước khi đem phần còn lại đi so tên nguyên liệu. */
+const QUERY_STOP_WORDS = new Set([
+  "nhap", "mua", "ban", "gia", "tien", "tong", "chi", "phi", "bao", "nhieu", "may", "lan",
+  "the", "nao", "la", "co", "khong", "cua", "cho", "toi", "xem", "biet", "hoi", "voi", "va",
+  "trong", "tu", "den", "o", "dau", "con", "lai", "hien", "tai", "bay", "gio", "da", "dang",
+  "thang", "tuan", "ngay", "hom", "nay", "qua", "truoc", "vua", "roi", "nam", "ky",
+  "nguyen", "lieu", "mat", "hang", "san", "pham", "mon", "top", "tat", "ca", "nhung", "cac",
+  "tang", "giam", "bien", "dong", "so", "sanh", "tinh", "hinh", "bao_cao", "thong", "ke",
+]);
+
+/** Ngưỡng điểm khớp mờ: trên mức này thì tự suy ra, dưới thì chỉ gợi ý. */
+const ACCEPT_SCORE = 0.55;
+/** Dưới ACCEPT_SCORE nhưng trên mức này thì đưa danh sách gợi ý thay vì trả lời bừa. */
+const SUGGEST_SCORE = 0.34;
+/** Hai ứng viên chênh nhau ít hơn mức này coi như ngang điểm, phải hỏi lại. */
+const TIE_GAP = 0.08;
+
+/** Khoảng cách Levenshtein — để chịu được lỗi gõ sai vài ký tự ("wasabj" -> "wasabi"). */
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (!a.length) return b.length;
+  if (!b.length) return a.length;
+
+  let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
+  for (let i = 1; i <= a.length; i++) {
+    const curr = [i];
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + cost);
+    }
+    prev = curr;
+  }
+  return prev[b.length];
+}
+
+/**
+ * Điểm giống nhau giữa cụm người dùng gõ và tên nguyên liệu, 0..1.
+ * Kết hợp computeSimilarity (chứa nhau / trùng từ) với so khớp từng từ có chịu lỗi gõ sai.
+ */
+function fuzzyIngredientScore(phrase: string, ingredientName: string): number {
+  const base = computeSimilarity(phrase, ingredientName);
+
+  const queryTokens = phrase.split(" ").filter((t) => t.length >= 2);
+  const nameTokens = normalizeVietnamese(ingredientName).split(" ").filter((t) => t.length >= 2);
+  if (queryTokens.length === 0 || nameTokens.length === 0) return base;
+
+  let hitScore = 0;
+  for (const qt of queryTokens) {
+    let best = 0;
+    for (const nt of nameTokens) {
+      if (qt === nt) {
+        best = 1;
+        break;
+      }
+      const sim = 1 - levenshtein(qt, nt) / Math.max(qt.length, nt.length);
+      if (sim > best) best = sim;
+    }
+    // chỉ tính là trúng khi đủ giống, tránh cộng điểm rác
+    if (best >= 0.75) hitScore += best;
+  }
+
+  return Math.max(base, hitScore / queryTokens.length);
 }
 
 /**
@@ -141,35 +208,84 @@ export async function parseQueryIntent(userQuery: string): Promise<ParsedIntent>
   const allIngredients = await getAllIngredientDirectory();
   let longestMatchLen = 0;
 
+  // So khớp theo RANH GIỚI TỪ. Dùng substring thô sẽ khớp nhầm: nguyên liệu "Đá"
+  // (chuẩn hóa thành "da") nằm trong chữ "dang" của câu "nguyên liệu nào đang tăng giá".
+  // Chuỗi đã chuẩn hóa chỉ còn [a-z0-9 ] nên bọc hai đầu bằng dấu cách là đủ.
+  const paddedQuery = ` ${norm} `;
+
   for (const ing of allIngredients) {
     const normIng = normalizeVietnamese(ing.name);
-    // So khớp nếu câu hỏi chứa tên nguyên liệu hoặc mã nguyên liệu
-    if (norm.includes(normIng) && normIng.length > longestMatchLen) {
+    if (!normIng) continue;
+
+    const hitName = paddedQuery.includes(` ${normIng} `);
+    const normCode = normalizeVietnamese(ing.code || "");
+    const hitCode = normCode.length >= 3 && paddedQuery.includes(` ${normCode} `);
+
+    if ((hitName || hitCode) && normIng.length > longestMatchLen) {
       matchedKeyword = ing.name;
       longestMatchLen = normIng.length;
     }
   }
 
-  // Nếu không khớp chính xác cả cụm dài, thử tìm từ sau các từ khóa dẫn
-  if (!matchedKeyword) {
-    const triggerPatterns = [
-      /(?:nguyên liệu|mặt hàng|sản phẩm|món|hàng|nhập)\s+([a-zA-Z0-9\s\u00C0-\u1EF9]+?)(?:\s+(?:này|nhập|thế nào|bao nhiêu|giá|ở đâu|từ|trong|tháng|tuần|ngày)|$)/i,
-      /(?:giá|số lượng|chi phí)\s+(?:của\s+)?([a-zA-Z0-9\s\u00C0-\u1EF9]+?)(?:\s+(?:thế nào|bao nhiêu|nhập|trong|tháng)|$)/i,
-    ];
+  let matchConfidence: ParsedIntent["matchConfidence"] = matchedKeyword ? "exact" : "none";
+  let candidates: string[] = [];
 
-    for (const pat of triggerPatterns) {
-      const match = userQuery.match(pat);
-      if (match && match[1]) {
-        const candidate = match[1].trim();
-        const normCand = normalizeVietnamese(candidate);
-        // Bỏ qua các từ stopword thông dụng
-        const stopWords = ["nay", "nay", "vua roi", "thang", "tuan", "ngay", "tat ca", "nhieu nhat", "top"];
-        if (candidate.length >= 2 && !stopWords.includes(normCand)) {
-          matchedKeyword = candidate;
-          break;
-        }
+  // Gõ sai, gõ tắt hoặc gõ thiếu tên => tự suy ra bằng khớp mờ.
+  // Bỏ hết từ để hỏi và từ chỉ thời gian, phần còn lại mới là thứ người dùng muốn tra.
+  if (!matchedKeyword) {
+    // Chỉ xoá từ dừng KHÔNG xuất hiện trong tên nguyên liệu của chính nhà hàng này.
+    // Danh sách từ dừng cố định rất nguy hiểm: "ca" (trong "tất cả") trùng với "cá",
+    // "gia" trùng "giá đỗ", "nam" trùng "nấm"... Xoá thẳng tay là mất luôn thứ
+    // người dùng đang hỏi. Từ vựng nguyên liệu là tiêu chí đáng tin hơn.
+    const ingredientVocab = new Set<string>();
+    for (const ing of allIngredients) {
+      for (const token of normalizeVietnamese(ing.name).split(" ")) {
+        if (token.length >= 2) ingredientVocab.add(token);
       }
     }
+
+    const phrase = norm
+      .split(" ")
+      .filter(
+        (t) =>
+          t.length >= 2 &&
+          !/^\d+$/.test(t) &&
+          !(QUERY_STOP_WORDS.has(t) && !ingredientVocab.has(t))
+      )
+      .join(" ")
+      .trim();
+
+    if (phrase) {
+      const scored = allIngredients
+        .map((ing) => ({ name: ing.name, score: fuzzyIngredientScore(phrase, ing.name) }))
+        .sort((a, b) => b.score - a.score);
+
+      const best = scored[0];
+      const runnerUp = scored[1];
+
+      if (best && best.score >= ACCEPT_SCORE) {
+        // Nhiều nguyên liệu điểm sát nhau => không tự chọn, hỏi lại người dùng.
+        const tooClose = runnerUp !== undefined && best.score - runnerUp.score < TIE_GAP;
+        matchedKeyword = best.name;
+        matchConfidence = tooClose ? "ambiguous" : "fuzzy";
+        candidates = scored
+          .filter((c) => c.score >= best.score - 0.15)
+          .slice(0, 5)
+          .map((c) => c.name);
+      } else if (best && best.score >= SUGGEST_SCORE) {
+        // Quá mơ hồ để trả lời, nhưng đủ gần để gợi ý.
+        matchConfidence = "ambiguous";
+        candidates = scored.slice(0, 5).map((c) => c.name);
+      }
+    }
+  }
+
+  // Không nhận ra nguyên liệu cụ thể nào => câu hỏi mang tính tổng quan
+  // ("tháng này nhập những gì", "tổng chi phí nhập bao nhiêu"). Trước đây vẫn đi
+  // nhánh ingredient_purchases rồi lấy summaries[0] (nguyên liệu đắt nhất) và trả
+  // lời như thể người dùng hỏi riêng về nó — sai hoàn toàn.
+  if (!matchedKeyword && matchConfidence !== "ambiguous") {
+    queryType = "top_ingredients";
   }
 
   return {
@@ -178,6 +294,8 @@ export async function parseQueryIntent(userQuery: string): Promise<ParsedIntent>
     fromDate,
     toDate,
     periodLabel,
+    matchConfidence,
+    candidates,
   };
 }
 
@@ -356,17 +474,49 @@ async function callLlmForExplanation(prompt: string, systemPrompt?: string): Pro
  */
 export async function executeAiQuery(userMessage: string): Promise<AiAssistantQueryResult> {
   const intent = await parseQueryIntent(userMessage);
-  const { keyword, fromDate, toDate, periodLabel, queryType } = intent;
+  const { keyword, fromDate, toDate, periodLabel, queryType, matchConfidence, candidates } = intent;
+
+  // Nhiều nguyên liệu gần đúng ngang nhau => HỎI LẠI, không tự chọn bừa.
+  // Chọn đại một cái rồi trả lời tự tin là kiểu sai khó phát hiện nhất.
+  if (matchConfidence === "ambiguous" && candidates.length > 0) {
+    return {
+      answer:
+        `Mình chưa chắc bạn đang hỏi nguyên liệu nào. Có ${candidates.length} nguyên liệu gần giống với những gì bạn gõ:\n\n` +
+        candidates.map((c) => `- **${c}**`).join("\n") +
+        `\n\nBạn bấm vào một gợi ý bên dưới, hoặc gõ lại tên đầy đủ hơn nhé.`,
+      queryType: "ingredient_purchases",
+      parameters: { keyword, fromDate, toDate, resolvedPeriodLabel: periodLabel },
+      metrics: [],
+      summaries: [],
+      suggestedQuestions: candidates.map((c) => `${c} nhập thế nào trong ${periodLabel}?`),
+    };
+  }
+
+  // Suy ra được nhưng người dùng không gõ đúng tên => phải nói rõ là đã tự suy.
+  const inferenceNote =
+    matchConfidence === "fuzzy" && keyword
+      ? `> Hiểu là bạn đang hỏi về **${keyword}**. Nếu không đúng, gõ lại tên đầy đủ giúp mình.\n\n`
+      : "";
 
   // =========================================================================
   // Nhánh 1: Hỏi về danh sách Top nguyên liệu nhập nhiều nhất
   // =========================================================================
   if (queryType === "top_ingredients" || (!keyword && userMessage.toLowerCase().includes("top"))) {
-    const topIngredients = await getTopPurchasedIngredients({
-      fromDate,
-      toDate,
-      limit: 8,
-    });
+    // Lấy TOÀN BỘ để có tổng chi phí thật của kỳ, rồi mới cắt top 8 để hiển thị.
+    // getTopPurchasedIngredients chỉ trả 8 dòng nên cộng lại sẽ ra con số thiếu.
+    const { summaries: allSummaries } = await queryIngredientPurchases({ fromDate, toDate });
+    const periodTotalSpending = allSummaries.reduce((acc, it) => acc + it.total_amount, 0);
+    const periodIngredientCount = allSummaries.length;
+    const topIngredients: TopPurchasedIngredient[] = allSummaries.slice(0, 8).map((sm) => ({
+      ingredient_id: sm.ingredient_id,
+      ingredient_name: sm.ingredient_name,
+      ingredient_code: sm.ingredient_code,
+      base_unit: sm.base_unit,
+      total_quantity: sm.total_quantity,
+      total_amount: sm.total_amount,
+      avg_unit_price: sm.avg_unit_price,
+      po_count: sm.po_count,
+    }));
 
     if (topIngredients.length === 0) {
       return {
@@ -382,13 +532,13 @@ export async function executeAiQuery(userMessage: string): Promise<AiAssistantQu
       };
     }
 
-    const totalSpending = topIngredients.reduce((acc, it) => acc + it.total_amount, 0);
+    const totalSpending = periodTotalSpending;
 
     const metrics: AiAssistantMetricCard[] = [
       {
-        label: "Tổng chi phí Top nguyên liệu",
+        label: "Tổng chi phí nhập hàng",
         value: formatVND(totalSpending),
-        subtext: `Trong ${periodLabel}`,
+        subtext: `Toàn bộ ${periodIngredientCount} nguyên liệu trong ${periodLabel}`,
         tone: "primary",
       },
       {
@@ -398,9 +548,9 @@ export async function executeAiQuery(userMessage: string): Promise<AiAssistantQu
         tone: "warning",
       },
       {
-        label: "Số mặt hàng phân tích",
-        value: `${topIngredients.length} món`,
-        subtext: `Đã xếp theo chi phí giảm dần`,
+        label: "Số mặt hàng đã nhập",
+        value: `${periodIngredientCount} nguyên liệu`,
+        subtext: `Đang hiển thị ${topIngredients.length} mặt hàng tốn kém nhất`,
         tone: "default",
       },
     ];
@@ -417,7 +567,8 @@ ${topIngredients
   )
   .join("\n")}
 
-Tổng tiền của nhóm này: ${formatVND(totalSpending)}.
+Tổng chi phí nhập hàng của TOÀN KỲ (tất cả ${periodIngredientCount} nguyên liệu): ${formatVND(totalSpending)}.
+Danh sách trên chỉ là ${topIngredients.length} mặt hàng tốn kém nhất, không phải toàn bộ.
 Yêu cầu: Hãy viết bản tóm tắt phân tích ngắn gọn, nêu rõ 2-3 nguyên liệu chiếm tỉ trọng lớn nhất và đưa ra lưu ý quản trị tồn kho cho bếp/quản lý.
 `;
 
@@ -472,7 +623,7 @@ Yêu cầu: Hãy viết bản tóm tắt phân tích ngắn gọn, nêu rõ 2-3 
     }
 
     return {
-      answer: `Không tìm thấy phiếu nhập nào cho nguyên liệu **${keyword || "yêu cầu"}** trong **${periodLabel}** (${fromDate} đến ${toDate}).${extraAdvice}`,
+      answer: `${inferenceNote}Không tìm thấy phiếu nhập nào cho nguyên liệu **${keyword || "yêu cầu"}** trong **${periodLabel}** (${fromDate} đến ${toDate}).${extraAdvice}`,
       queryType: "ingredient_purchases",
       parameters: { keyword, fromDate, toDate, resolvedPeriodLabel: periodLabel },
       metrics: [
@@ -581,7 +732,7 @@ Hãy trả lời câu hỏi trực tiếp, rõ ràng, nêu rõ tổng lượng, 
   }
 
   return {
-    answer: explanation,
+    answer: inferenceNote + explanation,
     queryType: "ingredient_purchases",
     parameters: { keyword: primary.ingredient_name, fromDate, toDate, resolvedPeriodLabel: periodLabel },
     metrics,
