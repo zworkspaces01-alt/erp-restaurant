@@ -49,20 +49,77 @@ interface ParsedIntent {
   candidates: string[];
 }
 
-/** Từ để hỏi và từ chỉ thời gian — bỏ đi trước khi đem phần còn lại đi so tên nguyên liệu. */
-const QUERY_STOP_WORDS = new Set([
+/**
+ * Chuẩn hóa nhưng GIỮ NGUYÊN DẤU tiếng Việt. Dấu chính là thứ phân biệt
+ * "tỏi" với "tôi", "nấm" với "năm", "cá" với "cả" — bỏ dấu đi là mất luôn
+ * khả năng phân biệt và sinh ra khớp nhầm.
+ */
+function normalizeKeepTones(str: string): string {
+  if (!str) return "";
+  return str
+    .toLowerCase()
+    .replace(/[^\p{Letter}\p{Number}\s]/gu, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** Từ để hỏi, bản CÓ DẤU — dùng khi dò theo dạng còn dấu. */
+const QUESTION_WORDS_TONED = new Set([
+  "nhập", "mua", "bán", "giá", "tiền", "tổng", "chi", "phí", "bao", "nhiêu", "mấy", "lần",
+  "thế", "nào", "là", "có", "không", "của", "cho", "tôi", "xem", "biết", "hỏi", "với", "và",
+  "trong", "từ", "đến", "đâu", "còn", "lại", "hiện", "tại", "bây", "giờ", "đã", "đang",
+  "tháng", "tuần", "ngày", "hôm", "nay", "qua", "trước", "vừa", "rồi", "năm", "kỳ", "số",
+  "nguyên", "liệu", "mặt", "hàng", "sản", "phẩm", "món", "top", "tất", "cả", "những", "các",
+  "tăng", "giảm", "biến", "động", "so", "sánh", "tình", "hình", "thống", "kê", "nhất", "gì",
+]);
+
+/**
+ * Từ CHỈ dùng để hỏi hoặc chỉ thời gian. Một mình chúng không bao giờ là tên nguyên liệu.
+ * Chỉ dùng để loại các cụm neo vô nghĩa, KHÔNG dùng để xoá chữ khỏi câu hỏi —
+ * xoá thẳng tay sẽ mất luôn thứ người dùng đang hỏi ("tất cả" nuốt mất "cá").
+ */
+const QUESTION_WORDS = new Set([
   "nhap", "mua", "ban", "gia", "tien", "tong", "chi", "phi", "bao", "nhieu", "may", "lan",
   "the", "nao", "la", "co", "khong", "cua", "cho", "toi", "xem", "biet", "hoi", "voi", "va",
-  "trong", "tu", "den", "o", "dau", "con", "lai", "hien", "tai", "bay", "gio", "da", "dang",
-  "thang", "tuan", "ngay", "hom", "nay", "qua", "truoc", "vua", "roi", "nam", "ky",
+  "trong", "tu", "den", "dau", "con", "lai", "hien", "tai", "bay", "gio", "da", "dang",
+  "thang", "tuan", "ngay", "hom", "nay", "qua", "truoc", "vua", "roi", "nam", "ky", "so",
   "nguyen", "lieu", "mat", "hang", "san", "pham", "mon", "top", "tat", "ca", "nhung", "cac",
-  "tang", "giam", "bien", "dong", "so", "sanh", "tinh", "hinh", "bao_cao", "thong", "ke",
+  "tang", "giam", "bien", "dong", "sanh", "tinh", "hinh", "thong", "ke", "nhat", "gi",
 ]);
+
+/** Cụm neo: dãy từ liền nhau lấy từ câu hỏi, dùng để dò trong tên nguyên liệu. */
+interface Anchor {
+  text: string;
+  /** Số ký tự — cụm dài hơn thì đáng tin hơn. */
+  weight: number;
+}
+
+/**
+ * Sinh mọi cụm từ liền nhau (1..4 từ) của câu hỏi, sắp theo độ dài giảm dần.
+ * Loại các cụm chỉ gồm từ để hỏi, và cụm một từ quá ngắn (dưới 3 ký tự)
+ * để "ca" trong "tất cả" không bị hiểu thành "cá".
+ */
+function buildAnchors(normQuery: string, questionWords: Set<string>): Anchor[] {
+  const tokens = normQuery.split(" ").filter((t) => t.length >= 2 && !/^\d+$/.test(t));
+  const anchors: Anchor[] = [];
+
+  for (let size = Math.min(4, tokens.length); size >= 1; size--) {
+    for (let i = 0; i + size <= tokens.length; i++) {
+      const slice = tokens.slice(i, i + size);
+      // cụm toàn từ để hỏi thì bỏ
+      if (slice.every((t) => questionWords.has(t))) continue;
+      // cụm một từ: phải đủ dài và không phải từ để hỏi
+      if (size === 1 && (slice[0].length < 3 || questionWords.has(slice[0]))) continue;
+      const text = slice.join(" ");
+      anchors.push({ text, weight: text.length });
+    }
+  }
+
+  return anchors.sort((a, b) => b.weight - a.weight);
+}
 
 /** Ngưỡng điểm khớp mờ: trên mức này thì tự suy ra, dưới thì chỉ gợi ý. */
 const ACCEPT_SCORE = 0.55;
-/** Dưới ACCEPT_SCORE nhưng trên mức này thì đưa danh sách gợi ý thay vì trả lời bừa. */
-const SUGGEST_SCORE = 0.34;
 /** Hai ứng viên chênh nhau ít hơn mức này coi như ngang điểm, phải hỏi lại. */
 const TIE_GAP = 0.08;
 
@@ -230,52 +287,67 @@ export async function parseQueryIntent(userQuery: string): Promise<ParsedIntent>
   let matchConfidence: ParsedIntent["matchConfidence"] = matchedKeyword ? "exact" : "none";
   let candidates: string[] = [];
 
-  // Gõ sai, gõ tắt hoặc gõ thiếu tên => tự suy ra bằng khớp mờ.
-  // Bỏ hết từ để hỏi và từ chỉ thời gian, phần còn lại mới là thứ người dùng muốn tra.
+  // Gõ tắt, gõ thiếu hoặc gõ sai => tự suy ra.
+  // Cách làm: lấy cụm từ liền nhau DÀI NHẤT của câu hỏi mà nằm trọn trong tên một
+  // nguyên liệu. Bám vào cụm dài nhất đáng tin hơn nhiều so với đếm từ trùng rời rạc,
+  // vốn khiến "tổng chi phí" khớp nhầm "Phí Dịch Vụ".
   if (!matchedKeyword) {
-    // Chỉ xoá từ dừng KHÔNG xuất hiện trong tên nguyên liệu của chính nhà hàng này.
-    // Danh sách từ dừng cố định rất nguy hiểm: "ca" (trong "tất cả") trùng với "cá",
-    // "gia" trùng "giá đỗ", "nam" trùng "nấm"... Xoá thẳng tay là mất luôn thứ
-    // người dùng đang hỏi. Từ vựng nguyên liệu là tiêu chí đáng tin hơn.
-    const ingredientVocab = new Set<string>();
-    for (const ing of allIngredients) {
-      for (const token of normalizeVietnamese(ing.name).split(" ")) {
-        if (token.length >= 2) ingredientVocab.add(token);
+    // Lượt 1 dò theo dạng CÒN DẤU (phân biệt được tỏi/tôi, nấm/năm).
+    // Lượt 2 mới bỏ dấu, dành cho người gõ không dấu.
+    const passes = [
+      {
+        query: normalizeKeepTones(userQuery),
+        stop: QUESTION_WORDS_TONED,
+        nameOf: (n: string) => normalizeKeepTones(n),
+      },
+      {
+        query: norm,
+        stop: QUESTION_WORDS,
+        nameOf: (n: string) => normalizeVietnamese(n),
+      },
+    ];
+
+    for (const pass of passes) {
+      for (const anchor of buildAnchors(pass.query, pass.stop)) {
+        const padded = ` ${anchor.text} `;
+        const hits = allIngredients.filter((ing) => ` ${pass.nameOf(ing.name)} `.includes(padded));
+        if (hits.length === 0) continue;
+
+        // tên ngắn hơn thì cụ thể hơn, ưu tiên trước
+        hits.sort((a, b) => a.name.length - b.name.length);
+        matchedKeyword = hits[0].name;
+        candidates = hits.slice(0, 5).map((h) => h.name);
+        matchConfidence = hits.length > 1 ? "ambiguous" : "fuzzy";
+        break;
       }
+      if (matchedKeyword) break;
     }
 
-    const phrase = norm
-      .split(" ")
-      .filter(
-        (t) =>
-          t.length >= 2 &&
-          !/^\d+$/.test(t) &&
-          !(QUERY_STOP_WORDS.has(t) && !ingredientVocab.has(t))
-      )
-      .join(" ")
-      .trim();
+    // Vẫn chưa ra => có thể do gõ sai chính tả. Dò từng từ bằng khoảng cách Levenshtein.
+    if (!matchedKeyword) {
+      const typoTokens = norm
+        .split(" ")
+        .filter((t) => t.length >= 4 && !QUESTION_WORDS.has(t) && !/^\d+$/.test(t));
 
-    if (phrase) {
-      const scored = allIngredients
-        .map((ing) => ({ name: ing.name, score: fuzzyIngredientScore(phrase, ing.name) }))
-        .sort((a, b) => b.score - a.score);
+      let best: { name: string; score: number } | null = null;
+      let runnerUpScore = 0;
 
-      const best = scored[0];
-      const runnerUp = scored[1];
+      for (const token of typoTokens) {
+        for (const ing of allIngredients) {
+          const score = fuzzyIngredientScore(token, ing.name);
+          if (!best || score > best.score) {
+            if (best) runnerUpScore = best.score;
+            best = { name: ing.name, score };
+          } else if (score > runnerUpScore) {
+            runnerUpScore = score;
+          }
+        }
+      }
 
       if (best && best.score >= ACCEPT_SCORE) {
-        // Nhiều nguyên liệu điểm sát nhau => không tự chọn, hỏi lại người dùng.
-        const tooClose = runnerUp !== undefined && best.score - runnerUp.score < TIE_GAP;
         matchedKeyword = best.name;
-        matchConfidence = tooClose ? "ambiguous" : "fuzzy";
-        candidates = scored
-          .filter((c) => c.score >= best.score - 0.15)
-          .slice(0, 5)
-          .map((c) => c.name);
-      } else if (best && best.score >= SUGGEST_SCORE) {
-        // Quá mơ hồ để trả lời, nhưng đủ gần để gợi ý.
-        matchConfidence = "ambiguous";
-        candidates = scored.slice(0, 5).map((c) => c.name);
+        matchConfidence = best.score - runnerUpScore < TIE_GAP ? "ambiguous" : "fuzzy";
+        candidates = [best.name];
       }
     }
   }
@@ -478,7 +550,9 @@ export async function executeAiQuery(userMessage: string): Promise<AiAssistantQu
 
   // Nhiều nguyên liệu gần đúng ngang nhau => HỎI LẠI, không tự chọn bừa.
   // Chọn đại một cái rồi trả lời tự tin là kiểu sai khó phát hiện nhất.
-  if (matchConfidence === "ambiguous" && candidates.length > 0) {
+  // Chỉ hỏi lại khi người dùng thực sự đang hỏi về MỘT nguyên liệu. Câu tổng quan
+  // ("top nguyên liệu nhiều nhất") không được biến thành câu hỏi ngược.
+  if (queryType === "ingredient_purchases" && matchConfidence === "ambiguous" && candidates.length > 0) {
     return {
       answer:
         `Mình chưa chắc bạn đang hỏi nguyên liệu nào. Có ${candidates.length} nguyên liệu gần giống với những gì bạn gõ:\n\n` +
