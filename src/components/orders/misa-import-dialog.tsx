@@ -9,6 +9,8 @@ import {
   Download,
   FileSpreadsheet,
   Loader2,
+  Plus,
+  Sparkles,
   Upload,
   X,
 } from "lucide-react";
@@ -35,8 +37,10 @@ import {
 import {
   getMisaImportMetadata,
   importMisaOrdersAction,
+  autoCreateMissingMenuItemsAction,
   type MisaOrderToImport,
 } from "@/server-actions/orders.actions";
+import type { PosMenuItem } from "@/lib/queries/orders.queries";
 import { formatNumber, formatVND } from "@/lib/format";
 
 export function MisaImportDialog() {
@@ -50,7 +54,15 @@ export function MisaImportDialog() {
   const [parseResult, setParseResult] = useState<MisaParseResult | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [skipDuplicates, setSkipDuplicates] = useState(true);
+  const [autoAddMenuItems, setAutoAddMenuItems] = useState(true);
+  const [isCreatingItems, setIsCreatingItems] = useState(false);
   const [activeTab, setActiveTab] = useState<"all" | "valid" | "duplicate" | "invalid">("all");
+
+  const fileBufferRef = useRef<ArrayBuffer | null>(null);
+  const metadataRef = useRef<{
+    menuItems: PosMenuItem[];
+    existingMisaCodes: string[];
+  } | null>(null);
 
   const [isPending, startTransition] = useTransition();
 
@@ -62,6 +74,8 @@ export function MisaImportDialog() {
         setFile(null);
         setParseResult(null);
         setParseError(null);
+        fileBufferRef.current = null;
+        metadataRef.current = null;
       }
     }
   }
@@ -101,12 +115,16 @@ export function MisaImportDialog() {
       }
 
       const { menuItems, existingMisaCodes } = metaRes.data;
+      metadataRef.current = { menuItems, existingMisaCodes };
 
       // 2. Đọc arrayBuffer
       const buffer = await selectedFile.arrayBuffer();
+      fileBufferRef.current = buffer;
 
       // 3. Phân tích cú pháp
-      const result = parseMisaSalesExcel(buffer, menuItems, existingMisaCodes);
+      const result = parseMisaSalesExcel(buffer, menuItems, existingMisaCodes, {
+        autoAddMenuItems,
+      });
       setParseResult(result);
 
       if (result.totalInvoices === 0) {
@@ -118,6 +136,67 @@ export function MisaImportDialog() {
       setParseResult(null);
     } finally {
       setParsing(false);
+    }
+  }
+
+  // Thay đổi tùy chọn tự động thêm món mới
+  function handleToggleAutoAdd(nextChecked: boolean) {
+    setAutoAddMenuItems(nextChecked);
+    if (fileBufferRef.current && metadataRef.current) {
+      const result = parseMisaSalesExcel(
+        fileBufferRef.current,
+        metadataRef.current.menuItems,
+        metadataRef.current.existingMisaCodes,
+        { autoAddMenuItems: nextChecked }
+      );
+      setParseResult(result);
+    }
+  }
+
+  // Thêm ngay các món chưa có vào danh mục Thực đơn ERP
+  async function handleCreateMissingMenuItems() {
+    if (!parseResult || parseResult.unmatchedItems.length === 0) return;
+
+    setIsCreatingItems(true);
+    try {
+      const res = await autoCreateMissingMenuItemsAction(
+        parseResult.unmatchedItems.map((u) => ({
+          code: u.code,
+          name: u.name,
+          unit_price: u.unitPrice,
+          unit: u.unit,
+          category: u.category,
+          item_group: u.itemGroup,
+          tax_percent: u.taxPercent,
+        }))
+      );
+
+      if (!res.success) {
+        toast.error(res.error);
+        return;
+      }
+
+      toast.success(
+        `Đã tự động thêm thành công ${res.data.createdCount} món mới vào Thực đơn ERP!`
+      );
+
+      // Cập nhật lại metadata và phân tích lại file
+      const metaRes = await getMisaImportMetadata();
+      if (metaRes.success && fileBufferRef.current) {
+        metadataRef.current = metaRes.data;
+        const newResult = parseMisaSalesExcel(
+          fileBufferRef.current,
+          metaRes.data.menuItems,
+          metaRes.data.existingMisaCodes,
+          { autoAddMenuItems }
+        );
+        setParseResult(newResult);
+      }
+    } catch (err) {
+      console.error(err);
+      toast.error("Có lỗi xảy ra khi tạo món mới vào Thực đơn");
+    } finally {
+      setIsCreatingItems(false);
     }
   }
 
@@ -145,24 +224,47 @@ export function MisaImportDialog() {
       discount: o.discount,
       note: o.note || undefined,
       items: o.items.map((it) => ({
-        menu_item_id: it.menu_item_id!,
+        menu_item_id: it.menu_item_id,
+        raw_code: it.raw_code,
+        raw_name: it.raw_name,
         quantity: it.quantity,
         unit_price: it.unit_price,
+        unit: it.unit,
+        category: it.category,
+        item_group: it.item_group,
+        tax_percent: it.tax_percent,
       })),
     }));
 
     startTransition(async () => {
-      const res = await importMisaOrdersAction(payload, skipDuplicates);
+      const res = await importMisaOrdersAction(
+        payload,
+        skipDuplicates,
+        autoAddMenuItems,
+        parseResult.unmatchedItems.map((u) => ({
+          code: u.code,
+          name: u.name,
+          unit_price: u.unitPrice,
+          unit: u.unit,
+          category: u.category,
+          item_group: u.itemGroup,
+          tax_percent: u.taxPercent,
+        }))
+      );
+
       if (!res.success) {
         toast.error(res.error);
         return;
       }
 
-      const { importedCount, skippedCount, totalRevenue, errors } = res.data;
+      const { importedCount, skippedCount, totalRevenue, createdMenuItemsCount, errors } = res.data;
 
       if (importedCount > 0) {
+        const addedMenuMsg = createdMenuItemsCount > 0
+          ? ` (đã tự động tạo ${createdMenuItemsCount} món mới vào Thực đơn)`
+          : "";
         toast.success(
-          `Đã nhập thành công ${importedCount} hóa đơn MISA! Doanh thu: ${formatVND(totalRevenue)}. Kho nguyên liệu đã được trừ tự động theo định lượng BOM.`
+          `Đã nhập thành công ${importedCount} hóa đơn MISA${addedMenuMsg}! Doanh thu: ${formatVND(totalRevenue)}. Kho nguyên liệu đã được trừ tự động theo định lượng BOM.`
         );
       } else if (skippedCount > 0) {
         toast.info(`Đã bỏ qua ${skippedCount} hóa đơn do đã tồn tại.`);
@@ -332,12 +434,24 @@ export function MisaImportDialog() {
                     {parseResult.duplicateInvoices}
                   </div>
                 </div>
-                <div className="rounded-lg border bg-card p-3">
-                  <span className="text-xs text-muted-foreground">Lỗi chưa map được món</span>
-                  <div className="text-xl font-bold text-destructive mt-0.5">
-                    {parseResult.invalidInvoices}
+                {autoAddMenuItems ? (
+                  <div className="rounded-lg border bg-card p-3 border-emerald-500/20 bg-emerald-500/5">
+                    <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium flex items-center gap-1">
+                      <Sparkles className="size-3 text-emerald-600" />
+                      Món mới sẽ tự tạo
+                    </span>
+                    <div className="text-xl font-bold text-emerald-700 dark:text-emerald-400 mt-0.5">
+                      {parseResult.unmatchedItems.length}
+                    </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="rounded-lg border bg-card p-3 border-destructive/20 bg-destructive/5">
+                    <span className="text-xs text-muted-foreground">Lỗi chưa map được món</span>
+                    <div className="text-xl font-bold text-destructive mt-0.5">
+                      {parseResult.invalidInvoices}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Doanh thu dự kiến kép */}
@@ -359,31 +473,98 @@ export function MisaImportDialog() {
                   </div>
                 </div>
               </div>
+
+              {/* Banner cảnh báo / thông báo món mới */}
               {parseResult.unmatchedItems.length > 0 && (
-                <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 p-3.5 space-y-2 text-xs">
-                  <div className="flex items-center gap-2 font-medium text-amber-800 dark:text-amber-300">
-                    <AlertTriangle className="size-4 shrink-0" />
-                    <span>
-                      Phát hiện {parseResult.unmatchedItems.length} món trong file MISA chưa có trong Thực đơn ERP:
-                    </span>
+                <div
+                  className={`rounded-lg border p-3.5 space-y-2.5 text-xs transition-colors ${
+                    autoAddMenuItems
+                      ? "border-emerald-500/30 bg-emerald-500/5"
+                      : "border-amber-500/30 bg-amber-500/5"
+                  }`}
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 font-medium text-emerald-800 dark:text-emerald-300">
+                      {autoAddMenuItems ? (
+                        <Sparkles className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
+                      ) : (
+                        <AlertTriangle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
+                      )}
+                      <span>
+                        Phát hiện {parseResult.unmatchedItems.length} món trong file MISA chưa có trong Thực đơn ERP:
+                      </span>
+                    </div>
+                    {autoAddMenuItems && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={handleCreateMissingMenuItems}
+                        disabled={isCreatingItems || isPending}
+                        className="h-7 px-2.5 text-xs border-emerald-500/40 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-500/10 gap-1.5"
+                      >
+                        {isCreatingItems ? (
+                          <Loader2 className="size-3.5 animate-spin" />
+                        ) : (
+                          <Plus className="size-3.5" />
+                        )}
+                        Thêm ngay {parseResult.unmatchedItems.length} món vào Thực đơn
+                      </Button>
+                    )}
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto pt-1">
                     {parseResult.unmatchedItems.map((u, i) => (
                       <span
                         key={i}
-                        className="inline-flex items-center gap-1 rounded bg-amber-500/15 text-amber-900 dark:text-amber-200 px-2 py-0.5 text-[11px]"
+                        className={`inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] ${
+                          autoAddMenuItems
+                            ? "bg-emerald-500/15 text-emerald-950 dark:text-emerald-200"
+                            : "bg-amber-500/15 text-amber-900 dark:text-amber-200"
+                        }`}
                       >
                         <strong>{u.name || u.code}</strong>
                         {u.code && u.name && <span className="opacity-75">({u.code})</span>}
+                        {u.unitPrice > 0 && (
+                          <span className="opacity-80 font-mono text-[10px]">
+                            {formatVND(u.unitPrice)}
+                          </span>
+                        )}
                         <span className="text-[10px] opacity-60">×{u.occurrences} lần</span>
                       </span>
                     ))}
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    * Các hóa đơn có chứa món trên sẽ tạm thời bị đánh dấu lỗi. Bạn có thể thêm các món này vào mục <strong>Thực đơn</strong> trước để hệ thống nhận diện và tính BOM.
+                    {autoAddMenuItems ? (
+                      <>
+                        ✨ Hệ thống sẽ <strong>tự động thêm {parseResult.unmatchedItems.length} món trên vào Thực đơn</strong> (kèm giá bán & mã món từ MISA) khi bạn bấm Nhập hóa đơn. Bạn cũng có thể bấm <em>Thêm ngay vào Thực đơn</em> ở trên để xem trước trong menu.
+                      </>
+                    ) : (
+                      <>
+                        * Các hóa đơn có chứa món trên sẽ tạm thời bị đánh dấu lỗi. Bạn có thể bật tùy chọn <strong>Tự động thêm món</strong> bên dưới để hệ thống nhận diện và nhập ngay.
+                      </>
+                    )}
                   </p>
                 </div>
               )}
+
+              {/* Tùy chọn tự động thêm món mới */}
+              <div className="flex items-center justify-between space-x-2 bg-emerald-500/5 p-3 rounded-lg border border-emerald-500/20">
+                <div className="flex items-center space-x-2">
+                  <Checkbox
+                    id="auto-add-menu"
+                    checked={autoAddMenuItems}
+                    onCheckedChange={(c) => handleToggleAutoAdd(Boolean(c))}
+                  />
+                  <Label htmlFor="auto-add-menu" className="text-xs cursor-pointer font-medium text-foreground">
+                    Tự động thêm món chưa có vào Thực đơn (Mã món và giá bán lấy từ file MISA)
+                  </Label>
+                </div>
+                {autoAddMenuItems && parseResult.unmatchedItems.length > 0 && (
+                  <Badge variant="outline" className="text-[10px] border-emerald-500/30 text-emerald-700 dark:text-emerald-300 bg-emerald-500/10">
+                    +{parseResult.unmatchedItems.length} món mới
+                  </Badge>
+                )}
+              </div>
 
               {/* Tùy chọn bỏ qua trùng lặp */}
               <div className="flex items-center space-x-2 bg-muted/40 p-3 rounded-lg border">
@@ -462,9 +643,21 @@ export function MisaImportDialog() {
                                     {ord.items.map((it, itIdx) => (
                                       <span
                                         key={itIdx}
-                                        className={!it.is_matched ? "text-destructive font-semibold" : "text-foreground"}
+                                        className={
+                                          !it.is_matched
+                                            ? autoAddMenuItems
+                                              ? "text-emerald-700 dark:text-emerald-400 font-medium"
+                                              : "text-destructive font-semibold"
+                                            : "text-foreground"
+                                        }
                                       >
-                                        {it.raw_name} (x{it.quantity}){itIdx < ord.items.length - 1 ? ", " : ""}
+                                        {it.raw_name} (x{it.quantity})
+                                        {!it.is_matched && autoAddMenuItems && (
+                                          <span className="text-[9px] font-normal opacity-70 ml-0.5">
+                                            (món mới)
+                                          </span>
+                                        )}
+                                        {itIdx < ord.items.length - 1 ? ", " : ""}
                                       </span>
                                     ))}
                                   </div>
@@ -490,6 +683,11 @@ export function MisaImportDialog() {
                                   {ord.is_duplicate ? (
                                     <Badge variant="outline" className="text-[10px] text-amber-700 bg-amber-500/10 border-amber-500/30">
                                       Đã có
+                                    </Badge>
+                                  ) : ord.has_new_items && autoAddMenuItems ? (
+                                    <Badge variant="outline" className="text-[10px] text-emerald-700 dark:text-emerald-300 bg-emerald-500/10 border-emerald-500/30">
+                                      <Sparkles className="size-3 mr-1 text-emerald-600" />
+                                      Tạo món mới
                                     </Badge>
                                   ) : ord.is_valid ? (
                                     <Badge variant="outline" className="text-[10px] text-emerald-700 bg-emerald-500/10 border-emerald-500/30">

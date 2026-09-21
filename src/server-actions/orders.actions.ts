@@ -57,6 +57,16 @@ export async function cancelOrderAction(orderId: string): Promise<ActionResult<n
   return ok(null);
 }
 
+export interface MisaNewMenuItemInput {
+  code?: string;
+  name: string;
+  unit_price?: number;
+  unit?: string;
+  category?: string;
+  item_group?: string;
+  tax_percent?: number;
+}
+
 export interface MisaOrderToImport {
   invoice_code: string;
   order_date?: string;
@@ -65,9 +75,15 @@ export interface MisaOrderToImport {
   discount: number;
   note?: string;
   items: {
-    menu_item_id: string;
+    menu_item_id?: string;
+    raw_code?: string;
+    raw_name?: string;
     quantity: number;
     unit_price?: number;
+    unit?: string;
+    category?: string;
+    item_group?: string;
+    tax_percent?: number;
   }[];
 }
 
@@ -76,19 +92,210 @@ export interface MisaImportSummary {
   skippedCount: number;
   totalRevenue: number;
   failedCount: number;
+  createdMenuItemsCount: number;
   errors: string[];
+}
+
+/** Tự động tạo các món mới vào danh mục Thực đơn nếu chưa tồn tại */
+export async function autoCreateMissingMenuItemsAction(
+  items: MisaNewMenuItemInput[]
+): Promise<ActionResult<{
+  createdCount: number;
+  items: { id: string; code: string | null; name: string; selling_price: number }[];
+}>> {
+  if (!items || items.length === 0) {
+    return ok({ createdCount: 0, items: [] });
+  }
+
+  const supabase = await createClient();
+
+  // 1. Lấy toàn bộ món hiện tại trong menu_items
+  const { data: existingDbItems, error: fetchErr } = await supabase
+    .from("menu_items")
+    .select("id, code, name, selling_price");
+
+  if (fetchErr) return fail(parseDbError(fetchErr));
+
+  const existingByCode = new Map<string, { id: string; code: string | null; name: string; selling_price: number }>();
+  const existingByName = new Map<string, { id: string; code: string | null; name: string; selling_price: number }>();
+
+  const norm = (s: string) => s.trim().toLowerCase().normalize("NFC").replace(/\s+/g, " ");
+
+  for (const m of existingDbItems ?? []) {
+    if (m.code) existingByCode.set(m.code.trim().toLowerCase(), m);
+    if (m.name) existingByName.set(norm(m.name), m);
+  }
+
+  const allResultItems: { id: string; code: string | null; name: string; selling_price: number }[] = [];
+  const toInsert: {
+    code: string;
+    name: string;
+    selling_price: number;
+    category: string | null;
+    item_group: string | null;
+    tax_percent: number;
+    is_active: boolean;
+    is_combo: boolean;
+    description: string;
+  }[] = [];
+
+  let newCounter = 1;
+
+  for (const it of items) {
+    const rawName = (it.name || "").trim();
+    if (!rawName) continue;
+
+    const byName = existingByName.get(norm(rawName));
+    if (byName) {
+      allResultItems.push(byName);
+      continue;
+    }
+
+    let codeCandidate = (it.code || "").trim();
+    if (codeCandidate) {
+      const byCode = existingByCode.get(codeCandidate.toLowerCase());
+      if (byCode) {
+        // Trùng mã nhưng khác tên -> sinh mã mới tránh vi phạm UNIQUE
+        let suffix = 1;
+        while (existingByCode.has(`${codeCandidate.toLowerCase()}_${suffix}`)) {
+          suffix++;
+        }
+        codeCandidate = `${codeCandidate}_${suffix}`;
+      }
+    } else {
+      while (existingByCode.has(`misa_${newCounter}`)) {
+        newCounter++;
+      }
+      codeCandidate = `MISA-${String(newCounter).padStart(3, "0")}`;
+      newCounter++;
+    }
+
+    const price = Math.max(0, it.unit_price || 0);
+    const tax = it.tax_percent ?? 0;
+    const cat = it.category || "Món ăn";
+    const group = it.item_group || (cat.toLowerCase().includes("uống") ? "Đồ uống" : "Món ăn");
+    const desc = it.unit ? `ĐVT: ${it.unit} · Tự động thêm từ MISA CukCuk` : "Tự động thêm từ MISA CukCuk";
+
+    toInsert.push({
+      code: codeCandidate,
+      name: rawName,
+      selling_price: price,
+      category: cat,
+      item_group: group,
+      tax_percent: tax,
+      is_active: true,
+      is_combo: false,
+      description: desc,
+    });
+
+    existingByCode.set(codeCandidate.toLowerCase(), {
+      id: "",
+      code: codeCandidate,
+      name: rawName,
+      selling_price: price,
+    });
+  }
+
+  let createdCount = 0;
+  if (toInsert.length > 0) {
+    const { data: inserted, error: insErr } = await supabase
+      .from("menu_items")
+      .insert(toInsert)
+      .select("id, code, name, selling_price");
+
+    if (insErr) {
+      return fail(`Lỗi tạo món mới: ${parseDbError(insErr)}`);
+    }
+
+    if (inserted) {
+      createdCount = inserted.length;
+      allResultItems.push(...inserted);
+    }
+
+    // Revalidate menu caches
+    revalidatePath("/menu");
+    revalidatePath("/menu/engineering");
+    revalidatePath("/orders/new");
+    revalidatePath("/dashboard");
+  }
+
+  return ok({ createdCount, items: allResultItems });
 }
 
 /** Nhập hàng loạt đơn hàng từ MISA CukCuk qua RPC create_order (trừ kho theo định lượng BOM). */
 export async function importMisaOrdersAction(
   ordersToImport: MisaOrderToImport[],
-  skipDuplicates = true
+  skipDuplicates = true,
+  autoCreateMenuItems = true,
+  unmatchedItems?: MisaNewMenuItemInput[]
 ): Promise<ActionResult<MisaImportSummary>> {
   if (!ordersToImport || ordersToImport.length === 0) {
     return fail("Không có hóa đơn nào để nhập");
   }
 
   const supabase = await createClient();
+  let createdMenuItemsCount = 0;
+
+  // 0. Nếu autoCreateMenuItems = true: tự động tạo món mới vào Thực đơn trước khi import hóa đơn
+  if (autoCreateMenuItems) {
+    const missingMap = new Map<string, MisaNewMenuItemInput>();
+
+    for (const ord of ordersToImport) {
+      for (const it of ord.items) {
+        if (!it.menu_item_id && it.raw_name) {
+          const key = (it.raw_code || it.raw_name).trim().toLowerCase();
+          if (!missingMap.has(key)) {
+            missingMap.set(key, {
+              code: it.raw_code,
+              name: it.raw_name,
+              unit_price: it.unit_price,
+              unit: it.unit,
+              category: it.category,
+              item_group: it.item_group,
+              tax_percent: it.tax_percent,
+            });
+          }
+        }
+      }
+    }
+
+    if (unmatchedItems && unmatchedItems.length > 0) {
+      for (const u of unmatchedItems) {
+        const key = (u.code || u.name).trim().toLowerCase();
+        if (!missingMap.has(key)) {
+          missingMap.set(key, u);
+        }
+      }
+    }
+
+    if (missingMap.size > 0) {
+      const createRes = await autoCreateMissingMenuItemsAction(Array.from(missingMap.values()));
+      if (!createRes.success) {
+        return fail(createRes.error);
+      }
+      createdMenuItemsCount = createRes.data.createdCount;
+
+      // Tra cứu và gán menu_item_id lại cho các order items
+      const lookupByCode = new Map<string, string>();
+      const lookupByName = new Map<string, string>();
+      const norm = (s: string) => s.trim().toLowerCase().normalize("NFC").replace(/\s+/g, " ");
+
+      for (const it of createRes.data.items) {
+        if (it.code) lookupByCode.set(it.code.toLowerCase(), it.id);
+        if (it.name) lookupByName.set(norm(it.name), it.id);
+      }
+
+      for (const ord of ordersToImport) {
+        for (const it of ord.items) {
+          if (!it.menu_item_id) {
+            const byCodeId = it.raw_code ? lookupByCode.get(it.raw_code.toLowerCase()) : undefined;
+            const byNameId = it.raw_name ? lookupByName.get(norm(it.raw_name)) : undefined;
+            it.menu_item_id = byCodeId || byNameId;
+          }
+        }
+      }
+    }
+  }
 
   // 1. Lấy danh sách mã hóa đơn MISA đã từng import
   const { data: existingRows } = await supabase
@@ -112,6 +319,7 @@ export async function importMisaOrdersAction(
     skippedCount: 0,
     totalRevenue: 0,
     failedCount: 0,
+    createdMenuItemsCount,
     errors: [],
   };
 
@@ -128,13 +336,22 @@ export async function importMisaOrdersAction(
       continue;
     }
 
+    // Kiểm tra xem tất cả items đã có menu_item_id chưa
+    const missingItems = order.items.filter((it) => !it.menu_item_id);
+    if (missingItems.length > 0) {
+      summary.failedCount++;
+      const names = missingItems.map((m) => m.raw_name || m.raw_code || "không tên").join(", ");
+      summary.errors.push(`Hóa đơn "${order.invoice_code}": chưa tìm thấy mã món trong Thực đơn ERP (${names})`);
+      continue;
+    }
+
     const finalNote = order.note?.trim()
       ? `[MISA: ${order.invoice_code}] ${order.note.trim()}`
       : `[MISA: ${order.invoice_code}]`;
 
     const { error } = await supabase.rpc("create_order", {
       p_items: order.items.map((it) => ({
-        menu_item_id: it.menu_item_id,
+        menu_item_id: it.menu_item_id!,
         quantity: it.quantity,
       })),
       p_order_date: order.order_date ?? undefined,

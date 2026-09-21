@@ -27,6 +27,21 @@ export interface MisaOrderItem {
   matched_name?: string;
   matched_by?: "code" | "name";
   missing_recipe?: boolean;
+  unit?: string;
+  category?: string;
+  item_group?: string;
+  tax_percent?: number;
+}
+
+export interface MisaUnmatchedItem {
+  code: string;
+  name: string;
+  occurrences: number;
+  unitPrice: number;
+  unit?: string;
+  category?: string;
+  itemGroup?: string;
+  taxPercent?: number;
 }
 
 export interface MisaParsedOrder {
@@ -44,8 +59,13 @@ export interface MisaParsedOrder {
   items: MisaOrderItem[];
   is_duplicate: boolean;
   is_valid: boolean;
+  has_new_items?: boolean;
   errors: string[];
   warnings: string[];
+}
+
+export interface MisaParseOptions {
+  autoAddMenuItems?: boolean;
 }
 
 export interface MisaParseResult {
@@ -54,7 +74,7 @@ export interface MisaParseResult {
   validInvoices: number;
   duplicateInvoices: number;
   invalidInvoices: number;
-  unmatchedItems: { code: string; name: string; occurrences: number }[];
+  unmatchedItems: MisaUnmatchedItem[];
   totalRevenue: number;
   totalTax: number;
   totalGrossRevenue: number;
@@ -222,6 +242,10 @@ function identifyMisaHeaders(headers: string[]) {
   let colGrossTotal = -1;
   let colMethod = -1;
   let colNote = -1;
+  let colUnit = -1;
+  let colCategory = -1;
+  let colItemGroup = -1;
+  let colVatRate = -1;
 
   headers.forEach((h, idx) => {
     const norm = normalizeHeader(h);
@@ -340,7 +364,16 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colMethod === -1) colMethod = idx;
     }
-    // Tiền thuế GTGT / VAT
+    // Thuế suất GTGT (%)
+    else if (
+      norm.includes("thuesuat") ||
+      norm.includes("vatrate") ||
+      norm === "vat" ||
+      norm === "thue"
+    ) {
+      if (colVatRate === -1) colVatRate = idx;
+    }
+    // Tiền thuế GTGT / VAT (số tiền)
     else if (
       norm.includes("tienthue") ||
       norm.includes("thuegtgt") ||
@@ -356,6 +389,35 @@ function identifyMisaHeaders(headers: string[]) {
       norm.includes("thucthu")
     ) {
       if (colGrossTotal === -1) colGrossTotal = idx;
+    }
+    // Đơn vị tính
+    else if (
+      norm === "dvt" ||
+      norm.includes("donvitinh") ||
+      norm.includes("donvi") ||
+      norm === "unit"
+    ) {
+      if (colUnit === -1) colUnit = idx;
+    }
+    // Nhóm thực đơn
+    else if (
+      norm.includes("nhomthucdon") ||
+      norm.includes("nhommon") ||
+      norm.includes("nhomhang") ||
+      norm.includes("category") ||
+      norm === "nhom"
+    ) {
+      if (colCategory === -1) colCategory = idx;
+    }
+    // Loại mặt hàng
+    else if (
+      norm.includes("loaimathang") ||
+      norm.includes("loaihang") ||
+      norm.includes("loaimon") ||
+      norm.includes("loaihh") ||
+      norm.includes("itemtype")
+    ) {
+      if (colItemGroup === -1) colItemGroup = idx;
     }
     // Ghi chú
     else if (norm.includes("ghichu") || norm.includes("diengiai") || norm === "note") {
@@ -377,6 +439,10 @@ function identifyMisaHeaders(headers: string[]) {
     colGrossTotal,
     colMethod,
     colNote,
+    colUnit,
+    colCategory,
+    colItemGroup,
+    colVatRate,
   };
 }
 
@@ -384,8 +450,10 @@ function identifyMisaHeaders(headers: string[]) {
 export function parseMisaSalesExcel(
   buffer: ArrayBuffer,
   menuItems: PosMenuItem[],
-  existingMisaOrderCodes: string[] = []
+  existingMisaOrderCodes: string[] = [],
+  options: MisaParseOptions = { autoAddMenuItems: true }
 ): MisaParseResult {
+  const autoAddMenuItems = options.autoAddMenuItems !== false;
   const workbook = XLSX.read(buffer, { type: "array" });
   const sheetName = workbook.SheetNames[0];
   if (!sheetName) {
@@ -458,7 +526,7 @@ export function parseMisaSalesExcel(
 
   let autoInvoiceCounter = 1;
   let currentInvoiceCode = "";
-  const unmatchedTracker = new Map<string, { code: string; name: string; occurrences: number }>();
+  const unmatchedTracker = new Map<string, MisaUnmatchedItem>();
 
   for (let i = headerRowIndex + 1; i < rows.length; i++) {
     const row = rows[i] as unknown[];
@@ -479,11 +547,59 @@ export function parseMisaSalesExcel(
     const methodStr = cols.colMethod !== -1 ? cellToString(row[cols.colMethod]) : "";
     const note = cols.colNote !== -1 ? cellToString(row[cols.colNote]) : "";
 
+    const unitVal = cols.colUnit !== -1 ? cellToString(row[cols.colUnit]) : "";
+    const categoryVal = cols.colCategory !== -1 ? cellToString(row[cols.colCategory]) : "";
+    const itemGroupVal = cols.colItemGroup !== -1 ? cellToString(row[cols.colItemGroup]) : "";
+    const vatRateStr = cols.colVatRate !== -1 ? cellToString(row[cols.colVatRate]) : "";
+    let vatRateVal = 0;
+    if (vatRateStr.includes("8")) vatRateVal = 8;
+    else if (vatRateStr.includes("10")) vatRateVal = 10;
+    else if (vatRateStr.includes("5")) vatRateVal = 5;
+
+    // Suy luận Category & ItemGroup nếu chưa có
+    let finalCategory = categoryVal.trim();
+    let finalItemGroup = itemGroupVal.trim();
+    const lowerName = itemName.toLowerCase();
+
+    if (!finalCategory) {
+      if (
+        lowerName.includes("uống") ||
+        lowerName.includes("bia") ||
+        lowerName.includes("rượu") ||
+        lowerName.includes("nước") ||
+        lowerName.includes("trà") ||
+        lowerName.includes("sake") ||
+        lowerName.includes("dassai") ||
+        lowerName.includes("sapporo") ||
+        lowerName.includes("tiger")
+      ) {
+        finalCategory = "Đồ uống";
+        finalItemGroup = "Đồ uống";
+      } else if (lowerName.includes("omakase")) {
+        finalCategory = "Omakase";
+        finalItemGroup = "Món ăn";
+      } else if (
+        lowerName.includes("sushi") ||
+        lowerName.includes("sashimi") ||
+        lowerName.includes("gunkan") ||
+        lowerName.includes("maki") ||
+        lowerName.includes("nigiri")
+      ) {
+        finalCategory = "Sushi & Sashimi";
+        finalItemGroup = "Món ăn";
+      } else {
+        finalCategory = "Món ăn";
+        finalItemGroup = "Món ăn";
+      }
+    }
+    if (!finalItemGroup) {
+      finalItemGroup = finalCategory.toLowerCase().includes("uống") ? "Đồ uống" : "Món ăn";
+    }
+
     // Bỏ qua dòng trống hoặc dòng tổng cộng của MISA
     if (itemName.toLowerCase().includes("tổng cộng") || itemName.toLowerCase().includes("cộng")) continue;
 
     // TRƯỜNG HỢP A: Dòng tổng quan của Hóa đơn MISA CukCuk
-    // (Có số hóa đơn nhưng chưa có mã món và tên món)
     if (invCodeRaw && !itemCode && !itemName) {
       currentInvoiceCode = invCodeRaw;
       const invoiceTotal = lineTotal;
@@ -545,11 +661,17 @@ export function parseMisaSalesExcel(
       const existing = unmatchedTracker.get(key);
       if (existing) {
         existing.occurrences += 1;
+        if (unitPrice > 0 && existing.unitPrice <= 0) existing.unitPrice = unitPrice;
       } else {
         unmatchedTracker.set(key, {
           code: itemCode,
           name: itemName,
           occurrences: 1,
+          unitPrice: unitPrice > 0 ? unitPrice : 0,
+          unit: unitVal || "Phần",
+          category: finalCategory,
+          itemGroup: finalItemGroup,
+          taxPercent: vatRateVal,
         });
       }
     }
@@ -565,6 +687,10 @@ export function parseMisaSalesExcel(
       matched_name: matchedItem?.name,
       matched_by: matchedBy,
       missing_recipe: matchedItem?.missing_recipe,
+      unit: unitVal || "Phần",
+      category: finalCategory,
+      item_group: finalItemGroup,
+      tax_percent: vatRateVal,
     };
 
     if (!groupsMap.has(invoiceCode)) {
@@ -618,9 +744,14 @@ export function parseMisaSalesExcel(
 
     // Kiểm tra món chưa khớp
     const unmatched = group.items.filter((it) => !it.is_matched);
-    if (unmatched.length > 0) {
+    const hasNewItems = unmatched.length > 0;
+    if (hasNewItems) {
       const names = unmatched.map((u) => u.raw_name || u.raw_code).join(", ");
-      errors.push(`Có ${unmatched.length} món chưa có trong Thực đơn ERP: ${names}`);
+      if (autoAddMenuItems) {
+        warnings.push(`Có ${unmatched.length} món mới sẽ tự động thêm vào Thực đơn ERP: ${names}`);
+      } else {
+        errors.push(`Có ${unmatched.length} món chưa có trong Thực đơn ERP: ${names}`);
+      }
     }
 
     // Cảnh báo món chưa có định lượng BOM
@@ -653,6 +784,7 @@ export function parseMisaSalesExcel(
       items: group.items,
       is_duplicate: isDuplicate,
       is_valid: isValid,
+      has_new_items: hasNewItems,
       errors: errors,
       warnings: warnings,
     });
