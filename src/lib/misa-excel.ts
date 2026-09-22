@@ -232,6 +232,7 @@ function identifyMisaHeaders(headers: string[]) {
   let colInvoice = -1;
   let colDate = -1;
   let colTable = -1;
+  let colArea = -1;
   let colCode = -1;
   let colName = -1;
   let colQty = -1;
@@ -319,18 +320,7 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colPrice === -1) colPrice = idx;
     }
-    // Thành tiền / Doanh thu
-    else if (
-      norm.includes("thanhtien") ||
-      norm.includes("tienhang") ||
-      norm.includes("tongtien") ||
-      norm.includes("doanhthu") ||
-      norm === "amount" ||
-      norm === "total"
-    ) {
-      if (colTotal === -1) colTotal = idx;
-    }
-    // Giảm giá / Chiết khấu
+    // Giảm giá / Chiết khấu / Khuyến mại
     else if (
       norm.includes("giamgia") ||
       norm.includes("chietkhau") ||
@@ -342,16 +332,45 @@ function identifyMisaHeaders(headers: string[]) {
     ) {
       if (colDiscount === -1) colDiscount = idx;
     }
-    // Bàn / Phòng (ưu tiên khớp chính xác để tránh nhầm với slban, giaban)
+    // Tiền thuế GTGT / VAT (số tiền)
     else if (
-      norm === "ban" ||
-      norm === "soban" ||
-      norm === "phong" ||
-      norm === "phongban" ||
-      norm.includes("soban") ||
-      norm.includes("khuvuc") ||
-      norm === "table"
+      norm.includes("tienthue") ||
+      norm.includes("thuegtgt") ||
+      norm.includes("vat")
     ) {
+      if (colVat === -1) colVat = idx;
+    }
+    // Tổng thanh toán (thực thu sau thuế & giảm giá)
+    else if (
+      norm === "tong" ||
+      norm === "tongcong" ||
+      norm === "doanhthutong" ||
+      norm.includes("tongthanhtoan") ||
+      norm.includes("thucthu")
+    ) {
+      if (colGrossTotal === -1) colGrossTotal = idx;
+    }
+    // Thành tiền / Tiền hàng / Doanh thu
+    else if (
+      norm.includes("tienhang") ||
+      norm.includes("thanhtien") ||
+      norm.includes("tongtien") ||
+      norm.includes("doanhthu") ||
+      norm === "amount" ||
+      norm === "total"
+    ) {
+      if (colTotal === -1) colTotal = idx;
+    }
+    // Bàn (ưu tiên khớp chính xác tên bàn)
+    else if (norm === "ban" || norm === "soban" || norm === "table") {
+      colTable = idx;
+    }
+    // Khu vực
+    else if (norm.includes("khuvuc") || norm === "area") {
+      if (colArea === -1) colArea = idx;
+    }
+    // Phòng / Bàn fallback nếu chưa có bàn
+    else if (norm === "phong" || norm === "phongban") {
       if (colTable === -1) colTable = idx;
     }
     // Phương thức thanh toán
@@ -367,28 +386,9 @@ function identifyMisaHeaders(headers: string[]) {
     // Thuế suất GTGT (%)
     else if (
       norm.includes("thuesuat") ||
-      norm.includes("vatrate") ||
-      norm === "vat" ||
-      norm === "thue"
+      norm.includes("vatrate")
     ) {
       if (colVatRate === -1) colVatRate = idx;
-    }
-    // Tiền thuế GTGT / VAT (số tiền)
-    else if (
-      norm.includes("tienthue") ||
-      norm.includes("thuegtgt") ||
-      norm.includes("vat")
-    ) {
-      if (colVat === -1) colVat = idx;
-    }
-    // Tổng thanh toán (thực thu)
-    else if (
-      norm === "tong" ||
-      norm === "tongcong" ||
-      norm.includes("tongthanhtoan") ||
-      norm.includes("thucthu")
-    ) {
-      if (colGrossTotal === -1) colGrossTotal = idx;
     }
     // Đơn vị tính
     else if (
@@ -429,6 +429,7 @@ function identifyMisaHeaders(headers: string[]) {
     colInvoice,
     colDate,
     colTable,
+    colArea,
     colCode,
     colName,
     colQty,
@@ -492,6 +493,35 @@ export function parseMisaSalesExcel(
     headers = (rows[0] as unknown[]).map(cellToString);
   }
 
+  // Kiểm tra nếu có dòng tiêu đề phụ (sub-headers) ngay sau dòng tiêu đề chính (VD: file Chi tiết Doanh thu MISA)
+  if (headerRowIndex + 1 < rows.length) {
+    const nextRow = (rows[headerRowIndex + 1] as unknown[] || []).map(cellToString);
+    const nextJoined = nextRow.map(normalizeHeader).join(" ");
+    const isSubHeader =
+      nextJoined.includes("tienhang") ||
+      nextJoined.includes("tienthue") ||
+      nextJoined.includes("khuyenmai") ||
+      nextJoined.includes("chietkhau") ||
+      nextJoined.includes("thucthu") ||
+      nextJoined.includes("tong");
+
+    if (isSubHeader) {
+      headerRowIndex++;
+      const maxLen = Math.max(headers.length, nextRow.length);
+      const merged: string[] = [];
+      for (let j = 0; j < maxLen; j++) {
+        const h1 = headers[j] || "";
+        const h2 = nextRow[j] || "";
+        if (h1 && h2 && normalizeHeader(h1) !== normalizeHeader(h2)) {
+          merged.push(`${h1} ${h2}`);
+        } else {
+          merged.push(h1 || h2);
+        }
+      }
+      headers = merged;
+    }
+  }
+
   const cols = identifyMisaHeaders(headers);
 
   // Chuẩn bị map tra cứu menu items
@@ -515,8 +545,11 @@ export function parseMisaSalesExcel(
     order_date: string;
     display_date: string;
     table_number: string;
+    area: string;
+    time_str: string;
     payment_method_str: string;
-    discount: number;
+    summary_discount: number;
+    items_discount: number;
     invoice_total: number;
     tax_amount: number;
     gross_total: number;
@@ -544,6 +577,7 @@ export function parseMisaSalesExcel(
     const timeVal = cellToString(row[1]); // Giờ vào - ra (VD: "18:10 - 20:07")
     const { iso: orderDateIso, display: displayDate } = parseExcelDateTime(dateVal, timeVal);
     const tableNumber = cols.colTable !== -1 ? cellToString(row[cols.colTable]) : "";
+    const areaVal = cols.colArea !== -1 ? cellToString(row[cols.colArea]) : "";
     const methodStr = cols.colMethod !== -1 ? cellToString(row[cols.colMethod]) : "";
     const note = cols.colNote !== -1 ? cellToString(row[cols.colNote]) : "";
 
@@ -605,6 +639,7 @@ export function parseMisaSalesExcel(
       const invoiceTotal = lineTotal;
       const vatVal = cols.colVat !== -1 ? cellToNumber(row[cols.colVat], 0) : 0;
       const grossVal = cols.colGrossTotal !== -1 ? cellToNumber(row[cols.colGrossTotal], 0) : 0;
+      const sumDisc = cols.colDiscount !== -1 ? cellToNumber(row[cols.colDiscount], 0) : 0;
 
       if (!groupsMap.has(invCodeRaw)) {
         groupsMap.set(invCodeRaw, {
@@ -612,12 +647,15 @@ export function parseMisaSalesExcel(
           order_date: orderDateIso,
           display_date: displayDate,
           table_number: tableNumber,
+          area: areaVal,
+          time_str: timeVal,
           payment_method_str: methodStr,
-          discount: lineDiscount,
+          summary_discount: sumDisc,
+          items_discount: 0,
           invoice_total: invoiceTotal > 0 ? invoiceTotal : 0,
           tax_amount: vatVal,
           gross_total: grossVal,
-          note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
+          note: note,
           items: [],
         });
       } else {
@@ -627,6 +665,9 @@ export function parseMisaSalesExcel(
         }
         if (vatVal > 0) group.tax_amount = vatVal;
         if (grossVal > 0) group.gross_total = grossVal;
+        if (sumDisc > 0) group.summary_discount = sumDisc;
+        if (!group.table_number && tableNumber) group.table_number = tableNumber;
+        if (!group.area && areaVal) group.area = areaVal;
       }
       continue;
     }
@@ -699,19 +740,23 @@ export function parseMisaSalesExcel(
         order_date: orderDateIso,
         display_date: displayDate,
         table_number: tableNumber,
+        area: areaVal,
+        time_str: timeVal,
         payment_method_str: methodStr,
-        discount: lineDiscount,
+        summary_discount: 0,
+        items_discount: lineDiscount,
         invoice_total: 0,
         tax_amount: 0,
         gross_total: 0,
-        note: note || (tableNumber ? `Bàn: ${tableNumber}${timeVal ? ` · ${timeVal}` : ""}` : ""),
+        note: note,
         items: [orderItem],
       });
     } else {
       const group = groupsMap.get(invoiceCode)!;
       group.items.push(orderItem);
-      group.discount += lineDiscount;
+      group.items_discount += lineDiscount;
       if (!group.table_number && tableNumber) group.table_number = tableNumber;
+      if (!group.area && areaVal) group.area = areaVal;
       if (!group.note && note) group.note = note;
     }
   }
@@ -726,10 +771,9 @@ export function parseMisaSalesExcel(
     if (group.items.length === 0) continue;
 
     const subtotal = group.items.reduce((sum, it) => sum + it.line_total, 0);
-    const discount = Math.min(group.discount, subtotal);
-    const totalAmount = group.invoice_total && group.invoice_total > 0
-      ? group.invoice_total
-      : Math.max(0, subtotal - discount);
+    const rawDiscount = group.summary_discount > 0 ? group.summary_discount : group.items_discount;
+    const discount = Math.min(rawDiscount, subtotal);
+    const totalAmount = Math.max(0, subtotal - discount);
     const paymentMethod = normalizePaymentMethod(group.payment_method_str);
 
     const isDuplicate = existingCodesSet.has(group.invoice_code.toLowerCase());
@@ -764,9 +808,25 @@ export function parseMisaSalesExcel(
     const isValid = errors.length === 0;
     const vatAmount = group.tax_amount || 0;
     const grossTotal = group.gross_total > 0 ? group.gross_total : totalAmount + vatAmount;
+
+    let tableDesc = "";
+    if (group.table_number) {
+      tableDesc = group.area && group.area !== group.table_number
+        ? `Bàn: ${group.table_number} (${group.area})`
+        : `Bàn: ${group.table_number}`;
+    } else if (group.area) {
+      tableDesc = `Khu vực: ${group.area}`;
+    }
+
     let finalNote = group.note;
+    if (!finalNote && tableDesc) {
+      finalNote = `${tableDesc}${group.time_str ? ` · ${group.time_str}` : ""}`;
+    } else if (tableDesc && !finalNote.includes(group.table_number)) {
+      finalNote = `${tableDesc} · ${finalNote}`;
+    }
+
     if (vatAmount > 0 && !finalNote.includes("VAT:")) {
-      finalNote = `${finalNote} · VAT: ${Math.round(vatAmount)} · Thực thu: ${Math.round(grossTotal)}`;
+      finalNote = `${finalNote ? `${finalNote} · ` : ""}VAT: ${Math.round(vatAmount)} · Thực thu: ${Math.round(grossTotal)}`;
     }
 
     orders.push({
