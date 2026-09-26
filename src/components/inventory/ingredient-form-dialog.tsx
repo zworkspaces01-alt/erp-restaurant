@@ -25,7 +25,10 @@ import type { z } from "zod";
 import { ingredientSchema, type IngredientInput, type InventoryStatusRow } from "@/types/restaurant";
 import { createIngredient, importIngredients, updateIngredient } from "@/server-actions/inventory.actions";
 import { compressImageForUpload } from "@/lib/client-image-compression";
-import { extractIngredientsFromImageAction } from "@/server-actions/ingredient-ocr.actions";
+import {
+  extractIngredientsFromImageAction,
+  extractMultipleIngredientsFromImagesAction,
+} from "@/server-actions/ingredient-ocr.actions";
 import type { IngredientOcrResult, IngredientParsedItem } from "@/lib/ai/ingredient-ocr";
 import { useAction } from "@/hooks/use-action";
 import { FormError, FormServerError, SubmitButton } from "@/components/shared";
@@ -143,72 +146,126 @@ export function IngredientFormDialog({
   const [batchItems, setBatchItems] = useState<IngredientParsedItem[]>([]);
   const [isSubmittingBatch, setIsSubmittingBatch] = useState(false);
 
-  const handleScanLabel = async (file: File) => {
-    if (!file.type.startsWith("image/")) {
+  const handleScanLabel = async (filesInput: FileList | File[] | File) => {
+    const rawFiles = filesInput instanceof File ? [filesInput] : Array.from(filesInput);
+    const fileList = rawFiles.filter((f) => f.type.startsWith("image/"));
+    if (fileList.length === 0) {
       toast.error("Vui lòng chọn file hình ảnh (PNG, JPG, WEBP).");
       return;
     }
 
     setIsScanningLabel(true);
     try {
-      const readyFile = await compressImageForUpload(file);
-      const formData = new FormData();
-      formData.append("file", readyFile);
+      if (fileList.length === 1) {
+        const readyFile = await compressImageForUpload(fileList[0]);
+        const formData = new FormData();
+        formData.append("file", readyFile);
 
-      const res = await extractIngredientsFromImageAction(formData);
-      if (!res.success) {
-        toast.error(res.error);
-        return;
-      }
+        const res = await extractIngredientsFromImageAction(formData);
+        if (!res.success) {
+          toast.error(res.error);
+          return;
+        }
 
-      // Cập nhật danh mục NCC vào state chọn lựa nếu nhận diện được nhà cung cấp mới
-      if (res.data.supplier_id && (res.data.matched_supplier_name || res.data.supplier?.name)) {
-        const newSupId = res.data.supplier_id;
-        const newSupName = res.data.matched_supplier_name || res.data.supplier?.name || "Nhà cung cấp mới";
-        setSupplierOptions((prev) => {
-          if (!prev.some((s) => s.id === newSupId)) {
-            return [{ id: newSupId, name: newSupName }, ...prev];
-          }
-          return prev;
-        });
-      }
+        // Cập nhật danh mục NCC vào state chọn lựa nếu nhận diện được nhà cung cấp mới
+        if (res.data.supplier_id && (res.data.matched_supplier_name || res.data.supplier?.name)) {
+          const newSupId = res.data.supplier_id;
+          const newSupName = res.data.matched_supplier_name || res.data.supplier?.name || "Nhà cung cấp mới";
+          setSupplierOptions((prev) => {
+            if (!prev.some((s) => s.id === newSupId)) {
+              return [{ id: newSupId, name: newSupName }, ...prev];
+            }
+            return prev;
+          });
+        }
 
-      const items = res.data.items || [];
-      if (items.length === 0) {
-        toast.warning("AI không tìm thấy thông tin nguyên liệu trong ảnh.");
-        return;
-      }
+        const items = res.data.items || [];
+        if (items.length === 0) {
+          toast.warning("AI không tìm thấy thông tin nguyên liệu trong ảnh.");
+          return;
+        }
 
-      if (items.length === 1) {
-        // Đúng 1 nguyên liệu: Điền thẳng vào form thêm nguyên liệu đơn
-        const item = items[0];
-        setValue("name", item.name);
-        if (item.code) setValue("code", item.code);
-        if (item.category) setValue("category", item.category);
-        if (item.base_unit) setValue("base_unit", item.base_unit);
-        if (item.import_unit) setValue("import_unit", item.import_unit);
-        if (item.conversion_factor) setValue("conversion_factor", item.conversion_factor);
-        if (item.default_price) setValue("default_price", item.default_price);
-        if (item.min_alert_stock) setValue("min_alert_stock", item.min_alert_stock);
-        if (item.note) setValue("note", item.note);
-        if (res.data.supplier_id) setValue("default_supplier_id", res.data.supplier_id);
-        toast.success(`Đã tự động điền nguyên liệu: ${item.name}!`);
+        if (items.length === 1) {
+          // Đúng 1 nguyên liệu: Điền thẳng vào form thêm nguyên liệu đơn
+          const item = items[0];
+          setValue("name", item.name);
+          if (item.code) setValue("code", item.code);
+          if (item.category) setValue("category", item.category);
+          if (item.base_unit) setValue("base_unit", item.base_unit);
+          if (item.import_unit) setValue("import_unit", item.import_unit);
+          if (item.conversion_factor) setValue("conversion_factor", item.conversion_factor);
+          if (item.default_price) setValue("default_price", item.default_price);
+          if (item.min_alert_stock) setValue("min_alert_stock", item.min_alert_stock);
+          if (item.note) setValue("note", item.note);
+          if (res.data.supplier_id) setValue("default_supplier_id", res.data.supplier_id);
+          toast.success(`Đã tự động điền nguyên liệu: ${item.name}!`);
+        } else {
+          setBatchResult(res.data);
+          setBatchItems(items);
+          toast.success(`AI đã quét trọn vẹn ${items.length} nguyên liệu từ ảnh!`);
+        }
+
+        if (res.data.duplicates_removed && res.data.duplicates_removed.length > 0) {
+          toast.warning(
+            `Đã phát hiện và tự động loại bỏ ${res.data.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau): ${res.data.duplicates_removed.join(", ")}`,
+            { duration: 6000 }
+          );
+        }
+        if (res.data.excluded_items && res.data.excluded_items.length > 0) {
+          toast.info(
+            `AI đã nhận diện và tự động loại bỏ ${res.data.excluded_items.length} mặt hàng bị gạch tay trên phiếu: ${res.data.excluded_items.join(", ")}`,
+            { duration: 7000 }
+          );
+        }
       } else {
-        setBatchResult(res.data);
-        setBatchItems(items);
-        toast.success(`AI đã quét trọn vẹn ${items.length} nguyên liệu từ ảnh!`);
-      }
+        // Quét nhiều ảnh cùng lúc từ nhiều nhà cung cấp
+        toast.info(`Đang nén và nhận diện đồng thời ${fileList.length} ảnh nguyên liệu...`);
+        const compressedList = await Promise.all(fileList.map((f) => compressImageForUpload(f)));
+        const formData = new FormData();
+        compressedList.forEach((f) => formData.append("files", f));
 
-      if (res.data.duplicates_removed && res.data.duplicates_removed.length > 0) {
-        toast.warning(
-          `Đã phát hiện và tự động loại bỏ ${res.data.duplicates_removed.length} nguyên liệu trùng lặp (nhập sau): ${res.data.duplicates_removed.join(", ")}`,
-          { duration: 6000 }
-        );
-      }
-      if (res.data.excluded_items && res.data.excluded_items.length > 0) {
-        toast.info(
-          `AI đã nhận diện và tự động loại bỏ ${res.data.excluded_items.length} mặt hàng bị gạch tay trên phiếu: ${res.data.excluded_items.join(", ")}`,
-          { duration: 7000 }
+        const res = await extractMultipleIngredientsFromImagesAction(formData);
+        if (!res.success) {
+          toast.error(res.error);
+          return;
+        }
+
+        const batch = res.data;
+        // Cập nhật danh mục NCC vào state chọn lựa nếu có NCC mới được tạo
+        const discoveredSuppliers: SupplierOption[] = [];
+        for (const r of batch.results) {
+          if (r.supplierId && r.supplierName) {
+            discoveredSuppliers.push({ id: r.supplierId, name: r.supplierName });
+          }
+        }
+        if (discoveredSuppliers.length > 0) {
+          setSupplierOptions((prev) => {
+            const map = new Map(prev.map((s) => [s.id, s]));
+            discoveredSuppliers.forEach((s) => map.set(s.id, s));
+            return Array.from(map.values());
+          });
+        }
+
+        if (batch.allItems.length === 0) {
+          toast.warning("AI không tìm thấy nguyên liệu nào trong các ảnh đã tải lên.");
+          return;
+        }
+
+        const compositeResult: IngredientOcrResult = {
+          supplier: null,
+          supplier_id: null,
+          matched_supplier_name: `${batch.uniqueSuppliersCount} Nhà Cung Cấp (${batch.totalSuccess}/${batch.totalImages} ảnh)`,
+          model_used: "Gemini 2.5 Flash Batch",
+          is_mock: false,
+          items: batch.allItems,
+          duplicates_removed: [],
+          excluded_items: [],
+        };
+
+        setBatchResult(compositeResult);
+        setBatchItems(batch.allItems);
+        toast.success(
+          `AI đã quét thành công ${batch.allItems.length} nguyên liệu từ ${batch.totalSuccess}/${batch.totalImages} ảnh (${batch.uniqueSuppliersCount} Nhà cung cấp)!`
         );
       }
     } catch {
@@ -298,7 +355,8 @@ export function IngredientFormDialog({
         note: it.note || null,
       }));
 
-      const supplierInfo = (batchResult?.supplier || batchResult?.matched_supplier_name) ? {
+      const isMultiBatch = batchResult?.matched_supplier_name?.includes("Nhà Cung Cấp (");
+      const supplierInfo = (batchResult?.supplier || (batchResult?.matched_supplier_name && !isMultiBatch)) ? {
         id: batchResult.supplier_id || null,
         name: batchResult.matched_supplier_name || batchResult.supplier?.name || null,
         tax_code: batchResult.supplier?.tax_code || null,
@@ -512,6 +570,7 @@ export function IngredientFormDialog({
                     <th className="p-2 min-w-[150px]">Tên nguyên liệu</th>
                     <th className="p-2 min-w-[110px]">Mã gợi ý</th>
                     <th className="p-2 min-w-[120px]">Danh mục</th>
+                    <th className="p-2 min-w-[150px]">Nhà cung cấp</th>
                     <th className="p-2 min-w-[70px]">ĐV cơ sở</th>
                     <th className="p-2 min-w-[70px]">ĐV nhập</th>
                     <th className="p-2 text-center min-w-[70px]" title="1 Đơn vị nhập = ? Đơn vị cơ sở">Hệ số</th>
@@ -546,6 +605,24 @@ export function IngredientFormDialog({
                           className="h-7 text-xs"
                           placeholder="Danh mục..."
                         />
+                      </td>
+                      <td className="p-1.5">
+                        <select
+                          value={it.default_supplier_id || ""}
+                          onChange={(e) =>
+                            handleUpdateBatchItem(idx, {
+                              default_supplier_id: e.target.value || null,
+                            })
+                          }
+                          className="h-7 w-full text-xs rounded-md border border-input bg-transparent px-2 py-0.5 text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                        >
+                          <option value="" className="bg-background text-foreground">-- Tự do / Chưa gán --</option>
+                          {supplierOptions.map((s) => (
+                            <option key={s.id} value={s.id} className="bg-background text-foreground">
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
                       </td>
                       <td className="p-1.5">
                         <Input
@@ -672,18 +749,20 @@ export function IngredientFormDialog({
                     ) : (
                       <Camera className="size-3.5" />
                     )}
-                    <span>{isScanningLabel ? "Đang quét toàn bộ..." : "Quét ảnh / bảng giá AI"}</span>
+                    <span>{isScanningLabel ? "Đang quét AI..." : "Quét ảnh / bảng giá AI (1 hoặc nhiều)"}</span>
                     <Sparkles className="size-3 text-amber-500" />
                   </label>
                   <input
                     id="scan_single_label"
                     type="file"
                     accept="image/*"
+                    multiple
                     disabled={isScanningLabel}
                     className="sr-only"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) void handleScanLabel(f);
+                      const files = e.target.files;
+                      if (files && files.length > 0) void handleScanLabel(files);
+                      e.target.value = "";
                     }}
                   />
                 </div>
