@@ -2,8 +2,10 @@
 
 import { useState, useRef } from "react";
 import {
+  Building2,
   FileText,
   KeyRound,
+  Layers,
   Plus,
   ScanLine,
   Sparkles,
@@ -20,7 +22,11 @@ import {
 } from "@/lib/queries/purchases.queries";
 import { SAMPLE_DEMO_INVOICES } from "@/lib/ai/sample-invoices";
 import { compressImageForUpload } from "@/lib/client-image-compression";
-import { extractAndMatchInvoice } from "@/server-actions/invoice-ocr.actions";
+import {
+  extractAndMatchInvoice,
+  extractAndMatchMultipleInvoices,
+  type BatchInvoiceItemResult,
+} from "@/server-actions/invoice-ocr.actions";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -34,6 +40,7 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { InvoiceReviewSplitView } from "./invoice-review-split-view";
+import { BatchInvoiceReviewView } from "./batch-invoice-review-view";
 
 interface InvoiceOcrDialogProps {
   suppliers: SupplierPickRow[];
@@ -54,6 +61,7 @@ export function InvoiceOcrDialog({
 
   // Quản lý danh sách nhiều ảnh hóa đơn được chọn
   const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [processMode, setProcessMode] = useState<"batch" | "single_multipage">("batch");
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [reviewResult, setReviewResult] = useState<{
@@ -62,11 +70,15 @@ export function InvoiceOcrDialog({
     isMock: boolean;
   } | null>(null);
 
+  const [batchReviewResult, setBatchReviewResult] = useState<BatchInvoiceItemResult[] | null>(null);
+
   const resetState = () => {
     setIsScanning(false);
     setScanProgressText("");
     setSelectedFiles([]);
     setReviewResult(null);
+    setBatchReviewResult(null);
+    setProcessMode("batch");
   };
 
   const handleAddFiles = (newFiles: FileList | File[]) => {
@@ -101,16 +113,47 @@ export function InvoiceOcrDialog({
     }
 
     setIsScanning(true);
-    setScanProgressText(
-      selectedFiles.length > 1
-        ? `Đang nén và chuẩn bị ${selectedFiles.length} trang ảnh...`
-        : "Đang nén và chuẩn bị ảnh..."
-    );
 
     try {
-      const formData = new FormData();
+      // 1. Chế độ quét nhiều hóa đơn từ nhiều NCC khác nhau (Batch Multi-Supplier)
+      if (selectedFiles.length > 1 && processMode === "batch") {
+        setScanProgressText(`Đang nén ${selectedFiles.length} ảnh hóa đơn...`);
+        const formData = new FormData();
 
-      // Nén lần lượt từng ảnh client-side
+        for (let i = 0; i < selectedFiles.length; i++) {
+          setScanProgressText(`Đang tối ưu ảnh ${i + 1}/${selectedFiles.length}...`);
+          const compressed = await compressImageForUpload(selectedFiles[i]);
+          formData.append("files", compressed);
+        }
+
+        if (customApiKey.trim()) {
+          formData.append("api_key", customApiKey.trim());
+        }
+
+        setScanProgressText(`AI đang phân tích độc lập ${selectedFiles.length} hóa đơn từ các NCC...`);
+        const res = await extractAndMatchMultipleInvoices(formData);
+
+        if (!res.success) {
+          toast.error(res.error);
+          setIsScanning(false);
+          return;
+        }
+
+        setBatchReviewResult(res.data.invoices);
+        toast.success(
+          `Đã quét xong ${res.data.totalSuccess}/${res.data.invoices.length} hóa đơn! Vui lòng kiểm tra và duyệt.`
+        );
+        return;
+      }
+
+      // 2. Chế độ 1 hóa đơn (hoặc hóa đơn dài nhiều trang ghép lại)
+      setScanProgressText(
+        selectedFiles.length > 1
+          ? `Đang nén và chuẩn bị ${selectedFiles.length} trang ảnh...`
+          : "Đang nén và chuẩn bị ảnh..."
+      );
+
+      const formData = new FormData();
       for (let i = 0; i < selectedFiles.length; i++) {
         if (selectedFiles.length > 1) {
           setScanProgressText(`Đang tối ưu trang ${i + 1}/${selectedFiles.length}...`);
@@ -201,6 +244,34 @@ export function InvoiceOcrDialog({
     }
   };
 
+  const handleSelectBatchDemo = async () => {
+    setIsScanning(true);
+    setScanProgressText("Đang nạp 3 hóa đơn mẫu từ 3 Nhà Cung Cấp khác nhau...");
+
+    try {
+      const formData = new FormData();
+      formData.append("demo_id", "batch-multi-suppliers");
+
+      const res = await extractAndMatchMultipleInvoices(formData);
+
+      if (!res.success) {
+        toast.error(res.error);
+        setIsScanning(false);
+        return;
+      }
+
+      setBatchReviewResult(res.data.invoices);
+      toast.success(
+        `Đã nạp thành công ${res.data.invoices.length} hóa đơn mẫu từ 3 Nhà Cung Cấp!`
+      );
+    } catch {
+      toast.error("Lỗi khi nạp mẫu hóa đơn hàng loạt.");
+    } finally {
+      setIsScanning(false);
+      setScanProgressText("");
+    }
+  };
+
   return (
     <Dialog
       open={open}
@@ -224,12 +295,22 @@ export function InvoiceOcrDialog({
 
       <DialogContent
         className={
-          reviewResult
-            ? "sm:max-w-[98vw] 2xl:max-w-[1600px] xl:max-w-[1500px] w-full max-h-[96vh] p-0 overflow-hidden shadow-2xl rounded-2xl border"
+          batchReviewResult || reviewResult
+            ? "sm:max-w-[98vw] 2xl:max-w-[1650px] xl:max-w-[1550px] w-full max-h-[96vh] p-0 overflow-hidden shadow-2xl rounded-2xl border"
             : "sm:max-w-xl"
         }
       >
-        {reviewResult ? (
+        {batchReviewResult ? (
+          <BatchInvoiceReviewView
+            invoices={batchReviewResult}
+            suppliers={suppliers}
+            ingredients={ingredients}
+            onClose={() => {
+              setOpen(false);
+              resetState();
+            }}
+          />
+        ) : reviewResult ? (
           <InvoiceReviewSplitView
             reviewData={reviewResult.reviewData}
             modelUsed={reviewResult.modelUsed}
@@ -249,8 +330,7 @@ export function InvoiceOcrDialog({
                 Quét Hóa Đơn Nhập Hàng Tự Động (AI OCR)
               </DialogTitle>
               <DialogDescription>
-                Hỗ trợ hóa đơn 1 hoặc nhiều ảnh (hóa đơn dài nhiều trang). Trí tuệ nhân tạo sẽ tự động
-                gộp các mặt hàng, tính tổng tiền và đối soát cho bạn trước khi lưu kho.
+                Hỗ trợ tải lên nhiều ảnh hóa đơn cùng lúc từ các Nhà Cung Cấp khác nhau hoặc hóa đơn dài nhiều trang. Trí tuệ nhân tạo sẽ tự động nhận diện và phân loại cho bạn.
               </DialogDescription>
             </DialogHeader>
 
@@ -310,14 +390,14 @@ export function InvoiceOcrDialog({
                             variant="secondary"
                             className="absolute top-1.5 left-1.5 text-[10px] font-bold bg-background/90 backdrop-blur-xs px-1.5 py-0 shadow-xs"
                           >
-                            Trang {idx + 1}
+                            Ảnh {idx + 1}
                           </Badge>
                           <button
                             type="button"
                             onClick={() => handleRemoveFile(idx)}
                             disabled={isScanning}
                             className="absolute top-1.5 right-1.5 size-6 rounded-full bg-destructive/90 text-white flex items-center justify-center opacity-90 hover:opacity-100 transition-opacity shadow-sm"
-                            title="Xóa trang này"
+                            title="Xóa ảnh này"
                           >
                             <X className="size-3.5" />
                           </button>
@@ -331,7 +411,7 @@ export function InvoiceOcrDialog({
                       </div>
                     ))}
 
-                    {/* Nút thêm ảnh trang tiếp theo */}
+                    {/* Nút thêm ảnh tiếp theo */}
                     <button
                       type="button"
                       disabled={isScanning}
@@ -339,9 +419,67 @@ export function InvoiceOcrDialog({
                       className="aspect-4/3 border-2 border-dashed rounded-lg flex flex-col items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-emerald-500 hover:bg-emerald-50/20 dark:hover:bg-emerald-950/20 transition-all cursor-pointer"
                     >
                       <Plus className="size-5 text-emerald-600" />
-                      <span className="font-medium text-[11px]">+ Thêm trang</span>
+                      <span className="font-medium text-[11px]">+ Thêm ảnh</span>
                     </button>
                   </div>
+
+                  {/* Chế độ quét khi chọn nhiều ảnh */}
+                  {selectedFiles.length > 1 && (
+                    <div className="rounded-lg border bg-background/80 p-2.5 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
+                          <Sparkles className="size-3.5 text-emerald-600" />
+                          Chế độ nhập hàng:
+                        </span>
+                        <Badge
+                          variant="secondary"
+                          className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/60 border-emerald-300"
+                        >
+                          {processMode === "batch"
+                            ? "Nhiều NCC khác nhau"
+                            : "1 Hóa đơn nhiều trang"}
+                        </Badge>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2 text-xs">
+                        <button
+                          type="button"
+                          onClick={() => setProcessMode("batch")}
+                          className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                            processMode === "batch"
+                              ? "bg-emerald-500/10 border-emerald-500 text-foreground ring-1 ring-emerald-500/30 shadow-xs"
+                              : "bg-muted/30 border-border hover:bg-muted/60 text-muted-foreground"
+                          }`}
+                        >
+                          <div className="font-semibold text-xs flex items-center gap-1.5">
+                            <Building2 className="size-3.5 text-emerald-600" />
+                            Nhiều Nhà Cung Cấp
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                            Mỗi ảnh là 1 hóa đơn riêng từ NCC khác nhau. AI quét độc lập & duyệt hàng loạt.
+                          </p>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setProcessMode("single_multipage")}
+                          className={`p-2.5 rounded-lg border text-left transition-all cursor-pointer ${
+                            processMode === "single_multipage"
+                              ? "bg-emerald-500/10 border-emerald-500 text-foreground ring-1 ring-emerald-500/30 shadow-xs"
+                              : "bg-muted/30 border-border hover:bg-muted/60 text-muted-foreground"
+                          }`}
+                        >
+                          <div className="font-semibold text-xs flex items-center gap-1.5">
+                            <Layers className="size-3.5 text-sky-600" />
+                            1 Hóa đơn nhiều trang
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-1 leading-snug">
+                            Các ảnh là các trang ghép lại của cùng 1 hóa đơn từ 1 Nhà Cung Cấp.
+                          </p>
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {/* Nút thực thi quét AI */}
                   <div className="pt-2 border-t flex items-center justify-between gap-3">
@@ -353,7 +491,7 @@ export function InvoiceOcrDialog({
                       disabled={isScanning}
                       className="gap-1.5 text-xs"
                     >
-                      <Plus className="size-3.5" /> Thêm trang tiếp
+                      <Plus className="size-3.5" /> Thêm ảnh khác
                     </Button>
 
                     <Button
@@ -372,7 +510,11 @@ export function InvoiceOcrDialog({
                       ) : (
                         <>
                           <Sparkles className="size-3.5 text-amber-300" />
-                          <span>Bắt đầu quét AI ({selectedFiles.length} ảnh)</span>
+                          <span>
+                            {selectedFiles.length > 1 && processMode === "batch"
+                              ? `Quét hàng loạt ${selectedFiles.length} hóa đơn (Đa NCC)`
+                              : `Bắt đầu quét AI (${selectedFiles.length} ảnh)`}
+                          </span>
                         </>
                       )}
                     </Button>
@@ -401,7 +543,7 @@ export function InvoiceOcrDialog({
                     </span>
                   </p>
                   <p className="text-xs text-muted-foreground mt-1">
-                    Hỗ trợ chọn nhiều ảnh cùng lúc (JPG, PNG, WEBP, PDF) cho hóa đơn nhiều trang
+                    Hỗ trợ tải lên cùng lúc nhiều ảnh từ các Nhà Cung Cấp khác nhau (JPG, PNG, WEBP, PDF)
                   </p>
                 </div>
               )}
@@ -412,6 +554,35 @@ export function InvoiceOcrDialog({
                   <FileText className="size-3.5" />
                   HOẶC TRẢI NGHIỆM NHANH VỚI HÓA ĐƠN MẪU:
                 </div>
+
+                {/* Nút Demo Nhập Hàng Loạt Nhiều NCC */}
+                <button
+                  type="button"
+                  disabled={isScanning}
+                  onClick={handleSelectBatchDemo}
+                  className="w-full flex items-center justify-between p-3 rounded-lg border-2 border-emerald-500/40 bg-emerald-50/20 dark:bg-emerald-950/20 hover:border-emerald-500 hover:bg-emerald-50/40 transition-all text-xs group cursor-pointer text-left disabled:opacity-50"
+                >
+                  <div className="flex items-center gap-2.5">
+                    <div className="size-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center shrink-0 shadow-xs">
+                      <Sparkles className="size-4 text-amber-200" />
+                    </div>
+                    <div>
+                      <div className="font-bold text-foreground flex items-center gap-2">
+                        Nhập Hàng Loạt 3 Hóa Đơn Từ 3 Nhà Cung Cấp Khác Nhau
+                        <Badge className="text-[10px] py-0 px-1.5 bg-emerald-600 text-white font-semibold">
+                          Batch AI
+                        </Badge>
+                      </div>
+                      <p className="text-[11px] text-muted-foreground mt-0.5">
+                        3 phiếu nhập đồng thời: Rau Sạch Đà Lạt Mart + SIM BA Thực Phẩm + Hải Sản Phúc Thịnh
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-xs font-semibold text-emerald-600 shrink-0 group-hover:translate-x-0.5 transition-transform ml-2">
+                    Thử ngay &rarr;
+                  </span>
+                </button>
+
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                   {SAMPLE_DEMO_INVOICES.map((demo) => (
                     <button

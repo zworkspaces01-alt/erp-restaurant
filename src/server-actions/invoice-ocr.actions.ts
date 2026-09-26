@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { createClient } from "@/lib/supabase/server";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { fail, ok, type ActionResult } from "@/types/actions";
-import { parseMultipleInvoiceImages, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
+import { parseInvoiceImage, parseMultipleInvoiceImages, SAMPLE_DEMO_INVOICES } from "@/lib/ai/invoice-ocr";
 import {
   matchInvoiceData,
   normalizeVietnamese,
@@ -20,6 +20,23 @@ export interface ExtractInvoiceResponse {
   reviewData: InvoiceOcrReviewData;
   isMock: boolean;
   modelUsed: string;
+}
+
+export interface BatchInvoiceItemResult {
+  id: string;
+  fileName: string;
+  imageUrl: string;
+  reviewData: InvoiceOcrReviewData;
+  modelUsed: string;
+  isMock: boolean;
+  status: "success" | "error";
+  errorMessage?: string;
+}
+
+export interface ExtractBatchInvoicesResponse {
+  invoices: BatchInvoiceItemResult[];
+  totalSuccess: number;
+  totalFailed: number;
 }
 
 /**
@@ -340,4 +357,200 @@ export async function extractAndMatchInvoice(
     );
   }
 }
+
+/**
+ * Xử lý hàng loạt ảnh hóa đơn từ nhiều Nhà cung cấp khác nhau.
+ * Mỗi ảnh đại diện cho một hóa đơn riêng biệt, được quét độc lập và khớp với NCC & Nguyên liệu tương ứng.
+ */
+export async function extractAndMatchMultipleInvoices(
+  formData: FormData
+): Promise<ActionResult<ExtractBatchInvoicesResponse>> {
+  try {
+    const demoId = (formData.get("demo_id") as string | null) || null;
+    const apiKeyOverride = (formData.get("api_key") as string | null) || undefined;
+    const supabase = await createClient();
+
+    // 1. Chế độ Hóa đơn mẫu hàng loạt (Batch Demo) với 3 Nhà cung cấp khác nhau
+    if (demoId === "batch-multi-suppliers") {
+      const sampleIds = ["rau-cu-qua-da-lat", "simba-food", "thit-hai-san"];
+      const demoSamples = sampleIds
+        .map((id) => SAMPLE_DEMO_INVOICES.find((s) => s.id === id))
+        .filter(Boolean) as typeof SAMPLE_DEMO_INVOICES;
+
+      const [{ data: suppliersData }, { data: ingredientsData }] = await Promise.all([
+        supabase
+          .from("suppliers")
+          .select("id, code, name, tax_code, phone")
+          .eq("is_active", true),
+        supabase
+          .from("ingredients")
+          .select("id, code, name, base_unit, import_unit, conversion_factor, avg_cost_price")
+          .eq("is_active", true),
+      ]);
+
+      const batchResults: BatchInvoiceItemResult[] = [];
+      for (let i = 0; i < demoSamples.length; i++) {
+        const sample = demoSamples[i];
+        const reviewData = matchInvoiceData(
+          sample.data,
+          (suppliersData ?? []) as SupplierMatchCandidate[],
+          (ingredientsData ?? []) as IngredientMatchCandidate[],
+          "/sample-invoice.png"
+        );
+
+        await autoProvisionMissingEntities(supabase, reviewData, sample.data);
+
+        batchResults.push({
+          id: `demo-batch-${i + 1}`,
+          fileName: `${sample.supplierName}.png`,
+          imageUrl: "/sample-invoice.png",
+          reviewData,
+          modelUsed: `Hóa đơn mẫu: ${sample.name}`,
+          isMock: true,
+          status: "success",
+        });
+      }
+
+      return ok({
+        invoices: batchResults,
+        totalSuccess: batchResults.length,
+        totalFailed: 0,
+      });
+    }
+
+    // 2. Chế độ tải file thực tế
+    const rawFiles = formData.getAll("files") as File[];
+    const singleFile = formData.get("file") as File | null;
+    const allFiles: File[] = (rawFiles.length > 0 ? rawFiles : singleFile ? [singleFile] : []).filter(
+      (f) => f && f.size > 0
+    );
+
+    if (allFiles.length === 0) {
+      return fail("Vui lòng chọn hoặc tải lên ít nhất 1 file ảnh hóa đơn.");
+    }
+
+    // Lấy trước danh sách NCC & Nguyên liệu để so khớp
+    const [{ data: suppliersData }, { data: ingredientsData }] = await Promise.all([
+      supabase
+        .from("suppliers")
+        .select("id, code, name, tax_code, phone")
+        .eq("is_active", true),
+      supabase
+        .from("ingredients")
+        .select("id, code, name, base_unit, import_unit, conversion_factor, avg_cost_price")
+        .eq("is_active", true),
+    ]);
+
+    // Xử lý song song từng cụm 2 ảnh để tối ưu tốc độ và không bị rate limit
+    const chunkSize = 2;
+    const batchResults: BatchInvoiceItemResult[] = [];
+
+    for (let i = 0; i < allFiles.length; i += chunkSize) {
+      const chunk = allFiles.slice(i, i + chunkSize);
+      const chunkPromises = chunk.map(async (file, chunkIndex) => {
+        const fileIndex = i + chunkIndex;
+        const invId = `batch-inv-${fileIndex + 1}-${Date.now()}`;
+        try {
+          const arrayBuffer = await file.arrayBuffer();
+          const rawBuffer = Buffer.from(arrayBuffer);
+          const optimized = await optimizeImageForOcr(rawBuffer, file.type || "image/jpeg");
+
+          // Lưu ảnh lên storage
+          const uploadRes = await uploadImage(optimized.buffer, {
+            filename: file.name,
+            contentType: optimized.mimeType,
+            folder: "restaurant-erp/invoices",
+          });
+
+          // Quét dữ liệu bằng AI OCR độc lập cho từng hóa đơn
+          const { data: parsedData, isMock, modelUsed } = await parseInvoiceImage({
+            base64Data: optimized.base64,
+            mimeType: optimized.mimeType,
+            apiKeyOverride,
+          });
+
+          // So khớp với NCC và Nguyên liệu
+          const reviewData = matchInvoiceData(
+            parsedData,
+            (suppliersData ?? []) as SupplierMatchCandidate[],
+            (ingredientsData ?? []) as IngredientMatchCandidate[],
+            uploadRes.url
+          );
+
+          // Tự động thêm NCC / Nguyên liệu mới nếu chưa có
+          await autoProvisionMissingEntities(supabase, reviewData, parsedData);
+
+          return {
+            id: invId,
+            fileName: file.name,
+            imageUrl: uploadRes.url,
+            reviewData,
+            modelUsed,
+            isMock,
+            status: "success" as const,
+          };
+        } catch (itemErr) {
+          console.error(`Lỗi xử lý ảnh hóa đơn [${file.name}]:`, itemErr);
+          const fallbackReviewData: InvoiceOcrReviewData = {
+            image_url: "",
+            supplier_id: null,
+            supplier_name_raw: null,
+            matched_supplier_name: null,
+            supplier_match_confidence: "unmatched",
+            order_date: new Date().toISOString().slice(0, 10),
+            invoice_number: "",
+            items: [],
+            subtotal: 0,
+            tax_amount: 0,
+            total_amount: 0,
+            raw_extracted: {
+              supplier_name: null,
+              supplier_tax_code: null,
+              supplier_phone: null,
+              supplier_address: null,
+              invoice_number: null,
+              order_date: new Date().toISOString().slice(0, 10),
+              items: [],
+              subtotal: 0,
+              tax_percent: 0,
+              tax_amount: 0,
+              total_amount: 0,
+            },
+          };
+
+          return {
+            id: invId,
+            fileName: file.name,
+            imageUrl: "",
+            reviewData: fallbackReviewData,
+            modelUsed: "Error",
+            isMock: false,
+            status: "error" as const,
+            errorMessage: itemErr instanceof Error ? itemErr.message : "Không thể nhận diện hình ảnh",
+          };
+        }
+      });
+
+      const chunkResults = await Promise.all(chunkPromises);
+      batchResults.push(...chunkResults);
+    }
+
+    const totalSuccess = batchResults.filter((r) => r.status === "success").length;
+    const totalFailed = batchResults.filter((r) => r.status === "error").length;
+
+    return ok({
+      invoices: batchResults,
+      totalSuccess,
+      totalFailed,
+    });
+  } catch (err) {
+    console.error("Lỗi khi xử lý hàng loạt hóa đơn:", err);
+    return fail(
+      err instanceof Error
+        ? err.message
+        : "Đã xảy ra lỗi trong quá trình quét hàng loạt hóa đơn."
+    );
+  }
+}
+
 

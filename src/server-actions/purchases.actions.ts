@@ -471,6 +471,143 @@ export async function createPurchaseOrder(
   return ok({ id: data });
 }
 
+export interface BatchCreatePoItemResult {
+  index: number;
+  success: boolean;
+  id?: string;
+  po_number?: string;
+  supplier_name?: string;
+  invoice_number?: string;
+  total_amount?: number;
+  error?: string;
+}
+
+export interface BatchCreatePoSummary {
+  totalRequested: number;
+  successfulCount: number;
+  failedCount: number;
+  results: BatchCreatePoItemResult[];
+}
+
+/** Tạo hàng loạt phiếu nhập hàng từ nhiều hóa đơn/nhiều Nhà cung cấp khác nhau */
+export async function createBatchPurchaseOrders(
+  orders: PurchaseOrderInput[]
+): Promise<ActionResult<BatchCreatePoSummary>> {
+  if (!orders || orders.length === 0) {
+    return fail("Không có phiếu nhập nào để lưu");
+  }
+
+  const supabase = await createClient();
+  const userSession = await getCurrentUserWithRole().catch(() => null);
+
+  const results: BatchCreatePoItemResult[] = [];
+  let successfulCount = 0;
+  let failedCount = 0;
+  const touchedSuppliers = new Set<string>();
+  const touchedIngredients = new Set<string>();
+
+  for (let idx = 0; idx < orders.length; idx++) {
+    const input = orders[idx];
+    const parsed = purchaseOrderSchema.safeParse(input);
+    if (!parsed.success) {
+      failedCount++;
+      results.push({
+        index: idx,
+        success: false,
+        invoice_number: input.invoice_number ?? undefined,
+        error: parsed.error.issues.map((i) => i.message).join(", "),
+      });
+      continue;
+    }
+
+    const items: CreatePurchaseOrderItemPayload[] = parsed.data.items.map((it) => ({
+      ingredient_id: it.ingredient_id,
+      quantity: it.quantity,
+      unit_price: it.unit_price,
+      ...(it.conversion_factor ? { conversion_factor: it.conversion_factor } : {}),
+      ...(it.unit ? { unit: it.unit } : {}),
+    }));
+
+    const args = {
+      p_supplier_id: parsed.data.supplier_id,
+      p_order_date: parsed.data.order_date,
+      p_due_date: parsed.data.due_date ?? null,
+      p_invoice_number: parsed.data.invoice_number ?? null,
+      p_note: parsed.data.note ?? null,
+      p_items: items as unknown as Json,
+      p_paid_now: parsed.data.paid_now,
+      p_paid_method: parsed.data.paid_method,
+      p_invoice_image_url: parsed.data.invoice_image_url ?? null,
+    } as unknown as FunctionArgs<"create_purchase_order">;
+
+    const { data: poId, error } = await supabase.rpc("create_purchase_order", args);
+
+    if (error || !poId) {
+      failedCount++;
+      results.push({
+        index: idx,
+        success: false,
+        invoice_number: parsed.data.invoice_number ?? undefined,
+        error: parseDbError(error),
+      });
+      continue;
+    }
+
+    successfulCount++;
+    touchedSuppliers.add(parsed.data.supplier_id);
+    items.forEach((it) => touchedIngredients.add(it.ingredient_id));
+
+    // Lấy thông tin số PO và tên NCC
+    const { data: createdPo } = await supabase
+      .from("purchase_orders")
+      .select("po_number, total_amount, suppliers(name)")
+      .eq("id", poId)
+      .maybeSingle();
+
+    const supplierName = (createdPo?.suppliers as { name?: string } | null)?.name || undefined;
+
+    // Ghi nhật ký
+    try {
+      await logPoAction(supabase, {
+        purchase_order_id: poId,
+        po_number: createdPo?.po_number || poId.slice(0, 8),
+        supplier_id: parsed.data.supplier_id,
+        supplier_name: supplierName,
+        action: "created",
+        performed_by: userSession?.user.id,
+        performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+        details: {
+          summary: `Tạo từ nhập hàng loạt AI gồm ${items.length} mặt hàng`,
+        },
+      });
+    } catch (auditErr) {
+      console.warn("Could not log audit in createBatchPurchaseOrders:", auditErr);
+    }
+
+    results.push({
+      index: idx,
+      success: true,
+      id: poId,
+      po_number: createdPo?.po_number || undefined,
+      supplier_name: supplierName,
+      invoice_number: parsed.data.invoice_number ?? undefined,
+      total_amount: Number(createdPo?.total_amount) || undefined,
+    });
+  }
+
+  // Cập nhật lại cache / views cho các NCC & Nguyên liệu liên quan
+  for (const supId of touchedSuppliers) {
+    revalidatePurchaseScope(supId, undefined, Array.from(touchedIngredients));
+  }
+
+  return ok({
+    totalRequested: orders.length,
+    successfulCount,
+    failedCount,
+    results,
+  });
+}
+
 /** Chỉ sửa được các trường không do trigger quản lý (DATABASE.md §1.3). */
 export async function updatePurchaseOrderMeta(
   id: string,
