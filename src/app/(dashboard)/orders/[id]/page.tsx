@@ -6,6 +6,8 @@ import {
   type OrderConsumptionRow,
 } from "@/lib/queries/orders.queries";
 import { CancelOrderButton } from "@/components/orders/cancel-order-button";
+import { RestoreOrderButton } from "@/components/orders/restore-order-button";
+import { DeleteOrderButton } from "@/components/orders/delete-order-button";
 import { PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -54,7 +56,7 @@ export default async function OrderDetailPage({
         } · ${PAYMENT_METHOD_LABELS[order.payment_method]}`}
         breadcrumbs={[{ label: "Đơn bán hàng", href: "/orders" }, { label: order.order_number ?? "Chi tiết" }]}
         actions={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <StatusBadge tone={cancelled ? "danger" : "success"} dot>
               {ORDER_STATUS_LABELS[order.status]}
             </StatusBadge>
@@ -64,9 +66,17 @@ export default async function OrderDetailPage({
                 Danh sách đơn
               </Link>
             </Button>
-            {!cancelled && (
+            {cancelled ? (
+              <RestoreOrderButton orderId={order.id} orderNumber={order.order_number} />
+            ) : (
               <CancelOrderButton orderId={order.id} orderNumber={order.order_number} />
             )}
+            <DeleteOrderButton
+              orderId={order.id}
+              orderNumber={order.order_number}
+              status={order.status}
+              redirectToList
+            />
           </div>
         }
       />

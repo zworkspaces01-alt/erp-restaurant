@@ -53,7 +53,7 @@ export function CancelOrderButton({
         description={
           <>
             Đơn <span className="font-medium">{orderNumber ?? "này"}</span> sẽ chuyển sang trạng thái
-            &quot;Đã hủy&quot;. Nguyên liệu đã trừ sẽ được hoàn lại kho. Thao tác không thể khôi phục.
+            &quot;Đã hủy&quot;. Nguyên liệu đã trừ sẽ được hoàn lại kho. Bạn có thể khôi phục lại đơn này sau bất kỳ lúc nào.
           </>
         }
         confirmLabel="Hủy đơn"

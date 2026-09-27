@@ -5,6 +5,17 @@ import { createClient } from "@/lib/supabase/server";
 import { fail, ok, type ActionResult } from "@/types/actions";
 import { orderSchema, parseDbError, type OrderInput } from "@/types/restaurant";
 
+import { getCurrentUserWithRole, requireAuth } from "@/lib/auth";
+import { extractOrderTax } from "@/lib/queries/orders.queries";
+import {
+  logOrderTrash,
+  getOrderTrashLogs,
+  markOrderRestored,
+  permanentDeleteOrderTrash,
+  type OrderTrashLog,
+  type OrderTrashSnapshot,
+} from "@/lib/orders/order-trash-service";
+
 function revalidateSales(orderId?: string) {
   revalidatePath("/orders");
   if (orderId) revalidatePath(`/orders/${orderId}`);
@@ -54,6 +65,302 @@ export async function cancelOrderAction(orderId: string): Promise<ActionResult<n
   if (error) return fail(parseDbError(error));
 
   revalidateSales(orderId);
+  return ok(null);
+}
+
+/**
+ * Khôi phục hóa đơn đã hủy:
+ * Tái tạo lại đơn hàng qua create_order RPC, tự động trừ lại kho nguyên liệu theo định lượng món,
+ * giữ nguyên toàn bộ thông tin mã đơn, ngày giờ, số bàn, giá trị hóa đơn.
+ */
+export async function restoreCancelledOrderAction(
+  orderId: string
+): Promise<ActionResult<{ id: string; orderNumber: string }>> {
+  if (!orderId) return fail("Không tìm thấy đơn hàng.");
+
+  const supabase = await createClient();
+
+  // 1. Lấy thông tin đơn hàng hiện tại
+  const { data: order, error: orderErr } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderErr) return fail(parseDbError(orderErr));
+  if (!order) return fail("Không tìm thấy đơn hàng cần khôi phục.");
+  if (order.status !== "cancelled") {
+    return fail("Chỉ có thể khôi phục đơn hàng đang ở trạng thái 'Đã hủy'.");
+  }
+
+  // 2. Lấy danh sách các món trong đơn
+  const { data: items, error: itemsErr } = await supabase
+    .from("order_items")
+    .select("menu_item_id, quantity, unit_price, menu_item_name")
+    .eq("order_id", orderId);
+
+  if (itemsErr) return fail(parseDbError(itemsErr));
+  if (!items || items.length === 0) {
+    return fail("Đơn hàng không có món nào để khôi phục.");
+  }
+
+  const originalOrderNumber = order.order_number || "";
+
+  // 3. Đổi mã đơn cũ sang mã tạm để nhả UNIQUE constraint cho mã gốc
+  const retiredOldNumber = `${originalOrderNumber}-RESTORED-OLD-${Date.now()}`;
+  const retiredNote = order.note
+    ? `${order.note} [RESTORED: Đã khôi phục thành đơn mới]`
+    : `[RESTORED: Đã khôi phục thành đơn mới]`;
+
+  const { error: retireErr } = await supabase
+    .from("orders")
+    .update({
+      order_number: retiredOldNumber,
+      note: retiredNote,
+    })
+    .eq("id", orderId);
+
+  if (retireErr) {
+    return fail(`Không thể cập nhật đơn cũ: ${parseDbError(retireErr)}`);
+  }
+
+  // 4. Tái tạo đơn qua RPC create_order (DB sẽ tự trừ lại kho và tính COGS)
+  const { data: newOrderId, error: createErr } = await supabase.rpc("create_order", {
+    p_items: items.map((it) => ({
+      menu_item_id: it.menu_item_id,
+      quantity: Number(it.quantity),
+    })),
+    p_order_date: order.order_date ?? undefined,
+    p_table_number: order.table_number ?? undefined,
+    p_discount: Number(order.discount ?? 0),
+    p_payment_method: order.payment_method,
+    p_note: order.note ?? undefined,
+  });
+
+  if (createErr || !newOrderId) {
+    // Rollback lại mã đơn cũ nếu tạo mới thất bại
+    await supabase
+      .from("orders")
+      .update({
+        order_number: originalOrderNumber,
+        note: order.note,
+      })
+      .eq("id", orderId);
+    return fail(`Không thể tạo lại đơn hàng: ${parseDbError(createErr)}`);
+  }
+
+  // 5. Cập nhật mã đơn của đơn mới thành chính xác mã ban đầu
+  const { error: numErr } = await supabase
+    .from("orders")
+    .update({ order_number: originalOrderNumber })
+    .eq("id", newOrderId);
+
+  if (numErr) {
+    console.warn("Could not set original order_number on restored order:", numErr);
+  }
+
+  revalidateSales(orderId);
+  revalidateSales(newOrderId);
+
+  return ok({ id: newOrderId, orderNumber: originalOrderNumber });
+}
+
+/**
+ * Xóa hóa đơn bán hàng:
+ * - Nếu đơn đang hoàn tất: tự động hoàn trả kho trước (qua RPC cancel_order)
+ * - Lưu snapshot chi tiết vào Thùng rác (app_settings) phục vụ đối soát & khôi phục
+ * - Đánh dấu xóa khỏi hệ thống để không còn hiển thị trên danh sách và báo cáo
+ */
+export async function deleteOrderAction(
+  orderId: string,
+  reason?: string
+): Promise<ActionResult<{ id: string }>> {
+  if (!orderId) return fail("Không tìm thấy đơn hàng.");
+
+  const { authorized } = await requireAuth(["owner", "manager", "staff"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền thực hiện thao tác xóa hóa đơn.");
+  }
+
+  const supabase = await createClient();
+
+  // 1. Lấy thông tin đơn hàng
+  const { data: order, error: orderErr } = await supabase
+    .from("orders")
+    .select("*")
+    .eq("id", orderId)
+    .maybeSingle();
+
+  if (orderErr) return fail(parseDbError(orderErr));
+  if (!order) return fail("Không tìm thấy hóa đơn cần xóa.");
+
+  // 2. Lấy danh sách các dòng món trong đơn
+  const { data: items } = await supabase
+    .from("order_items")
+    .select("*, menu_items(code)")
+    .eq("order_id", orderId);
+
+  // 3. Nếu đơn đang ở trạng thái 'completed': hoàn kho trước để tránh thất thoát/lệch kho
+  if (order.status === "completed") {
+    const { error: cancelErr } = await supabase.rpc("cancel_order", { p_order_id: orderId });
+    if (cancelErr) {
+      return fail(`Không thể hoàn kho trước khi xóa đơn: ${parseDbError(cancelErr)}`);
+    }
+  }
+
+  // 4. Tạo snapshot lưu vào Thùng rác
+  const userSession = await getCurrentUserWithRole().catch(() => null);
+  const { tax_amount, total_with_tax } = extractOrderTax(
+    order.note,
+    Number(order.total_amount ?? 0)
+  );
+
+  const snapshot: OrderTrashSnapshot = {
+    id: order.id,
+    order_number: order.order_number,
+    order_date: order.order_date,
+    status: order.status,
+    table_number: order.table_number,
+    subtotal: Number(order.subtotal ?? 0),
+    discount: Number(order.discount ?? 0),
+    total_amount: Number(order.total_amount ?? 0),
+    tax_amount,
+    total_with_tax,
+    total_cogs: Number(order.total_cogs ?? 0),
+    payment_method: order.payment_method,
+    note: order.note,
+    items: (items ?? []).map((it) => ({
+      menu_item_id: it.menu_item_id,
+      menu_item_name: it.menu_item_name,
+      menu_item_code: (it.menu_items as { code?: string } | null)?.code || null,
+      quantity: Number(it.quantity),
+      unit_price: Number(it.unit_price),
+      line_total: Number(it.line_total),
+      cogs_amount: Number(it.cogs_amount),
+    })),
+    deleted_at: new Date().toISOString(),
+    deleted_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+    delete_reason: reason || "Người dùng xóa hóa đơn",
+  };
+
+  await logOrderTrash(supabase, {
+    order_id: order.id,
+    order_number: order.order_number,
+    action: "deleted",
+    performed_by: userSession?.user.id,
+    performed_by_name: userSession?.profile.full_name || userSession?.user.email || "Nhân viên",
+    details: {
+      summary: `Đã xóa hóa đơn ${order.order_number}. Tổng tiền: ${order.total_amount}đ.`,
+      reason: reason || "Người dùng xóa hóa đơn",
+      item_count: items?.length ?? 0,
+      total_amount: Number(order.total_amount ?? 0),
+    },
+    snapshot,
+    is_restored: false,
+  });
+
+  // 5. Đánh dấu xóa trong DB để nhả mã đơn gốc và loại khỏi danh sách hiển thị
+  const retiredOrderNumber = `${order.order_number}-DELETED-${Date.now()}`;
+  const deletedNote = order.note
+    ? `${order.note} [DELETED: ${reason || "Người dùng xóa"}]`
+    : `[DELETED: ${reason || "Người dùng xóa"}]`;
+
+  const { error: updateErr } = await supabase
+    .from("orders")
+    .update({
+      order_number: retiredOrderNumber,
+      note: deletedNote,
+    })
+    .eq("id", orderId);
+
+  if (updateErr) {
+    return fail(`Không thể đánh dấu xóa đơn: ${parseDbError(updateErr)}`);
+  }
+
+  revalidateSales(orderId);
+  return ok({ id: orderId });
+}
+
+/**
+ * Khôi phục hóa đơn bán hàng từ Thùng rác
+ */
+export async function restoreDeletedOrderAction(
+  trashLogId: string
+): Promise<ActionResult<{ id: string; orderNumber: string }>> {
+  const { authorized } = await requireAuth(["owner", "manager", "staff"]);
+  if (!authorized) {
+    return fail("Bạn không có quyền khôi phục hóa đơn đã xóa.");
+  }
+
+  const supabase = await createClient();
+  const logs = await getOrderTrashLogs(supabase);
+  const found = logs.find((l) => l.id === trashLogId);
+
+  if (!found || !found.snapshot) {
+    return fail("Không tìm thấy thông tin bản sao lưu hóa đơn trong Thùng rác.");
+  }
+
+  if (found.is_restored) {
+    return fail("Hóa đơn này đã được khôi phục trước đó.");
+  }
+
+  const snapshot = found.snapshot;
+
+  // Tái tạo đơn qua RPC create_order (DB sẽ trừ lại kho tự động)
+  const restoreNote = snapshot.note
+    ? `${snapshot.note} [Khôi phục từ thùng rác lúc ${new Date().toLocaleTimeString("vi-VN")}]`
+    : `[Khôi phục từ thùng rác lúc ${new Date().toLocaleTimeString("vi-VN")}]`;
+
+  const { data: newOrderId, error: createErr } = await supabase.rpc("create_order", {
+    p_items: snapshot.items.map((it) => ({
+      menu_item_id: it.menu_item_id,
+      quantity: Number(it.quantity),
+    })),
+    p_order_date: snapshot.order_date,
+    p_table_number: snapshot.table_number ?? undefined,
+    p_discount: Number(snapshot.discount ?? 0),
+    p_payment_method: snapshot.payment_method,
+    p_note: restoreNote,
+  });
+
+  if (createErr || !newOrderId) {
+    return fail(`Không thể khôi phục hóa đơn: ${parseDbError(createErr)}`);
+  }
+
+  // Cập nhật lại mã hóa đơn gốc
+  await supabase
+    .from("orders")
+    .update({ order_number: snapshot.order_number })
+    .eq("id", newOrderId);
+
+  // Đánh dấu bản ghi trong Thùng rác là đã khôi phục
+  await markOrderRestored(supabase, trashLogId);
+
+  revalidateSales(newOrderId);
+  return ok({ id: newOrderId, orderNumber: snapshot.order_number || "" });
+}
+
+/** Lấy danh sách hóa đơn trong Thùng rác */
+export async function getOrderTrashLogsAction(): Promise<OrderTrashLog[]> {
+  const supabase = await createClient();
+  return getOrderTrashLogs(supabase);
+}
+
+/** Xóa vĩnh viễn hóa đơn khỏi Thùng rác */
+export async function permanentDeleteOrderTrashAction(
+  trashLogId: string
+): Promise<ActionResult<null>> {
+  const { authorized } = await requireAuth(["owner", "manager"]);
+  if (!authorized) {
+    return fail("Chỉ Quản lý hoặc Chủ nhà hàng mới có quyền xóa vĩnh viễn.");
+  }
+
+  const supabase = await createClient();
+  const okResult = await permanentDeleteOrderTrash(supabase, trashLogId);
+  if (!okResult) {
+    return fail("Không thể xóa bản ghi khỏi Thùng rác.");
+  }
+
   return ok(null);
 }
 

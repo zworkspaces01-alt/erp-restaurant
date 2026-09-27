@@ -1,17 +1,20 @@
 import Link from "next/link";
-import { Plus, Receipt } from "lucide-react";
+import { Plus, Receipt, Trash2 } from "lucide-react";
 import {
   getAppTimezone,
   getOrders,
   getOrdersSummary,
+  getDeletedOrdersCount,
   localTodayISO,
   type OrdersFilter,
 } from "@/lib/queries/orders.queries";
 import { OrdersTable } from "@/components/orders/orders-table";
 import { OrdersDateFilter } from "@/components/orders/orders-date-filter";
+import { OrdersTrashView } from "@/components/orders/orders-trash-view";
 import { MisaImportDialog } from "@/components/orders/misa-import-dialog";
 import { EmptyState, PageHeader, StatCard } from "@/components/shared";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { formatDate, formatNumber, formatPercent, formatVND } from "@/lib/format";
 import type { OrderStatus } from "@/types/restaurant";
 
@@ -29,6 +32,7 @@ export default async function OrdersPage({
   searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const params = await searchParams;
+  const tabParam = first(params.tab) || "list";
   const statusParam = first(params.status);
   const fromParam = first(params.from);
   const toParam = first(params.to);
@@ -48,9 +52,10 @@ export default async function OrdersPage({
   const from = filter.from as string;
   const to = filter.to as string;
 
-  const [{ rows: orders, total, limit }, summary] = await Promise.all([
+  const [{ rows: orders, total, limit }, summary, deletedCount] = await Promise.all([
     getOrders(filter),
     getOrdersSummary(from, to),
+    getDeletedOrdersCount(),
   ]);
   const periodLabel = `${formatDate(from)} – ${formatDate(to)}`;
   const truncated = total > orders.length;
@@ -73,7 +78,45 @@ export default async function OrdersPage({
         }
       />
 
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      {/* Tabs navigation */}
+      <div className="flex items-center gap-2 border-b pb-3">
+        <Button
+          asChild
+          variant={tabParam !== "trash" ? "default" : "ghost"}
+          size="sm"
+          className="h-8 gap-1.5 text-xs rounded-lg"
+        >
+          <Link href="/orders">
+            <Receipt className="size-3.5" />
+            Danh sách hóa đơn
+          </Link>
+        </Button>
+        <Button
+          asChild
+          variant={tabParam === "trash" ? "default" : "ghost"}
+          size="sm"
+          className="h-8 gap-1.5 text-xs rounded-lg text-muted-foreground hover:text-foreground"
+        >
+          <Link href="/orders?tab=trash">
+            <Trash2 className="size-3.5 text-destructive" />
+            Thùng rác & Khôi phục
+            {deletedCount > 0 && (
+              <Badge
+                variant={tabParam === "trash" ? "secondary" : "destructive"}
+                className="ml-1 px-1.5 py-0 text-[10px] h-4"
+              >
+                {deletedCount}
+              </Badge>
+            )}
+          </Link>
+        </Button>
+      </div>
+
+      {tabParam === "trash" ? (
+        <OrdersTrashView />
+      ) : (
+        <>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <StatCard
           title="Số đơn hoàn tất"
           value={formatNumber(summary.order_count, 0)}
@@ -132,6 +175,8 @@ export default async function OrdersPage({
           )}
           <OrdersTable orders={orders} />
         </div>
+      )}
+        </>
       )}
     </div>
   );

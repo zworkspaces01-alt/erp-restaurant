@@ -12,6 +12,8 @@ import {
   PAYMENT_METHOD_OPTIONS,
 } from "@/types/restaurant";
 import { CancelOrderButton } from "@/components/orders/cancel-order-button";
+import { RestoreOrderButton } from "@/components/orders/restore-order-button";
+import { DeleteOrderButton } from "@/components/orders/delete-order-button";
 import type { OrderListRow } from "@/lib/queries/orders.queries";
 
 const columns: ColumnDef<OrderListRow>[] = [
@@ -120,16 +122,32 @@ const actionsColumn: ColumnDef<OrderListRow> = {
   header: () => <span className="sr-only">Thao tác</span>,
   enableSorting: false,
   enableHiding: false,
-  cell: ({ row }) =>
-    row.original.status === "completed" ? (
-      <div className="flex justify-end" onClick={(e) => e.stopPropagation()}>
-        <CancelOrderButton
+  cell: ({ row }) => {
+    const isCompleted = row.original.status === "completed";
+    return (
+      <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+        {isCompleted ? (
+          <CancelOrderButton
+            orderId={row.original.id}
+            orderNumber={row.original.order_number}
+            variant="icon"
+          />
+        ) : (
+          <RestoreOrderButton
+            orderId={row.original.id}
+            orderNumber={row.original.order_number}
+            variant="icon"
+          />
+        )}
+        <DeleteOrderButton
           orderId={row.original.id}
           orderNumber={row.original.order_number}
+          status={row.original.status}
           variant="icon"
         />
       </div>
-    ) : null,
+    );
+  },
 };
 
 const allColumns: ColumnDef<OrderListRow>[] = [

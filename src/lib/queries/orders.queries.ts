@@ -128,6 +128,9 @@ export async function getOrders(filter: OrdersFilter = {}): Promise<OrdersPage> 
   let query = supabase
     .from("orders")
     .select("*, order_items(count)", { count: "exact" })
+    .not("note", "ilike", "%[DELETED]%")
+    .not("order_number", "ilike", "%-DELETED-%")
+    .not("order_number", "ilike", "%-RESTORED-OLD-%")
     .order("order_date", { ascending: false })
     .limit(limit);
 
@@ -395,3 +398,15 @@ export async function getExistingMisaOrderCodes(): Promise<string[]> {
   return Array.from(new Set(codes));
 }
 
+/** Lấy số lượng hóa đơn bán hàng trong Thùng rác (chưa khôi phục). */
+export async function getDeletedOrdersCount(): Promise<number> {
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", "order_trash_logs")
+    .maybeSingle();
+
+  const logs = (Array.isArray(data?.value) ? data.value : []) as { is_restored?: boolean }[];
+  return logs.filter((l) => !l.is_restored).length;
+}
