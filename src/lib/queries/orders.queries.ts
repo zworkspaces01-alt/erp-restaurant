@@ -381,6 +381,8 @@ export async function getExistingMisaOrderCodes(): Promise<string[]> {
   const { data, error } = await supabase
     .from("orders")
     .select("note")
+    .not("note", "ilike", "%[DELETED]%")
+    .not("order_number", "ilike", "%-DELETED-%")
     .ilike("note", "%[MISA:%");
 
   if (error) throw new Error(error.message);

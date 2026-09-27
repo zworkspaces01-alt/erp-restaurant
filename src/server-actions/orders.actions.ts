@@ -604,10 +604,12 @@ export async function importMisaOrdersAction(
     }
   }
 
-  // 1. Lấy danh sách mã hóa đơn MISA đã từng import
+  // 1. Lấy danh sách mã hóa đơn MISA đã từng import (loại trừ các đơn đã xóa)
   const { data: existingRows } = await supabase
     .from("orders")
     .select("note")
+    .not("note", "ilike", "%[DELETED]%")
+    .not("order_number", "ilike", "%-DELETED-%")
     .ilike("note", "%[MISA:%");
 
   const existingCodes = new Set<string>();
