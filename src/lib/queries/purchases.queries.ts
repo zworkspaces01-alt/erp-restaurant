@@ -181,6 +181,44 @@ export async function getSupplierDebtRow(id: string): Promise<SupplierDebtRow | 
   return mapSupplierDebt(data);
 }
 
+/** Phát sinh của từng NCC trong một khoảng ngày (tiền nhập theo `order_date`, tiền trả theo `payment_date`). */
+export interface SupplierPeriodActivity {
+  po_count: number;
+  purchased: number;
+  paid: number;
+}
+
+export async function getSupplierPeriodActivity(
+  range: DateRange
+): Promise<Record<string, SupplierPeriodActivity>> {
+  const supabase = await createClient();
+
+  let poQuery = supabase.from("v_purchase_orders_summary").select("supplier_id, total_amount");
+  if (range.from) poQuery = poQuery.gte("order_date", range.from);
+  if (range.to) poQuery = poQuery.lte("order_date", range.to);
+
+  let payQuery = supabase.from("supplier_payments").select("supplier_id, amount");
+  if (range.from) payQuery = payQuery.gte("payment_date", range.from);
+  if (range.to) payQuery = payQuery.lte("payment_date", range.to);
+
+  const [pos, pays] = await Promise.all([poQuery.limit(10000), payQuery.limit(10000)]);
+  if (pos.error) throw new Error(pos.error.message);
+  if (pays.error) throw new Error(pays.error.message);
+
+  const result: Record<string, SupplierPeriodActivity> = {};
+  const entry = (id: string) => (result[id] ??= { po_count: 0, purchased: 0, paid: 0 });
+  for (const po of pos.data ?? []) {
+    if (!po.supplier_id) continue;
+    const e = entry(po.supplier_id);
+    e.po_count += 1;
+    e.purchased += num(po.total_amount);
+  }
+  for (const p of pays.data ?? []) {
+    entry(p.supplier_id).paid += num(p.amount);
+  }
+  return result;
+}
+
 export async function getSupplier(id: string): Promise<Supplier | null> {
   const supabase = await createClient();
   const { data } = await supabase.from("suppliers").select("*").eq("id", id).maybeSingle();
@@ -323,13 +361,20 @@ export async function getPurchaseOrders(filter?: PurchaseOrdersFilter): Promise<
   return (data ?? []).map(mapPo);
 }
 
-export async function getPurchaseOrdersBySupplier(supplierId: string): Promise<PurchaseOrderRow[]> {
+export interface DateRange {
+  from?: string;
+  to?: string;
+}
+
+export async function getPurchaseOrdersBySupplier(
+  supplierId: string,
+  range?: DateRange
+): Promise<PurchaseOrderRow[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("v_purchase_orders_summary")
-    .select(PO_COLUMNS)
-    .eq("supplier_id", supplierId)
-    .order("order_date", { ascending: false });
+  let query = supabase.from("v_purchase_orders_summary").select(PO_COLUMNS).eq("supplier_id", supplierId);
+  if (range?.from) query = query.gte("order_date", range.from);
+  if (range?.to) query = query.lte("order_date", range.to);
+  const { data, error } = await query.order("order_date", { ascending: false });
 
   if (error) throw new Error(error.message);
   return (data ?? []).map(mapPo);
@@ -449,13 +494,15 @@ export async function getSupplierPayments(): Promise<SupplierPaymentRow[]> {
   return (data ?? []).map(mapPayment);
 }
 
-export async function getSupplierPaymentsBySupplier(supplierId: string): Promise<SupplierPaymentRow[]> {
+export async function getSupplierPaymentsBySupplier(
+  supplierId: string,
+  range?: DateRange
+): Promise<SupplierPaymentRow[]> {
   const supabase = await createClient();
-  const { data, error } = await supabase
-    .from("supplier_payments")
-    .select(PAYMENT_SELECT)
-    .eq("supplier_id", supplierId)
-    .order("payment_date", { ascending: false });
+  let query = supabase.from("supplier_payments").select(PAYMENT_SELECT).eq("supplier_id", supplierId);
+  if (range?.from) query = query.gte("payment_date", range.from);
+  if (range?.to) query = query.lte("payment_date", range.to);
+  const { data, error } = await query.order("payment_date", { ascending: false });
 
   if (error) throw new Error(error.message);
   return (data ?? []).map(mapPayment);

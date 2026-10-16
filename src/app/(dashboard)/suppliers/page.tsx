@@ -1,13 +1,28 @@
-import { AlertTriangle, Banknote, CalendarClock, Truck } from "lucide-react";
-import { Forbidden, PageHeader, StatCard } from "@/components/shared";
+import { AlertTriangle, Banknote, CalendarClock, FileText, PackagePlus, Truck, Wallet } from "lucide-react";
+import { DateRangeFilter, Forbidden, PageHeader, StatCard } from "@/components/shared";
 import { SuppliersTable } from "@/components/suppliers/suppliers-table";
 import type { SupplierFormData } from "@/components/suppliers/supplier-form-dialog";
-import { getSupplierDebtSummary } from "@/lib/queries/purchases.queries";
+import {
+  getSupplierDebtSummary,
+  getSupplierPeriodActivity,
+  type SupplierPeriodActivity,
+} from "@/lib/queries/purchases.queries";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate, formatVND } from "@/lib/format";
 import { requireAuth } from "@/lib/auth";
 
 export const metadata = { title: "Nhà cung cấp" };
+
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateParam(value: string | string[] | undefined): string | undefined {
+  const v = Array.isArray(value) ? value[0] : value;
+  return v && DATE_RE.test(v) ? v : undefined;
+}
+
+interface PageProps {
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
+}
 
 async function getSupplierDetails(): Promise<SupplierFormData[]> {
   const supabase = await createClient();
@@ -31,13 +46,30 @@ async function getSupplierDetails(): Promise<SupplierFormData[]> {
   }));
 }
 
-export default async function SuppliersPage() {
+export default async function SuppliersPage({ searchParams }: PageProps) {
   const { role, authorized } = await requireAuth(["owner", "manager"]);
   if (!authorized) {
     return <Forbidden requiredRoles={["owner", "manager"]} currentRole={role} />;
   }
 
-  const [rows, details] = await Promise.all([getSupplierDebtSummary(), getSupplierDetails()]);
+  const params = await searchParams;
+  const from = dateParam(params.from);
+  const to = dateParam(params.to);
+  const hasPeriod = Boolean(from || to);
+
+  const [rows, details, activity] = await Promise.all([
+    getSupplierDebtSummary(),
+    getSupplierDetails(),
+    hasPeriod ? getSupplierPeriodActivity({ from, to }) : Promise.resolve(null),
+  ]);
+
+  const periodTotals = Object.values(activity ?? {}).reduce<SupplierPeriodActivity>(
+    (acc, a) => ({ po_count: acc.po_count + a.po_count, purchased: acc.purchased + a.purchased, paid: acc.paid + a.paid }),
+    { po_count: 0, purchased: 0, paid: 0 }
+  );
+  const periodLabel = hasPeriod
+    ? `${from ? formatDate(from) : "Từ đầu"} – ${to ? formatDate(to) : "nay"}`
+    : "";
 
   const totalDebt = rows.reduce((s, r) => s + r.current_debt, 0);
   const overdueDebt = rows.reduce((s, r) => s + r.overdue_debt, 0);
@@ -71,7 +103,33 @@ export default async function SuppliersPage() {
         />
       </div>
 
-      <SuppliersTable rows={rows} details={details} />
+      <DateRangeFilter key={`${from ?? ""}_${to ?? ""}`} from={from} to={to} idPrefix="suppliers" />
+
+      {activity ? (
+        <div className="grid gap-4 sm:grid-cols-3">
+          <StatCard
+            title="Nhập trong kỳ"
+            value={formatVND(periodTotals.purchased)}
+            icon={PackagePlus}
+            hint={periodLabel}
+          />
+          <StatCard
+            title="Đã thanh toán trong kỳ"
+            value={formatVND(periodTotals.paid)}
+            icon={Wallet}
+            tone={periodTotals.paid > 0 ? "success" : "default"}
+            hint={periodLabel}
+          />
+          <StatCard
+            title="Phiếu nhập trong kỳ"
+            value={String(periodTotals.po_count)}
+            icon={FileText}
+            hint={`${Object.keys(activity).length} nhà cung cấp có phát sinh`}
+          />
+        </div>
+      ) : null}
+
+      <SuppliersTable rows={rows} details={details} activity={activity} />
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import Link from "next/link";
 import { AlertTriangle, Banknote, CalendarClock, FileText, Package, Plus, Wallet } from "lucide-react";
-import { PageHeader, StatCard, StatusBadge } from "@/components/shared";
+import { DateRangeFilter, PageHeader, StatCard, StatusBadge } from "@/components/shared";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PurchaseOrdersTable } from "@/components/purchases/purchase-orders-table";
@@ -22,19 +22,35 @@ import { paymentTermLabel } from "@/types/restaurant";
 
 export const metadata = { title: "Chi tiết nhà cung cấp" };
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+function dateParam(value: string | string[] | undefined): string | undefined {
+  const v = Array.isArray(value) ? value[0] : value;
+  return v && DATE_RE.test(v) ? v : undefined;
+}
+
 export default async function SupplierDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ [key: string]: string | string[] | undefined }>;
 }) {
   const { id } = await params;
+  const query = await searchParams;
+  const from = dateParam(query.from);
+  const to = dateParam(query.to);
+  const hasPeriod = Boolean(from || to);
+  const periodLabel = hasPeriod
+    ? `${from ? formatDate(from) : "Từ đầu"} – ${to ? formatDate(to) : "nay"}`
+    : "";
   const supplier = await getSupplier(id);
   if (!supplier) notFound();
 
   const [debt, orders, payments, suppliers, outstandingOrders, allSuppliersWithDebt] = await Promise.all([
     getSupplierDebtRow(id),
-    getPurchaseOrdersBySupplier(id),
-    getSupplierPaymentsBySupplier(id),
+    getPurchaseOrdersBySupplier(id, { from, to }),
+    getSupplierPaymentsBySupplier(id, { from, to }),
     getSupplierOptions(),
     getOutstandingPurchaseOrders(id),
     getSupplierDebtSummary(),
@@ -43,6 +59,8 @@ export default async function SupplierDetailPage({
   const currentDebt = debt?.current_debt ?? 0;
   const overdueDebt = debt?.overdue_debt ?? 0;
   const totalPurchased = debt?.total_purchased ?? 0;
+  const periodPurchased = orders.reduce((sum, o) => sum + o.total_amount, 0);
+  const periodPaid = payments.reduce((sum, p) => sum + p.amount, 0);
 
   return (
     <div className="space-y-6">
@@ -111,12 +129,21 @@ export default async function SupplierDetailPage({
           tone={overdueDebt > 0 ? "danger" : "success"}
           hint={`${debt?.overdue_po_count ?? 0} phiếu quá hạn`}
         />
-        <StatCard
-          title="Tổng đã mua"
-          value={formatVND(totalPurchased)}
-          icon={Banknote}
-          hint={`${debt?.po_count ?? 0} phiếu nhập`}
-        />
+        {hasPeriod ? (
+          <StatCard
+            title="Nhập trong kỳ"
+            value={formatVND(periodPurchased)}
+            icon={Banknote}
+            hint={`${orders.length} phiếu · đã trả ${formatVND(periodPaid)}`}
+          />
+        ) : (
+          <StatCard
+            title="Tổng đã mua"
+            value={formatVND(totalPurchased)}
+            icon={Banknote}
+            hint={`${debt?.po_count ?? 0} phiếu nhập`}
+          />
+        )}
         <StatCard
           title="Hạn thanh toán gần nhất"
           value={debt?.next_due_date ? formatDate(debt.next_due_date) : "—"}
@@ -161,27 +188,43 @@ export default async function SupplierDetailPage({
         </CardContent>
       </Card>
 
+      <DateRangeFilter key={`${from ?? ""}_${to ?? ""}`} from={from} to={to} idPrefix="supplier-detail" />
+
       <div className="space-y-3">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
+        <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
           <FileText className="size-4" />
           Phiếu nhập ({orders.length})
+          {hasPeriod ? (
+            <span className="text-sm font-normal text-muted-foreground">· {periodLabel}</span>
+          ) : null}
         </h2>
         <PurchaseOrdersTable
           orders={orders}
           hideSupplier
-          emptyMessage="Nhà cung cấp này chưa có phiếu nhập nào."
+          emptyMessage={
+            hasPeriod
+              ? "Không có phiếu nhập nào trong kỳ này."
+              : "Nhà cung cấp này chưa có phiếu nhập nào."
+          }
         />
       </div>
 
       <div className="space-y-3">
-        <h2 className="flex items-center gap-2 text-lg font-semibold">
+        <h2 className="flex flex-wrap items-center gap-2 text-lg font-semibold">
           <Wallet className="size-4" />
           Lịch sử thanh toán ({payments.length})
+          {hasPeriod ? (
+            <span className="text-sm font-normal text-muted-foreground">· {periodLabel}</span>
+          ) : null}
         </h2>
         <PaymentsTable
           payments={payments}
           hideSupplier
-          emptyMessage="Chưa có phiếu chi nào cho nhà cung cấp này."
+          emptyMessage={
+            hasPeriod
+              ? "Không có phiếu chi nào trong kỳ này."
+              : "Chưa có phiếu chi nào cho nhà cung cấp này."
+          }
         />
       </div>
     </div>

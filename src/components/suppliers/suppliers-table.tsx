@@ -11,7 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { formatDate } from "@/lib/format";
 import { paymentTermLabel } from "@/types/restaurant";
-import type { SupplierDebtRow } from "@/lib/queries/purchases.queries";
+import type { SupplierDebtRow, SupplierPeriodActivity } from "@/lib/queries/purchases.queries";
 import { SupplierFormDialog, type SupplierFormData } from "./supplier-form-dialog";
 import { SupplierDeleteDialog, type SupplierDeleteData } from "./supplier-delete-dialog";
 import { SupplierMergeDialog } from "./supplier-merge-dialog";
@@ -20,9 +20,13 @@ import { getDuplicateSupplierCandidates } from "@/server-actions/purchases.actio
 interface SuppliersTableProps {
   rows: SupplierDebtRow[];
   details: SupplierFormData[];
+  /** Phát sinh theo kỳ đang lọc; `null` = không lọc theo ngày. */
+  activity?: Record<string, SupplierPeriodActivity> | null;
 }
 
-export function SuppliersTable({ rows, details }: SuppliersTableProps) {
+type SupplierTableRow = SupplierDebtRow & { period?: SupplierPeriodActivity };
+
+export function SuppliersTable({ rows, details, activity = null }: SuppliersTableProps) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<SupplierFormData | null>(null);
@@ -46,7 +50,17 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
       .catch((err) => console.error("Error loading duplicates:", err));
   }, [rows]);
 
-  const columns = useMemo<ColumnDef<SupplierDebtRow>[]>(
+  // Khi lọc theo kỳ: chỉ giữ NCC có phát sinh nhập hoặc trả tiền trong kỳ.
+  const tableRows = useMemo<SupplierTableRow[]>(
+    () =>
+      activity
+        ? rows.filter((r) => activity[r.id]).map((r) => ({ ...r, period: activity[r.id] }))
+        : rows,
+    [rows, activity]
+  );
+  const hasPeriod = activity !== null;
+
+  const columns = useMemo<ColumnDef<SupplierTableRow>[]>(
     () => [
       {
         accessorKey: "name",
@@ -90,6 +104,39 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
           </span>
         ),
       },
+      ...(hasPeriod
+        ? ([
+            {
+              id: "period_purchased",
+              accessorFn: (row) => row.period?.purchased ?? 0,
+              header: ({ column }) => (
+                <DataTableColumnHeader column={column} title="Nhập trong kỳ" align="right" />
+              ),
+              cell: ({ row }) => (
+                <div className="text-right">
+                  <div className="font-medium">
+                    <Money value={row.original.period?.purchased ?? 0} />
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {row.original.period?.po_count ?? 0} phiếu
+                  </div>
+                </div>
+              ),
+            },
+            {
+              id: "period_paid",
+              accessorFn: (row) => row.period?.paid ?? 0,
+              header: ({ column }) => (
+                <DataTableColumnHeader column={column} title="Đã trả trong kỳ" align="right" />
+              ),
+              cell: ({ row }) => (
+                <div className="text-right">
+                  <Money value={row.original.period?.paid ?? 0} />
+                </div>
+              ),
+            },
+          ] satisfies ColumnDef<SupplierTableRow>[])
+        : []),
       {
         accessorKey: "current_debt",
         header: ({ column }) => (
@@ -201,7 +248,7 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
         ),
       },
     ],
-    [detailById]
+    [detailById, hasPeriod]
   );
 
   const termOptions = useMemo(() => {
@@ -213,12 +260,13 @@ export function SuppliersTable({ rows, details }: SuppliersTableProps) {
     <>
       <DataTable
         columns={columns}
-        data={rows}
+        key={hasPeriod ? "period" : "all"}
+        data={tableRows}
         searchable
         searchPlaceholder="Tìm theo tên, mã, số điện thoại..."
         filters={termOptions.length > 1 ? [{ columnId: "terms", title: "Điều khoản", options: termOptions }] : undefined}
-        initialSorting={[{ id: "current_debt", desc: true }]}
-        emptyMessage="Chưa có nhà cung cấp nào."
+        initialSorting={[{ id: hasPeriod ? "period_purchased" : "current_debt", desc: true }]}
+        emptyMessage={hasPeriod ? "Không có nhà cung cấp nào phát sinh trong kỳ này." : "Chưa có nhà cung cấp nào."}
         onRowClick={(row) => router.push(`/suppliers/${row.id}`)}
         rowClassName={(row) => (row.original.is_active ? undefined : "opacity-60")}
         toolbar={
